@@ -1,0 +1,319 @@
+# Credential Protocol — Setup
+
+This is the generic template: a signed, revocation-respecting membership/
+credential system. Everything a specific deployment needs to customize —
+name, branding, tiers, pricing, content — lives in two files
+(`config.json`, `content.json`) and environment variables. Nothing about
+any one creator is hardcoded in the Python/JS engine.
+
+## 1. Install dependencies
+
+```
+pip install -r requirements.txt
+```
+
+## 2. The signing keypair — generated for you automatically
+
+Every deployment needs its own ECDSA keypair, and nothing to do here: the
+app generates one itself, the first time it boots with none present, and
+reuses that same one forever after — never regenerating it on a later
+restart or redeploy. It's never committed to git (`.gitignore` already
+excludes it) and never shared between deployments.
+
+The one thing that matters: this key lives in `DATA_DIR`, not next to the
+code — because a `git push` rebuilds the code checkout from scratch every
+time (that's what makes Railway's auto-deploy auto-deploy), so anything
+living next to the code instead of in `DATA_DIR` would vanish on every
+redeploy. If the key vanished and a new one silently generated in its
+place, every previously-issued credential's signature would stop
+verifying with no warning. So: **`DATA_DIR` must point at real persistent
+storage (a Railway Volume) before you issue a single real credential** —
+see step 8. Running locally without `DATA_DIR` set is fine for poking
+around, since the key just lives in a local `keys/` folder next to the
+code and nothing's being redeployed anyway.
+
+Want to generate (and back up) the key yourself ahead of time instead of
+letting the app do it on first boot? `python create_keys.py` still works,
+writing to the same place the app would — but never run it against a
+`DATA_DIR` that already has issued credentials, since overwriting an
+existing key breaks verification for everything signed with the old one.
+
+## 3. Fill in `config.json` — or do it after deploying, through `/admin/dashboard`
+
+```json
+{
+  "creator_name": "...",      // shown on cards, emails, admin page
+  "card_title": "...",        // the headline brand name
+  "accent_color": "#...",     // used on the card, email, admin page, and the member widget
+  "members_page": "https://your-domain.com/members.html",
+  "tiers": [ ... ]            // your actual pricing/tier structure
+}
+```
+
+You don't have to hand-edit this file — once deployed, `/admin/dashboard`
+(step 5 below covers logging in) edits all of this through a form and
+saves it straight back to `config.json`. Editing the file directly still
+works too; the dashboard just reads/writes the same file.
+
+## 4. Fill in `content.json`
+
+Whatever's gated behind each section (`downloads`, `bts`, `chat`, `merch`,
+or your own) — links, titles, discount codes.
+
+## 5. Set environment variables
+
+| Variable | Required | Purpose |
+|---|---|---|
+| `ADMIN_SECRET` | **Yes** | The admin login password, and the secret `/revoke` accepts from scripts. With this unset, the login page, `/revoke`, and `/admin/members` all refuse everyone — there is no default/fallback secret on purpose. |
+| `SESSION_SECRET_KEY` | Recommended | Signs the admin login session cookie. If unset, a random key is generated each time the app starts, which means every restart/redeploy logs the admin out. Set a fixed random value (e.g. `python -c "import secrets; print(secrets.token_hex(32))"`) so logins persist. |
+| `BREVO_API_KEY` | Yes (to send email) | Brevo transactional email API key. |
+| `GMAIL_ADDRESS` | Yes (to send email) | Your Brevo-verified sender address. |
+| `MEMBERS_PAGE` | Recommended | Overrides `config.json`'s `members_page` — the URL members land on (where `cp.js` is embedded). |
+| `DATA_DIR` | Recommended in production | Path to persistent storage (e.g. a Railway Volume) so issued credentials/revocations survive redeploys. Falls back to the local folder, which is fine for local dev only. |
+| `STRIPE_SECRET_KEY` | Only if `payment_provider` is `"stripe"` | Your Stripe secret key (`sk_test_...` or `sk_live_...`). Not needed at all with the default `"manual"` provider — see step 6. |
+| `STRIPE_WEBHOOK_SECRET` | Only if `payment_provider` is `"stripe"` | The signing secret for your Stripe webhook endpoint (`whsec_...`). Without it, `/webhook/stripe` refuses everything — there is no default/fallback secret, same philosophy as `ADMIN_SECRET`. |
+| `PORT` | No | Defaults to 5001. |
+| `FLASK_DEBUG` | No — leave unset in production | Set to `1` for local testing to get Flask's debugger/auto-reload back. Off by default on purpose — leaving it on in a public deployment can expose that interactive debugger to anyone who triggers an unhandled error. Never set this on Railway. |
+
+### Admin login
+
+Go to `https://<your-domain>/admin/login` and log in with `ADMIN_SECRET`
+as the password. From there: **Dashboard** (branding, tiers, pricing —
+see step 3) and **Members** (view/revoke issued credentials). There's no
+`?secret=` URL anymore — that's gone in favor of a real session cookie.
+Scripts/curl can still authenticate to `/revoke` with the old
+`X-Admin-Secret` header if you need to automate revocation.
+
+## 6. Taking payment for paid tiers
+
+Any tier in `config.json` with a `price` above 0 goes through whichever
+**payment provider** `config.json`'s `payment_provider` field names — set
+from the dashboard's Payment section, not hand-edited. Free tiers
+(`price: 0`) always issue instantly regardless of this setting. Payment is
+deliberately **not hardcoded to one processor** — creators using this
+template are in different countries, under different regulations, and not
+every processor serves every category of business (Stripe in particular
+won't serve some categories at all — adult content among them). There are
+two providers built in, and a documented way to add more.
+
+### 6a. "Manual approval" — the default, and the one that works everywhere
+
+With `payment_provider` left at `"manual"` (or anything else unrecognized —
+it fails *safe* to this, never to an unconfigured automated provider), no
+payment account of any kind is required. The flow: a member requests a
+paid tier, this app records a pending request and shows them whatever text
+you put in **Manual payment instructions** in the dashboard (e.g. "Send
+$9.99 via PayPal to me@example.com, or by e-transfer to..., then message
+me your email"). You confirm payment arrived however it actually does for
+you, then click **Approve** next to that request in the dashboard's
+pending-requests list — that's what actually issues the credential (same
+pipeline a Stripe webhook uses). **Reject** just closes the request with
+no credential issued. Nothing here needs deploying with real money or a
+third-party account to test — you can run through the entire flow (request
+→ instructions → approve → credential issued and emailed) today, locally.
+
+This is the right default for: anywhere Stripe won't operate or won't
+serve your content category, any country where none of the big processors
+are available, or simply not wanting to hand a third party your business
+details yet. The trade-off is it's manual — there's no automatic "payment
+received" signal, so there will be a delay between someone paying and you
+approving.
+
+### 6b. Stripe — automatic card checkout
+
+Switch `payment_provider` to `"stripe"` in the dashboard once you want
+members charged by card automatically, with no manual approval step.
+
+**How it works:** `POST /checkout` creates a Stripe Checkout Session and
+returns a `checkout_url` to redirect the member to. Stripe hosts the
+actual card-entry page — this app never sees card numbers. Once the member
+pays, Stripe calls your `/webhook/stripe` endpoint, and **that webhook
+call is the only thing that actually issues the credential** — not the
+redirect back to your success page. This matters: if a member closes the
+tab right after paying, the webhook still fires and they still get issued,
+because Stripe retries delivery until it gets a 200 back. The webhook is
+idempotent — a retried/duplicate delivery of the same payment will not
+issue a second credential.
+
+**Setup steps:**
+
+1. Create a Stripe account (or use an existing one) at
+   [stripe.com](https://stripe.com). Start in **test mode** — Stripe gives
+   you separate test and live API keys, and test mode lets you run through
+   the whole flow with fake card numbers before touching real money. Note
+   that Stripe's terms restrict what categories of business it will serve
+   at all (adult content is a notable exclusion) — if that's a concern,
+   use the manual provider, or a processor that explicitly serves your
+   category, instead.
+2. In the Stripe Dashboard, under **Developers → API keys**, copy your
+   **Secret key** (`sk_test_...` while testing) into `STRIPE_SECRET_KEY`.
+3. Set up the webhook endpoint so Stripe can tell this app when a payment
+   completes:
+   - **Once deployed** (recommended): in the Stripe Dashboard, go to
+     **Developers → Webhooks → Add endpoint**, set the URL to
+     `https://<your-domain>/webhook/stripe`, and select the
+     `checkout.session.completed` event. Stripe shows you a **Signing
+     secret** (`whsec_...`) — set that as `STRIPE_WEBHOOK_SECRET`.
+   - **Local testing, before you have a public URL**: install the
+     [Stripe CLI](https://stripe.com/docs/stripe-cli), run
+     `stripe listen --forward-to localhost:5001/webhook/stripe`, and use
+     the `whsec_...` value it prints as `STRIPE_WEBHOOK_SECRET` for that
+     session.
+4. Set both env vars, redeploy, switch `payment_provider` to `"stripe"` in
+   the dashboard, and its Payment section will show both keys as
+   configured.
+5. Run one real test purchase end-to-end using
+   [Stripe's test card numbers](https://stripe.com/docs/testing)
+   (`4242 4242 4242 4242`, any future expiry/CVC) before switching to live
+   keys. Confirm the credential actually gets issued and emailed.
+6. When ready to take real money, swap `sk_test_...` for your `sk_live_...`
+   key and repeat step 3 for the live webhook endpoint (test and live mode
+   have separate webhook configurations in Stripe).
+
+### 6c. Adding a new payment provider
+
+Neither built-in provider will fit every creator — different countries,
+different regulations, different acceptable-use policies per processor.
+Adding one (PayPal, a regional processor, an adult-friendly processor like
+CCBill/Segpay/Vendo/Epoch, anything) means touching `credential_api.py`'s
+`/checkout` route and, if that processor uses webhooks, adding a route for
+it — but never touching `_issue_and_fulfill()` or the core issuance
+pipeline, which every provider shares. Concretely:
+
+1. In `/checkout`'s provider dispatch (the `if provider == "stripe": ...`
+   block), add an `elif provider == "yourprovider":` branch that either
+   returns a redirect URL (like Stripe's `checkout_url`) or a
+   `{"pending": True, ...}` response (like the manual provider), whichever
+   fits how that processor actually works.
+2. If it confirms payment via a server-to-server callback, add a new
+   `/webhook/yourprovider` route that verifies the callback is genuinely
+   from that processor (however it signs requests) and then calls
+   `_issue_and_fulfill(name, email, tier, days, sections, cfg=cfg,
+   payment_meta={...})` — the same function every other provider calls.
+   Build in idempotency the same way `_stripe_already_processed` does, if
+   that processor can redeliver the same notification more than once.
+3. Add `"yourprovider"` as a new `<option>` in the dashboard's Payment
+   provider dropdown (`_dashboard_page()`), and any provider-specific
+   fields (an account ID, say) the same way `manual_payment_instructions`
+   was added — a new `config.json` field, read in `load_config()`, written
+   in the dashboard's save handler.
+
+No core file needs rewriting to do this — `_issue_and_fulfill`, the
+registry, the card/bundle/email pipeline, and the admin dashboard's
+tiers/branding are all provider-agnostic already.
+
+**Important limitation, for every provider:** this is **one-time payment
+only**. Each paid tier is "pay once, get N days of access"
+(`expiry_days`) — there is no subscription billing, no automatic renewal,
+and no automatic charge when a credential expires. A returning member who
+wants another period simply goes through `/checkout` again. If you need
+recurring billing, that's a deliberate scope boundary of this build, not a
+bug — it would need a different kind of integration (subscriptions, not
+one-off charges) and member-facing renewal UI that don't exist here yet.
+
+## 7. Embed the member widget on your actual site
+
+Host a page with:
+
+```html
+<div id="credential-widget"></div>
+<script src="https://your-railway-domain/cp.js"></script>
+```
+
+`cp.js` fetches `/config` and `/content` from this API at runtime, so your
+branding and gated content show up without editing `cp.js` itself.
+
+## 8. Deploy — Railway, connected to GitHub, so pushes auto-deploy
+
+This covers getting from "files on disk" to a real, public dashboard URL
+that redeploys itself every time you push a change — no further manual
+deploy step after this one-time setup. It needs a GitHub repo first,
+since that's what Railway watches for pushes. Any host that runs
+`web: python credential_api.py` (see `Procfile`) works in principle, but
+these steps are specifically for Railway, which is what Miann's live
+deployment already uses (as a completely separate project — none of this
+touches that one).
+
+1. **Create a new, empty GitHub repository** (github.com → New repository
+   → don't initialize it with a README/license/`.gitignore`, this folder
+   already has one). Decide public or private — a public repo is what
+   lets a future "Deploy on Railway" button work for other creators later
+   (step 8's note at the end); private just means only people you invite
+   can see or deploy it. Either works fine for your own use right now.
+2. **Push this folder to it.** From a terminal in this folder (PyCharm's
+   terminal works fine):
+   ```
+   git init
+   git add .
+   git commit -m "Initial commit"
+   git branch -M main
+   git remote add origin https://github.com/<your-username>/<your-repo>.git
+   git push -u origin main
+   ```
+   (If `git` asks you to sign in, follow its prompts — same as any other
+   GitHub push.)
+3. **In Railway**, create a **new project** (not inside Miann's existing
+   one) → **Deploy from GitHub repo** → pick the repo you just pushed.
+   Railway detects `requirements.txt` + `Procfile` automatically; no extra
+   config needed for it to build and run this.
+4. **Add a Volume** to that service (Railway's Volumes tab) and set
+   `DATA_DIR` to its mount path. Do this *before* issuing any real
+   credential — it's what makes the registry, issued credentials, and the
+   signing key (step 2) all survive a redeploy.
+5. **Set the rest of the env vars** from step 5 in that service's
+   Variables tab (`ADMIN_SECRET` at minimum; `BREVO_API_KEY`/
+   `GMAIL_ADDRESS` to actually send email; Stripe's two keys only if
+   you're using that provider).
+6. Railway gives you a public URL once it finishes building. `/admin/login`
+   on that URL is your dashboard from anywhere now, not just localhost.
+7. If you're using Stripe, come back and point its webhook at this real
+   URL (step 6b.3) — the Stripe CLI forwarding from earlier only covered
+   local testing.
+
+**From here on, every `git push` to this repo redeploys automatically** —
+that's Railway's normal behavior once a service is connected to a repo,
+nothing extra to configure for it. This is the "automatic deploy" piece:
+it's a one-time setup, not something repeated per change.
+
+A literal one-click **"Deploy on Railway" button** — so another creator
+could deploy their own copy without touching git or a terminal at all —
+is a separate, later step on top of this: it's created from Railway's own
+dashboard (New → Template, pointed at this same GitHub repo), not a file
+in this codebase. Worth doing once this deployment itself is tested and
+working, if the plan is to hand this template to other creators.
+
+## 9. Test before telling anyone it's live
+
+Issue a real test credential through `/issue`, confirm all four access
+paths work (personal link, QR scan, pasted link, file drop), then log in
+at `/admin/login` and revoke it through `/admin/members` — confirm all
+four now correctly reject it. This is the only real proof the revocation
+path works in your specific deployment — don't skip it.
+
+If you have any paid tiers, also run through one full purchase before
+telling anyone it's live. With the default manual provider that costs
+nothing and needs no account: request the tier, confirm the instructions
+text shows up, approve it in the dashboard, confirm the credential is
+issued and emailed. With Stripe, run one real test purchase (step 6b.5)
+instead — that's the only real proof payment → webhook → issuance
+actually works in your specific deployment.
+
+## What's intentionally NOT here
+
+No offline bundle verifier, no device-binding, no single-active-session
+enforcement. Real access control happens entirely through the live
+`/verify` API call — see the architecture notes carried over from the
+original build for why that trade-off was made.
+
+Every built-in payment provider is one-time payment only — no
+subscriptions/auto-renewal (see step 6). The "manual" provider also has no
+automatic payment confirmation by design — approving is a human decision,
+on purpose. No CSRF protection or login rate-limiting on the admin login
+either (it's a single-password, single-admin tool at this stage) — fine
+for a small/direct-support deployment, worth hardening before this is ever
+multi-tenant or exposed more broadly.
+
+## Optional: your logo
+
+Drop a `logo.png` into `assets/`. If it's missing, cards simply render
+without one — this isn't required to run.

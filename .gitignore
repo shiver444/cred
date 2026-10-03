@@ -1,0 +1,16 @@
+# Runtime state — never belongs in the repo, lives in DATA_DIR instead
+member_registry.json
+revocation_list.json
+credentials/
+bundles/
+cards/
+
+# Secrets — your own keypair, generated per deployment, never shared or committed
+keys/
+
+# Local environment / Python
+__pycache__/
+*.pyc
+venv/
+.env
+.idea/
