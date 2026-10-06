@@ -2,8 +2,9 @@
 
 This is the generic template: a signed, revocation-respecting membership/
 credential system. Everything a specific deployment needs to customize —
-name, branding, tiers, pricing, content — lives in two files
-(`config.json`, `content.json`) and environment variables. Nothing about
+name, branding, tiers, pricing, content — is edited in the admin dashboard
+(saved to two starter files, `config.json` and `content.json`, plus
+environment variables). Nothing about
 any one creator is hardcoded in the Python/JS engine.
 
 ## 1. Install dependencies
@@ -67,14 +68,37 @@ be reset every time you deployed. Two things follow from this:
   dashboard. (Running locally with no `DATA_DIR` set, both are the same
   file, so editing it by hand still works there.)
 
-This also holds the per-tier card designs and their uploaded logos.
-`content.json` (step 4) is different: it's read from the repo, so edit it
-there and push.
+This also holds the per-tier card designs and their uploaded logos. Your
+members-only content (step 4) is stored the same way.
 
-## 4. Fill in `content.json`
+## 4. Add your members-only content
 
-Whatever's gated behind each section (`downloads`, `bts`, `chat`, `merch`,
-or your own) — links, titles, discount codes.
+Log in to the dashboard and open **Content** (top of the page). Here you
+decide what a member sees once they're verified:
+
+- A **section** is one tab in the member area. Give it a title and a
+  **key** (a short lowercase name such as `downloads`). Three kinds:
+  **Links** (a list of items, each with a title, a link and a short note —
+  downloads, videos, posts, anything you can link to), **Merch discount**
+  (a label, a shop link and a code), and the **Chat panel** (a demo for
+  now; messages stay in the visitor's browser).
+- Which members get which sections: on the **Dashboard**, each tier has a
+  "Sections" field. List the keys that tier unlocks, e.g. `downloads, chat`.
+  The Content page shows who sees what, and flags a tier that names a
+  section which doesn't exist.
+- Press **Save content**. It's stored on your Volume next to your other
+  settings, so it survives redeploys. (`content.json` in the repo is only
+  the starter you get on first boot; after your first save, edit in the
+  dashboard.)
+
+Content is only sent to a member who proves they hold a valid credential
+(their access link, card file or bundle) for a tier that includes the
+section, and it is checked again every time the page loads — so revoking
+or expiring a member shuts them out immediately. The `/content` address
+no longer lists anything. One thing to know: a link you add can still be
+opened by whoever is given it, so for files that must stay private, use
+a link that's private on its own side (an unlisted or expiring share link).
+Uploading files straight to this server is a planned addition.
 
 ## 5. Set environment variables
 
@@ -240,8 +264,8 @@ your site, wherever you want the widget to appear. It's two lines:
 
 That's all. The widget works out where your server is from the address
 `cp.js` was loaded from, so there's nothing else to fill in — no API
-address, no keys. It fetches `/config` and `/content` from your server
-at runtime, so your branding and gated content show up without editing
+address, no keys. It fetches your branding from the server at runtime, and your members-only
+content only after a member has been verified, so nothing needs editing in
 `cp.js` itself.
 
 Notes:

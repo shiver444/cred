@@ -1,16 +1,16 @@
 {
-  "downloads": [
+  "sections": [
     {
-      "title": "Sample Download",
-      "url": "https://example.com/sample.mp3",
-      "meta": "Replace with your own content"
+      "key": "downloads",
+      "title": "Downloads",
+      "type": "links",
+      "button": "↓ Download",
+      "items": []
+    },
+    {
+      "key": "chat",
+      "title": "Chat",
+      "type": "chat"
     }
-  ],
-  "bts": [],
-  "chat": true,
-  "merch": {
-    "label": "Member Discount",
-    "url": "#",
-    "code": "YOURCODE"
-  }
+  ]
 }

@@ -38,6 +38,7 @@ from flask_cors import CORS
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
 from html import escape as esc_html
+import hmac
 import json
 import os
 import secrets
@@ -64,6 +65,8 @@ import credential_issuer  # noqa: F401
 # Live settings (branding, tiers, ...) are stored on the persistent Volume,
 # not next to the code, so a redeploy doesn't reset them. See config_store.py.
 import config_store
+import content_store
+import content_page
 
 app = Flask(__name__)
 CORS(app)  # allow requests from your own domain
@@ -825,7 +828,7 @@ def admin_members():
   .nav a:hover {{ text-decoration:underline; }}
 </style></head>
 <body>
-  <div class="nav"><a href="/admin/dashboard">← Dashboard</a><a href="/admin/logout">Log out</a></div>
+  <div class="nav"><a href="/admin/dashboard">← Dashboard</a><a href="/admin/content">Content →</a><a href="/admin/logout">Log out</a></div>
   <h1>{title} — Members ({len(members)})</h1>
   <div class="count">Newest first. This reads whatever's currently in the live registry.</div>
   <div class="count">"IPs" = distinct addresses seen verifying this credential (hover for the list) — 1-2 is normal for one person, a lot more is worth a look and a manual revoke if it's being shared.</div>
@@ -1128,6 +1131,13 @@ def _setup_checklist_html(cfg: dict, provider: str) -> str:
         items.append((pay_done, "Payments for your paid tier", pay_detail))
 
     items.append((
+        content_store.has_any_content(content_store.load()),
+        "Add your members-only content",
+        "Nothing is in your members-only area yet, so a new member would see an empty page. Open Content (top of this page) and add the links, "
+        "downloads or discount code your members get.",
+    ))
+
+    items.append((
         bool(os.environ.get("BREVO_API_KEY") and os.environ.get("GMAIL_ADDRESS")),
         "Email (optional)",
         "Not set up, so members won't be emailed their card and link. That's fine: copy each member's link from Members → \"Copy link\" and send it yourself. "
@@ -1176,6 +1186,19 @@ def _dashboard_page() -> str:
         provider = "manual"
 
     checklist_html = _setup_checklist_html(cfg, provider)
+
+    # What "Sections" on a tier can refer to: the keys of the sections made on
+    # the Content page. Warn about any tier section nobody has created yet.
+    content_keys = [sec["key"] for sec in content_store.load()["sections"]]
+    missing = sorted({str(k).lower() for t in (cfg.get("tiers") or []) for k in (t.get("sections") or [])} - set(content_keys))
+    tier_sections_hint = (
+        '<div class="hint" style="margin-bottom:8px;">"Sections" are the names of the members-only content you set up on the '
+        '<a href="/admin/content" style="color:' + accent + ';">Content</a> page. Right now you have: <b>'
+        + (esc_html(", ".join(content_keys)) if content_keys else "none yet") + '</b>.</div>'
+        + ('<div class="warn" style="background:#3a2a10;color:#f0c674;font-size:11px;line-height:1.6;padding:10px 14px;margin:8px 0;">'
+           '⚠ A tier lists section(s) that don\'t exist on the Content page: <b>' + esc_html(", ".join(missing))
+           + '</b>. Members of that tier would not get anything for them — create a section with that key, or fix the name.</div>' if missing else "")
+    )
 
     try:
         from payment_requests import list_pending
@@ -1322,7 +1345,7 @@ def _dashboard_page() -> str:
            font-size:11px; letter-spacing:1.5px; text-transform:uppercase; padding:8px 16px; cursor:pointer; }}
 </style></head>
 <body>
-  <div class="nav"><a href="/admin/members">Members →</a><a href="/admin/logout">Log out</a></div>
+  <div class="nav"><a href="/admin/members">Members →</a><a href="/admin/content">Content →</a><a href="/admin/logout">Log out</a></div>
   <h1>{title} — Dashboard</h1>
   {saved_banner}
 
@@ -1357,6 +1380,7 @@ def _dashboard_page() -> str:
     <input name="api_base" value="{esc_html(cfg['api_base'])}">
 
     <h2>Tiers &amp; pricing</h2>
+    {tier_sections_hint}
     <div class="hint" style="margin-bottom:8px;">Each tier is a pass type. "Design ▾" lets a specific tier (e.g. a Daily Pass) look different from the rest — title, accent color, logo, barcode — without affecting the others. Anything left blank there just uses the branding above.</div>
     <table>
       <tr><th>Name</th><th>Label</th><th>Price</th><th>Expiry (days)</th><th>Sections (comma-separated)</th><th></th><th></th></tr>
@@ -1613,6 +1637,35 @@ def admin_dashboard_preview_card():
         return err(f"Preview failed: {str(e)}", 500)
 
 
+# ── GET/POST /admin/content ──
+# The Content manager: what members see after they verify (see
+# content_store.py / content_page.py). Saves to DATA_DIR/content.json, so it
+# survives redeploys like the rest of the settings.
+@app.route("/admin/content", methods=["GET"])
+def admin_content():
+    redirect_resp = require_admin_page("/admin/content")
+    if redirect_resp:
+        return redirect_resp
+    cfg = load_config()
+    resp = app.response_class(
+        content_page.render(cfg["accent_color"], cfg["card_title"], content_store.load(), cfg.get("tiers") or []),
+        mimetype="text/html")
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
+
+@app.route("/admin/content", methods=["POST"])
+def admin_content_save():
+    if not check_admin(request):
+        return jsonify({"success": False, "error": "Not logged in."}), 401
+    payload = request.get_json(silent=True) if request.is_json else None
+    # Refuse anything that isn't {"sections": [...]} rather than treating it
+    # as "empty" and wiping the saved content.
+    if not isinstance(payload, dict) or not isinstance(payload.get("sections"), list):
+        return jsonify({"success": False, "error": "Expected JSON like {\"sections\": [...]}."}), 400
+    clean, warnings = content_store.save(payload)
+    return jsonify({"success": True, "content": clean, "warnings": warnings})
+
+
 @app.route("/config", methods=["GET"])
 def get_config():
     cfg = config_store.read_config()
@@ -1622,11 +1675,50 @@ def get_config():
 
 @app.route("/content", methods=["GET"])
 def get_content():
-    content_file = BASE_DIR / "content.json"
-    if not content_file.exists():
-        return jsonify({})
-    with open(content_file) as f:
-        return jsonify(json.load(f))
+    # Deliberately empty. Members-only content used to be served here to
+    # anyone who asked, with the widget merely hiding it — so every download
+    # link was readable by visiting this URL. It's now only ever returned by
+    # POST /member-content, to a caller who proves they hold a valid credential.
+    resp = jsonify({})
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
+
+
+# ── POST /member-content ──
+# The members-only content a credential unlocks. Needs BOTH the credential
+# id and its access hash (the `h` in the member's link / card QR), checked
+# against the live registry on every call — so revoking or expiring a
+# credential cuts off content at once — and returns only the sections that
+# credential's tier includes. Any failure gets the same generic answer, so
+# this can't be used to probe which ids exist.
+@app.route("/member-content", methods=["POST"])
+def member_content():
+    denied = lambda: (jsonify({"success": False, "error": "Access denied."}), 403)
+    data = request.get_json(silent=True) or {}
+    cid  = str(data.get("credential_id") or "").strip()
+    h    = str(data.get("bundle_hash") or "").strip().lower()
+    if not cid or len(h) < 16:
+        return denied()
+    try:
+        from member_registry import get_by_id
+        from credential_verifier import is_on_revocation_list
+        entry = get_by_id(cid)
+        if not entry or entry.get("revoked"):
+            return denied()
+        if datetime.fromisoformat(entry["expires_at"]) < datetime.now(timezone.utc):
+            return denied()
+        stored = (entry.get("bundle_hash") or "").lower()
+        n = min(len(h), 32)
+        if len(stored) < 16 or not hmac.compare_digest(stored[:n], h[:n]):
+            return denied()
+        if is_on_revocation_list(cid, entry.get("bundle_hash")):
+            return denied()
+        sections = content_store.sections_for_member(content_store.load(), entry.get("sections", []))
+        resp = jsonify({"success": True, "sections": sections})
+        resp.headers["Cache-Control"] = "no-store"
+        return resp
+    except Exception:
+        return denied()
 
 @app.route("/cp.js", methods=["GET"])
 def serve_widget():
@@ -1662,6 +1754,7 @@ if __name__ == "__main__":
     print("GET  /admin/login     — admin login (password = ADMIN_SECRET)")
     print("GET  /admin/dashboard — edit branding/tiers/pricing/payment provider")
     print("GET  /admin/members   — view/revoke credentials")
+    print("GET  /admin/content   — manage the members-only content")
     print()
     print("Set these env vars before running (see SETUP.md):")
     print("  GMAIL_ADDRESS      — your verified Brevo sender address")

@@ -58,17 +58,28 @@
   }
   if (container.id !== 'credential-widget') container.id = 'credential-widget'
 
-  // ── Load config and content ──
+  // ── Text and link safety ──
+  // Anything that comes from the server (names typed into the signup form,
+  // titles and links the creator entered) is escaped before it goes into
+  // HTML, and links are only ever http(s), mailto or relative.
+  function esc(v) {
+    return String(v == null ? '' : v)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;').replace(/'/g, '&#39;')
+  }
+  function safeUrl(u) {
+    u = String(u == null ? '' : u).trim()
+    if (u === '#' || (u.charAt(0) === '/' && u.charAt(1) !== '/')) return u
+    return /^(https?:\/\/|mailto:)/i.test(u) ? u : ''
+  }
+
+  // ── Load config ──
+  // Members-only content is NOT loaded here. It is requested only after a
+  // member has proved they hold a valid credential (see loadMemberContent).
   let config  = {}
-  let content = {}
 
   try {
-    const [cr, ct] = await Promise.all([
-      fetch(`${API_BASE}/config`).then(r => r.json()),
-      fetch(`${API_BASE}/content`).then(r => r.json()),
-    ])
-    config  = cr
-    content = ct
+    config = await fetch(`${API_BASE}/config`).then(r => r.json())
   } catch(e) {
     container.innerHTML = '<p style="color:#888;font-family:monospace;font-size:11px;">Credential widget: could not reach API.</p>'
     return
@@ -641,8 +652,8 @@
     const el = document.getElementById('ca-tier-picker')
     el.innerHTML = tiers.map((t, i) => `
       <div class="ca-tier-option${t === selectedTier ? ' selected' : ''}" data-i="${i}">
-        <span class="ca-tier-name">${t.name}${t.label ? ' — ' + t.label : ''}</span>
-        <span class="ca-tier-price">${t.price ? '$' + t.price + '/mo' : 'Free'}</span>
+        <span class="ca-tier-name">${esc(t.name)}${t.label ? ' — ' + esc(t.label) : ''}</span>
+        <span class="ca-tier-price">${t.price ? '$' + esc(t.price) + '/mo' : 'Free'}</span>
       </div>`).join('')
     el.querySelectorAll('.ca-tier-option').forEach(opt => {
       opt.onclick = () => {
@@ -692,16 +703,21 @@
   }
 
   // ── Session check ──
-  const stored = sessionStorage.getItem('crith_member_' + name)
-  if (stored) {
+  // A signed-in member stays signed in for the browser session. What's kept
+  // is the verify response plus the access code (`_h`) the content request
+  // needs. Records from before content was protected have no code: they're
+  // dropped, and the member signs in again from their link or card.
+  const sessionKey = 'crith_member_' + name
+  const stored = sessionStorage.getItem(sessionKey)
+  if (stored && !urlId) {
     try {
       const d = JSON.parse(stored)
-      if (new Date(d.expires_at) > new Date()) {
+      if (d && d._h && new Date(d.expires_at) > new Date()) {
         grantAccess(d)
       } else {
-        sessionStorage.removeItem('crith_member_' + name)
+        sessionStorage.removeItem(sessionKey)
       }
-    } catch(e) {}
+    } catch(e) { sessionStorage.removeItem(sessionKey) }
   }
 
   // ── FILE PROCESSING ──
@@ -717,7 +733,11 @@
   // live call the access-link and QR paths use, so revocation is respected
   // here too: dropping a card file can no longer let someone in on the
   // strength of the file alone once that credential's been revoked.
-  function applyManifest(manifest) {
+  // `proof` is the access code that goes with the file: for a card it's the
+  // code in the card's own QR link; for a .zip it's the SHA-256 of the zip
+  // itself (which is exactly what the server stored when it issued it).
+  // Members-only content is only handed over for id + code together.
+  function applyManifest(manifest, proof) {
     if (manifest.bundle_type !== 'credential') {
       showResult('invalid', '✗ This is not a member credential.')
       return
@@ -731,7 +751,13 @@
       showResult('invalid', '✗ Credential has expired.')
       return
     }
-    verifyWithAPI(manifest.credential_id, null)
+    verifyWithAPI(manifest.credential_id, proof || null)
+  }
+
+  async function sha256Hex(buffer) {
+    if (!(window.crypto && window.crypto.subtle)) throw new Error('no-crypto')
+    const digest = await window.crypto.subtle.digest('SHA-256', buffer)
+    return Array.from(new Uint8Array(digest)).map(b => b.toString(16).padStart(2, '0')).join('')
   }
 
   async function processFile(file) {
@@ -746,13 +772,21 @@
             return
           }
         }
-        const zip = await JSZip.loadAsync(await file.arrayBuffer())
+        const buf = await file.arrayBuffer()
+        const zip = await JSZip.loadAsync(buf)
         if (!zip.file('manifest.json')) {
           showResult('invalid', '✗ Not a valid credential bundle.')
           return
         }
         const manifest = JSON.parse(await zip.file('manifest.json').async('string'))
-        applyManifest(manifest)
+        let proof = null
+        try {
+          proof = await sha256Hex(buf)
+        } catch(e) {
+          showResult('invalid', '✗ This browser can\'t read the bundle securely here. Use your access link or card file instead.')
+          return
+        }
+        applyManifest(manifest, proof)
       } else if (file.name.endsWith('.html') || file.name.endsWith('.htm')) {
         const text = await file.text()
         const match = text.match(/<script[^>]+id=["']cp-manifest["'][^>]*>([\s\S]*?)<\/script>/i)
@@ -767,7 +801,19 @@
           showResult('invalid', '✗ Could not read the credential in this card.')
           return
         }
-        applyManifest(manifest)
+        // The card's QR link (?id=…&h=…) carries the access code.
+        let proof = null
+        try {
+          const doc  = new DOMParser().parseFromString(text, 'text/html')
+          const link = doc.querySelector('a.card-qr-link')
+          const parsed = link ? parseToken(link.getAttribute('href')) : null
+          if (parsed && parsed.hash && parsed.id === manifest.credential_id) proof = parsed.hash
+        } catch(e) {}
+        if (!proof) {
+          showResult('invalid', '✗ This card has no access code in it. Use the access link from your email instead.')
+          return
+        }
+        applyManifest(manifest, proof)
       } else {
         showResult('invalid', '✗ Drop your card file — a .zip bundle or the card .html.')
       }
@@ -880,7 +926,13 @@
   }
 
   // ── API VERIFY ──
+  // `bundle_hash` is the access code from the member's link, card or bundle.
+  // Without it we can't prove who's asking, so there's nothing to show them.
   async function verifyWithAPI(credential_id, bundle_hash) {
+    if (!bundle_hash) {
+      showResult('invalid', '✗ This link or code is incomplete. Use the full access link from your email, or drop your card file.')
+      return
+    }
     showResult('checking', 'Verifying...')
     try {
       const res = await fetch(`${API_BASE}/verify`, {
@@ -890,18 +942,36 @@
       })
       const data = await res.json()
       if (data.valid) {
-        sessionStorage.setItem('crith_member_' + name, JSON.stringify(data))
+        data._h = String(bundle_hash).toLowerCase()
+        data.credential_id = data.credential_id || credential_id
+        try { sessionStorage.setItem(sessionKey, JSON.stringify(data)) } catch(e) {}
         grantAccess(data)
       } else {
         showResult('invalid', `✗ ${data.error || 'Invalid credential.'}`)
       }
     } catch(e) {
-      showResult('invalid', '✗ Could not reach verification server. Try dropping your .zip bundle instead.')
+      showResult('invalid', '✗ Could not reach verification server. Try again in a moment.')
     }
   }
 
+  // ── MEMBER CONTENT ──
+  // Asked for only after the member has proved their credential, and asked
+  // again on every visit, so revoking a credential cuts off its content at
+  // once. Returns the sections this member's tier includes, or null.
+  async function loadMemberContent(data) {
+    const res = await fetch(`${API_BASE}/member-content`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ credential_id: data.credential_id, bundle_hash: data._h }),
+    })
+    if (res.status === 403) return null
+    const body = await res.json()
+    if (!body || !body.success) return null
+    return body.sections || []
+  }
+
   // ── GRANT ACCESS ──
-  function grantAccess(data) {
+  async function grantAccess(data) {
     memberData = data
     const memberName = data.holder_name || data.name || 'Member'
     const expiry = new Date(data.expires_at).toLocaleDateString('en-GB', {
@@ -911,61 +981,83 @@
     showResult('valid', `✔ Welcome, ${memberName}. ${data.tier} access · valid until ${expiry}`)
 
     document.getElementById('ca-member-header').innerHTML = `
-      <div class="ca-member-name">${memberName}</div>
-      <div class="ca-member-tier">${data.tier}</div>
+      <div class="ca-member-name">${esc(memberName)}</div>
+      <div class="ca-member-tier">${esc(data.tier)}</div>
       <div class="ca-member-hr"></div>
       <div class="ca-member-meta">
-        <div><b>ACCESS CLASS</b> // <span>${data.tier}</span></div>
-        <div><b>VALID UNTIL</b> // <span>${expiry}</span></div>
+        <div><b>ACCESS CLASS</b> // <span>${esc(data.tier)}</span></div>
+        <div><b>VALID UNTIL</b> // <span>${esc(expiry)}</span></div>
       </div>`
 
-    buildMemberArea(data.sections || [])
-    document.getElementById('ca-member-area').style.display = 'block'
-    document.getElementById('ca-member-area').scrollIntoView({ behavior: 'smooth' })
+    const area = document.getElementById('ca-member-area')
+    area.style.display = 'block'
+    document.getElementById('ca-tabs').innerHTML = ''
+    document.getElementById('ca-panels').innerHTML =
+      '<div class="ca-panel active"><p style="color:#6b6058;font-size:10px;position:relative;">Loading your content…</p></div>'
 
+    let sections = null
+    let unreachable = false
+    try {
+      sections = await loadMemberContent(data)
+    } catch(e) {
+      unreachable = true
+    }
+
+    if (unreachable) {
+      document.getElementById('ca-panels').innerHTML =
+        '<div class="ca-panel active"><p style="color:#cc0000;font-size:10px;position:relative;">Could not load your content right now. Reload the page to try again.</p></div>'
+    } else if (sections === null) {
+      // The server no longer accepts this credential (revoked, expired, or
+      // the code doesn't match) — don't leave a half-signed-in page behind.
+      try { sessionStorage.removeItem(sessionKey) } catch(e) {}
+      memberData = null
+      area.style.display = 'none'
+      showResult('invalid', '✗ This access is no longer valid. Contact ' + name + ' if you think that\'s a mistake.')
+      return
+    } else {
+      buildMemberArea(sections)
+    }
+
+    area.scrollIntoView && area.scrollIntoView({ behavior: 'smooth' })
     window.history.replaceState({}, '', window.location.pathname)
   }
 
   // ── BUILD MEMBER AREA ──
+  // `sections` is exactly what the server returned for this member:
+  // [{ key, title, type: 'links' | 'merch' | 'chat', … }]
   function buildMemberArea(sections) {
     const tabsEl   = document.getElementById('ca-tabs')
     const panelsEl = document.getElementById('ca-panels')
     tabsEl.innerHTML   = ''
     panelsEl.innerHTML = ''
 
-    const availableSections = []
-    if (content.downloads && content.downloads.length && sections.includes('downloads'))
-      availableSections.push('downloads')
-    if (content.bts && content.bts.length && sections.includes('bts'))
-      availableSections.push('bts')
-    if (content.chat && sections.includes('chat'))
-      availableSections.push('chat')
-    if (content.merch && sections.includes('merch'))
-      availableSections.push('merch')
+    // Nothing to show for an empty links list or a blank merch entry.
+    const shown = (sections || []).filter(sec => {
+      if (sec.type === 'links') return sec.items && sec.items.length
+      if (sec.type === 'merch') return sec.label || sec.code || sec.url
+      return sec.type === 'chat'
+    })
 
-    if (!availableSections.length) {
-      panelsEl.innerHTML = '<div class="ca-panel active" style="border:1px solid #222;border-top:none;padding:28px;"><p style="color:#555;font-size:10px;">No content available yet.</p></div>'
+    if (!shown.length) {
+      panelsEl.innerHTML = '<div class="ca-panel active"><p style="color:#6b6058;font-size:10px;position:relative;">No content available yet.</p></div>'
       return
     }
 
-    availableSections.forEach((sec, i) => {
-      // Tab
+    shown.forEach((sec, i) => {
       const btn = document.createElement('button')
       btn.className = 'ca-tab' + (i === 0 ? ' active' : '')
-      btn.textContent = '// ' + sec.toUpperCase()
-      btn.onclick = () => switchTab(sec, btn)
+      btn.textContent = '// ' + String(sec.title || sec.key).toUpperCase()
+      btn.onclick = () => switchTab(sec.key, btn)
       tabsEl.appendChild(btn)
 
-      // Panel
       const panel = document.createElement('div')
       panel.className = 'ca-panel' + (i === 0 ? ' active' : '')
-      panel.id = 'ca-panel-' + sec
+      panel.id = 'ca-panel-' + sec.key
       panel.innerHTML = buildPanel(sec)
       panelsEl.appendChild(panel)
     })
 
-    // Wire chat
-    if (sections.includes('chat')) {
+    if (shown.some(s => s.type === 'chat')) {
       const sendBtn   = document.getElementById('ca-chat-send')
       const chatInput = document.getElementById('ca-chat-input')
       if (sendBtn)   sendBtn.onclick = sendChat
@@ -973,55 +1065,51 @@
     }
   }
 
-  function switchTab(name, btn) {
+  function switchTab(key, btn) {
     document.querySelectorAll('.ca-tab').forEach(b => b.classList.remove('active'))
     document.querySelectorAll('.ca-panel').forEach(p => p.classList.remove('active'))
     btn.classList.add('active')
-    document.getElementById('ca-panel-' + name).classList.add('active')
+    document.getElementById('ca-panel-' + key).classList.add('active')
   }
 
   function buildPanel(sec) {
-    if (sec === 'downloads') {
-      const items = (content.downloads || []).map((t, i) => `
+    const title = `<div class="ca-panel-title">${esc(sec.title || sec.key)}</div>`
+
+    if (sec.type === 'links') {
+      const items = (sec.items || []).map(it => {
+        const url = safeUrl(it.url)
+        const btn = url
+          ? `<a href="${esc(url)}" class="ca-dl-btn" target="_blank" rel="noopener">${esc(sec.button || 'Open →')}</a>`
+          : ''
+        return `
         <div class="ca-track">
           <div>
-            <div class="ca-track-title">${t.title}</div>
-            <div class="ca-track-meta">${t.meta || ''}</div>
+            <div class="ca-track-title">${esc(it.title)}</div>
+            <div class="ca-track-meta">${esc(it.note || '')}</div>
           </div>
-          <a href="${t.url}" class="ca-dl-btn" ${t.url !== '#' ? 'download' : ''}>↓ Download</a>
-        </div>`).join('')
-      return `<div class="ca-panel-title">Downloads</div>${items}`
+          ${btn}
+        </div>`
+      }).join('')
+      return title + items
     }
 
-    if (sec === 'bts') {
-      const items = (content.bts || []).map(v => `
-        <div class="ca-video-card">
-          <div class="ca-video-thumb">▶</div>
-          <div class="ca-video-title">${v.title}</div>
-          <div class="ca-video-meta">${v.meta || ''}</div>
-        </div>`).join('')
-      return `<div class="ca-panel-title">Behind The Scenes</div><div class="ca-video-grid">${items}</div>`
-    }
-
-    if (sec === 'merch') {
-      const m = content.merch || {}
-      return `
-        <div class="ca-panel-title">Merch Discount</div>
+    if (sec.type === 'merch') {
+      const url = safeUrl(sec.url)
+      return `${title}
         <div class="ca-track">
           <div>
-            <div class="ca-track-title">${m.label || 'Member Discount'}</div>
-            <div class="ca-track-meta">Code: ${m.code || ''}</div>
+            <div class="ca-track-title">${esc(sec.label || 'Member Discount')}</div>
+            <div class="ca-track-meta">${sec.code ? 'Code: ' + esc(sec.code) : ''}</div>
           </div>
-          <a href="${m.url || '#'}" class="ca-dl-btn" target="_blank" rel="noopener">Shop →</a>
+          ${url ? `<a href="${esc(url)}" class="ca-dl-btn" target="_blank" rel="noopener">Shop →</a>` : ''}
         </div>`
     }
 
-    if (sec === 'chat') {
-      return `
-        <div class="ca-panel-title">Chat</div>
+    if (sec.type === 'chat') {
+      return `${title}
         <div class="ca-chat-messages" id="ca-chat-messages">
           <div>
-            <div class="ca-msg-author">${name} // system</div>
+            <div class="ca-msg-author">${esc(name)} // system</div>
             <div class="ca-msg-text">Welcome. Demo chat — local only for now.</div>
           </div>
         </div>
@@ -1045,8 +1133,8 @@
     const msgs = document.getElementById('ca-chat-messages')
     const div  = document.createElement('div')
     div.innerHTML = `
-      <div class="ca-msg-author">${memberName}</div>
-      <div class="ca-msg-text" style="color:inherit;">${msg.replace(/</g,'&lt;')}</div>`
+      <div class="ca-msg-author">${esc(memberName)}</div>
+      <div class="ca-msg-text" style="color:inherit;">${esc(msg)}</div>`
     msgs.appendChild(div)
     msgs.scrollTop = msgs.scrollHeight
     input.value = ''
@@ -1099,7 +1187,7 @@
         if (data.pending) {
           // Manual-approval provider — a request is now queued for the
           // creator; nothing is issued until they approve it.
-          okEl.innerHTML = (data.instructions || 'Request received. Your access will be issued once payment is confirmed.').replace(/\n/g, '<br>')
+          okEl.innerHTML = esc(data.instructions || 'Request received. Your access will be issued once payment is confirmed.').replace(/\n/g, '<br>')
           okEl.style.display = 'block'
           btn.textContent = 'Request sent'
           return
@@ -1109,11 +1197,11 @@
           // service set up yet, or the send failed) — say so rather than
           // promising an email that isn't coming. The creator can copy this
           // member's link from the admin Members page and send it by hand.
-          okEl.innerHTML = `✔ Your access has been created, but we couldn't send the email.<br>Please contact ${name} and they'll send you your access link.`
+          okEl.innerHTML = `✔ Your access has been created, but we couldn't send the email.<br>Please contact ${esc(name)} and they'll send you your access link.`
           okEl.style.display = 'block'
           btn.textContent = '✔ Created'
         } else {
-          okEl.innerHTML = `✔ Card sent to ${emailVal}.<br>Check your inbox — your card and access link are on their way.`
+          okEl.innerHTML = `✔ Card sent to ${esc(emailVal)}.<br>Check your inbox — your card and access link are on their way.`
           okEl.style.display = 'block'
           btn.textContent = '✔ Sent'
         }

@@ -20,7 +20,9 @@ middle, no platform cut: your members, your keys, your money.
    public domain under Settings → Networking if there isn't one yet, and go
    to `https://your-domain/admin/login`. Log in with the password you chose.
 3. **Fill in your info.** The dashboard has a setup checklist at the top:
-   your name and brand, your tiers and prices, and how members pay you.
+   your name and brand, your tiers and prices, how members pay you, and the
+   members-only content (links, downloads, a discount code) on the Content
+   page. Only verified members can see that content.
 4. **Add two lines to your website.** The dashboard's "Embed on your
    website" box shows them with your real address filled in, ready to copy:
 
