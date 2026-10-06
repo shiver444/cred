@@ -53,6 +53,10 @@ except ImportError:
 # first /issue call. See credential_issuer.py's _ensure_keypair().
 import credential_issuer  # noqa: F401
 
+# Live settings (branding, tiers, ...) are stored on the persistent Volume,
+# not next to the code, so a redeploy doesn't reset them. See config_store.py.
+import config_store
+
 app = Flask(__name__)
 CORS(app)  # allow requests from your own domain
 
@@ -164,14 +168,9 @@ def require_admin_page(next_path: str):
     return redirect(f"/admin/login?next={next_path}")
 
 def _read_config_file() -> dict:
-    config_file = BASE_DIR / "config.json"
-    if not config_file.exists():
-        return {}
-    try:
-        with open(config_file) as f:
-            return json.load(f)
-    except Exception:
-        return {}
+    # DATA_DIR/config.json if the dashboard has ever saved one, otherwise
+    # the repo's config.json as the first-boot default — see config_store.py.
+    return config_store.read_config()
 
 def load_config() -> dict:
     """
@@ -200,14 +199,14 @@ def load_config() -> dict:
     }
 
 def save_config(updates: dict):
-    """Merge `updates` into config.json and write it back. Used by
-    /admin/dashboard's save — never overwrites fields the dashboard form
-    doesn't send (e.g. nothing today, but keeps this safe as the form
-    grows)."""
+    """Merge `updates` into the current settings and write them back to the
+    live copy in DATA_DIR (the persistent Volume in production — never next
+    to the code, which a redeploy rebuilds). Used by /admin/dashboard's
+    save — never overwrites fields the dashboard form doesn't send (e.g.
+    nothing today, but keeps this safe as the form grows)."""
     cfg = _read_config_file()
     cfg.update(updates)
-    with open(BASE_DIR / "config.json", "w") as f:
-        json.dump(cfg, f, indent=2)
+    config_store.write_config(cfg)
 
 def get_tier(cfg: dict, tier_name: str) -> dict:
     """The configured tier matching `tier_name`, or None if it isn't one of
@@ -1454,11 +1453,10 @@ def admin_dashboard_preview_card():
 
 @app.route("/config", methods=["GET"])
 def get_config():
-    config_file = BASE_DIR / "config.json"
-    if not config_file.exists():
+    cfg = config_store.read_config()
+    if not cfg:
         return err("config.json not found", 404)
-    with open(config_file) as f:
-        return jsonify(json.load(f))
+    return jsonify(cfg)
 
 @app.route("/content", methods=["GET"])
 def get_content():

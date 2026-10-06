@@ -51,9 +51,25 @@ existing key breaks verification for everything signed with the old one.
 ```
 
 You don't have to hand-edit this file — once deployed, `/admin/dashboard`
-(step 5 below covers logging in) edits all of this through a form and
-saves it straight back to `config.json`. Editing the file directly still
-works too; the dashboard just reads/writes the same file.
+(step 5 below covers logging in) edits all of this through a form.
+
+**Where your settings actually live.** The `config.json` in the repo is
+only the *starting* copy. The first time you save in the dashboard, your
+settings are written to `config.json` inside your persistent storage
+(`DATA_DIR` — the Railway Volume in production), and from then on that
+copy is the one the app reads. That's deliberate: Railway rebuilds the
+code from GitHub on every push, so settings stored next to the code would
+be reset every time you deployed. Two things follow from this:
+
+- Changing settings in the dashboard survives redeploys. 
+- Once you've saved in the dashboard even once, editing the repo's
+  `config.json` no longer changes anything on the live site — use the
+  dashboard. (Running locally with no `DATA_DIR` set, both are the same
+  file, so editing it by hand still works there.)
+
+This also holds the per-tier card designs and their uploaded logos.
+`content.json` (step 4) is different: it's read from the repo, so edit it
+there and push.
 
 ## 4. Fill in `content.json`
 

@@ -22,15 +22,15 @@ import os
 import requests
 from pathlib import Path
 
+import config_store
+
 BASE_DIR = Path(__file__).resolve().parent
 
 
 def _load_config() -> dict:
-    try:
-        with open(BASE_DIR / "config.json") as f:
-            return json.load(f)
-    except Exception:
-        return {}
+    # The live settings (DATA_DIR/config.json once the dashboard has saved
+    # any, otherwise the repo default) — see config_store.py.
+    return config_store.read_config()
 
 
 _cfg = _load_config()
@@ -45,6 +45,20 @@ FROM_NAME     = CARD_TITLE
 MEMBERS_PAGE  = os.environ.get("MEMBERS_PAGE", _cfg.get("members_page", ""))
 
 BREVO_URL = "https://api.brevo.com/v3/smtp/email"
+
+
+def _refresh_branding():
+    """Re-read the branding values from the current settings. They used to
+    be read once at import time, which meant a change saved in the dashboard
+    didn't reach emails until the app restarted. Called at the start of
+    every send so emails always use what's currently saved."""
+    global CREATOR_NAME, CARD_TITLE, ACCENT_COLOR, FROM_NAME, MEMBERS_PAGE
+    cfg = _load_config()
+    CREATOR_NAME = cfg.get("creator_name", "Your Creator Name")
+    CARD_TITLE   = cfg.get("card_title", "YOUR BRAND HERE")
+    ACCENT_COLOR = cfg.get("accent_color", "#00e87a")
+    FROM_NAME    = CARD_TITLE
+    MEMBERS_PAGE = os.environ.get("MEMBERS_PAGE", cfg.get("members_page", ""))
 
 
 def send_credential_email(
@@ -63,6 +77,8 @@ def send_credential_email(
     Includes personal access link.
     Returns True on success.
     """
+
+    _refresh_branding()
 
     personal_link = (
         f"{MEMBERS_PAGE}"
