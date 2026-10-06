@@ -1,11 +1,11 @@
 /**
- * CrithAccess Widget — cp.js
+ * Credential Protocol Widget — cp.js
  * Drop two lines on any site. Everything else is handled.
  *
  * Usage (the two lines — your dashboard's "Embed on your website" box
  * shows them with your real address filled in, ready to copy):
  *
- * <div id="crith-access"></div>
+ * <div id="credential-widget"></div>
  * <script src="https://your-api.com/cp.js"></script>
  *
  * The widget finds its server automatically from the address cp.js was
@@ -39,24 +39,24 @@
     await new Promise(resolve => document.addEventListener('DOMContentLoaded', resolve))
   }
 
-  // `credential-widget` is accepted too: it's what older instructions told
-  // people to use. It's renamed so the widget's styles (scoped to
-  // #crith-access) apply to it.
-  const container = document.getElementById('crith-access') ||
-                    document.getElementById('credential-widget')
+  // `crith-access` is accepted too: it was this widget's original id, and
+  // sites embedded back then keep working. It's renamed so the widget's
+  // styles (scoped to #credential-widget) apply to it.
+  const container = document.getElementById('credential-widget') ||
+                    document.getElementById('crith-access')
   if (!container) {
     // Never fail silently — a missing div used to just produce a blank
     // page with nothing to say why.
-    console.error('Credential widget: no <div id="crith-access"></div> found on this page, so there is nowhere to draw the widget. Add that line where you want it to appear.')
+    console.error('Credential widget: no <div id="credential-widget"></div> found on this page, so there is nowhere to draw the widget. Add that line where you want it to appear.')
     if (script && script.parentNode) {
       const note = document.createElement('p')
       note.style.cssText = 'color:#888;font-family:monospace;font-size:11px;'
-      note.textContent = 'Credential widget: add <div id="crith-access"></div> where this should appear.'
+      note.textContent = 'Credential widget: add <div id="credential-widget"></div> where this should appear.'
       script.parentNode.insertBefore(note, script)
     }
     return
   }
-  if (container.id !== 'crith-access') container.id = 'crith-access'
+  if (container.id !== 'credential-widget') container.id = 'credential-widget'
 
   // ── Load config and content ──
   let config  = {}
@@ -70,7 +70,7 @@
     config  = cr
     content = ct
   } catch(e) {
-    container.innerHTML = '<p style="color:#888;font-family:monospace;font-size:11px;">CrithAccess: could not reach API.</p>'
+    container.innerHTML = '<p style="color:#888;font-family:monospace;font-size:11px;">Credential widget: could not reach API.</p>'
     return
   }
 
@@ -95,8 +95,8 @@
   // ── Inject base styles ──
   const style = document.createElement('style')
   style.textContent = `
-    #crith-access * { box-sizing: border-box; }
-    #crith-access {
+    #credential-widget * { box-sizing: border-box; }
+    #credential-widget {
       --ca-panel:    #1a100e;
       --ca-panel-2:  #241512;
       --ca-bone:     #e6dfd2;
@@ -1104,9 +1104,19 @@
           btn.textContent = 'Request sent'
           return
         }
-        okEl.innerHTML = `✔ Card sent to ${emailVal}.<br>Check your inbox — your card and access link are on their way.`
-        okEl.style.display = 'block'
-        btn.textContent = '✔ Sent'
+        if (data.email_sent === false) {
+          // The credential was issued, but the email didn't go out (no email
+          // service set up yet, or the send failed) — say so rather than
+          // promising an email that isn't coming. The creator can copy this
+          // member's link from the admin Members page and send it by hand.
+          okEl.innerHTML = `✔ Your access has been created, but we couldn't send the email.<br>Please contact ${name} and they'll send you your access link.`
+          okEl.style.display = 'block'
+          btn.textContent = '✔ Created'
+        } else {
+          okEl.innerHTML = `✔ Card sent to ${emailVal}.<br>Check your inbox — your card and access link are on their way.`
+          okEl.style.display = 'block'
+          btn.textContent = '✔ Sent'
+        }
       } else {
         errEl.textContent = data.error || 'Something went wrong.'
         errEl.style.display = 'block'

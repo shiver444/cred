@@ -208,7 +208,7 @@ def send_credential_email(
   </div>
   <div class="row">
     <span class="row-label">ISSUED BY</span>
-    <span class="row-val">{CREATOR_NAME.upper()} / CRITHLABS</span>
+    <span class="row-val">{CREATOR_NAME.upper()}</span>
   </div>
 
   <hr class="line">
@@ -238,10 +238,9 @@ def send_credential_email(
   <hr class="line">
 
   <div class="footer">
-    CrithLabs Credential Protocol<br>
+    {CARD_TITLE}<br>
     Your credential is cryptographically signed with ECDSA.<br>
-    Keep your card and bundle safe — they are your access key.<br>
-    crithlabs.com
+    Keep your card and bundle safe — they are your access key.
   </div>
 
 </div>
@@ -261,7 +260,7 @@ MEMBER:      {to_name.upper()}
 TIER:        {tier}
 ID:          {credential_id[:16].upper()}
 VALID UNTIL: {expires_at[:10]}
-ISSUED BY:   {CREATOR_NAME.upper()} / CRITHLABS
+ISSUED BY:   {CREATOR_NAME.upper()}
 
 YOUR PERSONAL ACCESS LINK (this is what gets you in):
 {personal_link}
@@ -271,8 +270,7 @@ a signed keepsake and a signed backup copy, for your records.
 
 Keep your access link somewhere safe.
 
-CrithLabs Credential Protocol
-crithlabs.com
+{CARD_TITLE}
 """
 
     try:

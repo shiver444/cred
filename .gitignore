@@ -1,6 +1,9 @@
 # Runtime state — never belongs in the repo, lives in DATA_DIR instead
 member_registry.json
 revocation_list.json
+payment_requests.json
+stripe_processed_sessions.json
+.config-*.tmp
 credentials/
 bundles/
 cards/

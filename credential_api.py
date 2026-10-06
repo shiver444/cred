@@ -42,6 +42,14 @@ import json
 import os
 import secrets
 
+# On Railway, a service with a Volume attached automatically gets
+# RAILWAY_VOLUME_MOUNT_PATH (e.g. "/data"). If DATA_DIR wasn't set by hand,
+# use that — so a deployment with a Volume stores everything on it without
+# anyone having to remember a second setting. Must run before the imports
+# below: every module reads DATA_DIR once, at import time.
+if not os.environ.get("DATA_DIR") and os.environ.get("RAILWAY_VOLUME_MOUNT_PATH"):
+    os.environ["DATA_DIR"] = os.environ["RAILWAY_VOLUME_MOUNT_PATH"]
+
 try:
     import stripe
 except ImportError:
@@ -675,7 +683,7 @@ def revocation_list():
 @app.route("/status", methods=["GET"])
 def status():
     cfg = load_config()
-    issuer = f"{cfg['creator_name']} / CrithLabs"
+    issuer = cfg['creator_name']
     try:
         from member_registry import stats
         s = stats()
@@ -1068,6 +1076,83 @@ def admin_dashboard_save():
 
     return redirect("/admin/dashboard?saved=1")
 
+def _setup_checklist_html(cfg: dict, provider: str) -> str:
+    """The dashboard's "Setup checklist": what's done and what still needs
+    attention on this deployment, worked out from the live state (settings,
+    environment variables, storage) rather than anything the creator ticks
+    off by hand. Items a deployment can't act on (e.g. Railway volume
+    advice when running locally) aren't shown at all."""
+    on_railway = bool(os.environ.get("RAILWAY_PROJECT_ID") or os.environ.get("RAILWAY_ENVIRONMENT_NAME"))
+    has_storage = DATA_DIR.resolve() != BASE_DIR.resolve()
+    members_page = (cfg.get("members_page") or "").strip()
+    tiers = cfg.get("tiers") or []
+    has_paid_tier = any((t.get("price") or 0) > 0 for t in tiers)
+
+    items = []   # (done, label, detail)
+
+    items.append((
+        cfg["creator_name"] != "Your Creator Name" and cfg["card_title"] != "YOUR BRAND HERE",
+        "Set your branding",
+        "Enter your Creator name and Card title under Branding below, then Save.",
+    ))
+
+    if on_railway:
+        items.append((
+            has_storage,
+            "Persistent storage (Volume)",
+            "This deployment has NO persistent storage, so members, your signing key and settings are wiped on every redeploy. "
+            "In Railway: open this service, attach a Volume (mount path /data) and redeploy — before issuing any real card."
+            if not has_storage else
+            "Your members, signing key and settings are stored on a persistent Volume and survive redeploys.",
+        ))
+
+    items.append((
+        bool(os.environ.get("SESSION_SECRET_KEY")),
+        "Admin login stays signed in across deploys",
+        "Set a SESSION_SECRET_KEY environment variable (any long random text) — otherwise you're logged out of this dashboard every time the app restarts.",
+    ))
+
+    items.append((
+        bool(members_page) and "your-domain.com" not in members_page,
+        "Set your Members page URL",
+        "Under Branding below, set \"Members page URL\" to the page on your site where you embed the widget — member access links point there.",
+    ))
+
+    if has_paid_tier:
+        if provider == "stripe":
+            pay_done = bool(stripe and STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET)
+            pay_detail = "Stripe needs the STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET environment variables — see SETUP.md — or switch the provider to Manual approval."
+        else:
+            pay_done = bool((cfg.get("manual_payment_instructions") or "").strip())
+            pay_detail = "You have a paid tier on Manual approval — tell members how to pay you by filling in \"Manual payment instructions\" under Payment, then Save."
+        items.append((pay_done, "Payments for your paid tier", pay_detail))
+
+    items.append((
+        bool(os.environ.get("BREVO_API_KEY") and os.environ.get("GMAIL_ADDRESS")),
+        "Email (optional)",
+        "Not set up, so members won't be emailed their card and link. That's fine: copy each member's link from Members → \"Copy link\" and send it yourself. "
+        "To enable emails, set BREVO_API_KEY and GMAIL_ADDRESS — see SETUP.md.",
+    ))
+
+    done_count = sum(1 for d, _, _ in items if d)
+    all_done = done_count == len(items)
+
+    rows = ""
+    for done, label, detail in items:
+        mark = '<span class="chk-ok">✓</span>' if done else '<span class="chk-todo">○</span>'
+        rows += (f'<div class="chk-row">{mark}<div><b>{esc_html(label)}</b>'
+                 f'<div class="hint">{esc_html(detail)}</div></div></div>')
+
+    summary = ("Setup checklist — all done ✓" if all_done
+               else f"Setup checklist — {done_count} of {len(items)} done")
+    return f"""
+  <details class="checklist" {"" if all_done else "open"}>
+    <summary>{summary}</summary>
+    {rows}
+    <div class="chk-row"><span class="chk-todo">→</span><div><b>Add the widget to your website</b>
+      <div class="hint">Copy the two lines from "Embed on your website" just below and paste them into your site. This can't be detected automatically, so it's never ticked.</div></div></div>
+  </details>"""
+
 def _dashboard_page() -> str:
     cfg = load_config()
     accent = esc_html(cfg["accent_color"])
@@ -1089,6 +1174,8 @@ def _dashboard_page() -> str:
     provider = (cfg.get("payment_provider") or "manual").strip().lower()
     if provider not in ("manual", "stripe"):
         provider = "manual"
+
+    checklist_html = _setup_checklist_html(cfg, provider)
 
     try:
         from payment_requests import list_pending
@@ -1224,6 +1311,11 @@ def _dashboard_page() -> str:
   .preview-btn {{ background:transparent; border:1px solid {accent}; color:{accent}; font-family:'Courier New',monospace;
            font-size:10px; letter-spacing:1px; padding:8px 14px; cursor:pointer; flex:1 1 100%; }}
   .preview-frame {{ width:100%; height:480px; border:1px solid #3a1210; margin-top:10px; flex:1 1 100%; background:#050403; }}
+  .checklist {{ border:1px solid #3a1210; background:#13100f; padding:12px 16px; margin:18px 0 0; }}
+  .checklist summary {{ cursor:pointer; color:{accent}; font-size:12px; letter-spacing:1.5px; text-transform:uppercase; }}
+  .chk-row {{ display:flex; gap:12px; align-items:flex-start; margin-top:12px; font-size:12px; }}
+  .chk-ok {{ color:#5fd98a; font-size:14px; width:16px; flex:0 0 16px; }}
+  .chk-todo {{ color:#f0c674; font-size:14px; width:16px; flex:0 0 16px; }}
   .embed-code {{ background:#13100f; border:1px solid #3a1210; color:#e6dfd2; font-family:'Courier New',monospace;
            font-size:12px; line-height:1.7; padding:12px 14px; margin:8px 0; white-space:pre-wrap; word-break:break-all; }}
   .copy-btn {{ background:{accent}; color:#0a0908; border:none; font-family:'Courier New',monospace;
@@ -1240,6 +1332,8 @@ def _dashboard_page() -> str:
     <div><b>{s['revoked']}</b>revoked</div>
     <div><b>{s['expired']}</b>expired</div>
   </div>
+
+  {checklist_html}
 
   <h2>Embed on your website</h2>
   <div class="hint">Paste these two lines into any page of your site, wherever you want the member widget to appear. That's all it takes — the widget finds this server by itself. (The address below is filled in from the page you're on right now, so open this dashboard at your real public address before copying.)</div>
@@ -1352,7 +1446,7 @@ def _dashboard_page() -> str:
     // closing script tag has to be assembled from pieces, since a literal
     // one inside this inline script would end it early.
     (function() {{
-      const code = '<div id="crith-access"></div>\\n<' + 'script src="' +
+      const code = '<div id="credential-widget"></div>\\n<' + 'script src="' +
                    window.location.origin + '/cp.js"></' + 'script>';
       document.getElementById('embed-code').textContent = code;
       const btn = document.getElementById('embed-copy');

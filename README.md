@@ -1,0 +1,69 @@
+# Credential Protocol
+
+Signed membership cards for creators, on a server you own. Members sign up
+on your website, get a cryptographically signed card and a personal access
+link, and the content you gate behind it opens for them. No platform in the
+middle, no platform cut: your members, your keys, your money.
+
+[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/template/REPLACE-WITH-YOUR-TEMPLATE-CODE)
+
+<!-- Template owner: after publishing the Railway template, replace the link
+     above with the Deploy button Railway gives you (see "Railway Template -
+     How To Publish.md"). Until then the button goes nowhere. -->
+
+## Get it running in four steps
+
+1. **Click Deploy on Railway** (above). Railway asks you to choose an admin
+   password (`ADMIN_SECRET`) and then builds your own private copy. Storage
+   for your members and signing key is set up for you.
+2. **Open your dashboard.** In Railway, open the new service, generate a
+   public domain under Settings → Networking if there isn't one yet, and go
+   to `https://your-domain/admin/login`. Log in with the password you chose.
+3. **Fill in your info.** The dashboard has a setup checklist at the top:
+   your name and brand, your tiers and prices, and how members pay you.
+4. **Add two lines to your website.** The dashboard's "Embed on your
+   website" box shows them with your real address filled in, ready to copy:
+
+   ```html
+   <div id="credential-widget"></div>
+   <script src="https://your-domain/cp.js"></script>
+   ```
+
+That's it. Members sign up in the widget; you see them in the dashboard and
+can revoke any of them at any time.
+
+## What you get
+
+- A signup and access widget that works on any site (two lines of HTML).
+- An admin dashboard: branding, tiers and pricing, per-tier card designs,
+  payment settings, a member list with one-click revoke, and a "copy link"
+  button that gives you any member's personal access link.
+- Cards and credentials signed with ECDSA, with a private key generated for
+  your deployment and kept on your own storage.
+- Paid tiers without needing a payment processor: members request a paid
+  tier, you confirm you were paid however you like, and approve it with one
+  click. Stripe is built in as an optional automatic alternative.
+- Email delivery (optional): connect Brevo and members get their card and
+  link by email. Without it, copy each member's link from the dashboard and
+  send it yourself.
+
+## Good to know
+
+- You pay Railway for hosting your copy; see Railway's pricing.
+- Paid tiers are one-time payments for a set number of days. There are no
+  subscriptions or automatic renewals.
+- One admin login (the `ADMIN_SECRET` password) per deployment.
+- Stripe support is built in but has only been tested against Stripe's test
+  mode.
+- Your settings are saved on your deployment's storage, not in the code,
+  so updating the code never resets them.
+
+## Docs
+
+[SETUP.md](SETUP.md) covers everything in detail: every setting, email
+setup, payments (manual and Stripe), adding another payment provider, and
+deploying from your own GitHub copy instead of the button.
+
+## License
+
+Not yet specified.

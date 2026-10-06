@@ -79,8 +79,8 @@ def generate_card(
     bundle_hash: str,
     signature_hex: str,
     sections: list = None,
-    issuer_name: str = "CrithLabs",
-    issuer_url: str = "https://crithlabs.com",
+    issuer_name: str = "",
+    issuer_url: str = "",
     card_title: str = "YOUR BRAND HERE",
     card_subtitle: str = "Member Keycard",
     access_url: str = "",
@@ -95,9 +95,9 @@ def generate_card(
 
     All branding (`card_title`, `creator_name`, `access_url`, `accent_color`)
     is expected to be passed in by the caller from config.json — nothing
-    about a specific creator is hardcoded in this file. `issuer_name`/
-    `issuer_url` default to the platform operator (CrithLabs) since that's
-    true regardless of which creator's card this is.
+    about a specific creator is hardcoded in this file. `issuer_name` is an
+    optional extra line shown before the creator's name on the card
+    (blank by default — the card shows only the creator's own brand).
 
     Note: `card_subtitle` is accepted for backward compatibility but is
     NOT rendered on the card. The fed reference design has a fixed
@@ -360,7 +360,7 @@ def generate_card(
 
     <div class="card-bottom-row">
       <div class="card-brand-block">
-        <div>{issuer_name.upper()} // {creator_name.upper()}</div>
+        <div>{(issuer_name.upper() + " // ") if issuer_name else ""}{creator_name.upper()}</div>
         <div class="dim">AUTHORIZED ACCESS</div>
       </div>
       <a class="card-qr-link" href="{access_link}" target="_blank" rel="noopener">

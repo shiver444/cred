@@ -85,7 +85,7 @@ or your own) — links, titles, discount codes.
 | `BREVO_API_KEY` | Yes (to send email) | Brevo transactional email API key. |
 | `GMAIL_ADDRESS` | Yes (to send email) | Your Brevo-verified sender address. |
 | `MEMBERS_PAGE` | Recommended | Overrides `config.json`'s `members_page` — the URL members land on (where `cp.js` is embedded). |
-| `DATA_DIR` | Recommended in production | Path to persistent storage (e.g. a Railway Volume) so issued credentials/revocations survive redeploys. Falls back to the local folder, which is fine for local dev only. |
+| `DATA_DIR` | Recommended in production | Path to persistent storage (e.g. a Railway Volume) so issued credentials, your signing key, and your dashboard settings survive redeploys. On Railway it's picked up automatically from an attached Volume if you don't set it; setting it yourself (to the Volume's mount path) always wins. Falls back to the local folder, which is fine for local dev only. |
 | `STRIPE_SECRET_KEY` | Only if `payment_provider` is `"stripe"` | Your Stripe secret key (`sk_test_...` or `sk_live_...`). Not needed at all with the default `"manual"` provider — see step 6. |
 | `STRIPE_WEBHOOK_SECRET` | Only if `payment_provider` is `"stripe"` | The signing secret for your Stripe webhook endpoint (`whsec_...`). Without it, `/webhook/stripe` refuses everything — there is no default/fallback secret, same philosophy as `ADMIN_SECRET`. |
 | `PORT` | No | Defaults to 5001. |
@@ -234,7 +234,7 @@ The easy way: open your dashboard (at its real public address), scroll to
 your site, wherever you want the widget to appear. It's two lines:
 
 ```html
-<div id="crith-access"></div>
+<div id="credential-widget"></div>
 <script src="https://your-railway-domain/cp.js"></script>
 ```
 
@@ -246,9 +246,9 @@ at runtime, so your branding and gated content show up without editing
 
 Notes:
 
-- The div's id has to be exactly `crith-access` (the older
-  `credential-widget` is still accepted, but use `crith-access`). If the
-  div is missing, the widget now prints a visible note on the page and an
+- The div's id has to be exactly `credential-widget` (the widget's
+  older id, `crith-access`, is still accepted so earlier embeds keep
+  working). If the div is missing, the widget now prints a visible note on the page and an
   error in the browser console instead of silently showing nothing.
 - The script tag can go before or after the div; the widget waits for the
   page to finish loading.
@@ -273,9 +273,12 @@ on your own machine). Gunicorn only runs on Linux/macOS, which is fine for
 Railway; on Windows, just keep using `python credential_api.py` locally.
 The Procfile deliberately runs a single worker with a few threads: the
 member registry and the other runtime data are plain files, and a single
-process is what keeps writes to them from colliding. These steps are specifically for Railway, which is what Miann's live
-deployment already uses (as a completely separate project — none of this
-touches that one).
+process is what keeps writes to them from colliding.
+
+**Shortcut:** if this project's README has a **Deploy on Railway** button,
+that does steps 3-5 below for you in one click (it creates the project,
+the persistent storage and the secret keys). The manual steps below are
+for deploying from your own GitHub copy instead.
 
 1. **Create a new, empty GitHub repository** (github.com → New repository
    → don't initialize it with a README/license/`.gitignore`, this folder
@@ -295,8 +298,7 @@ touches that one).
    ```
    (If `git` asks you to sign in, follow its prompts — same as any other
    GitHub push.)
-3. **In Railway**, create a **new project** (not inside Miann's existing
-   one) → **Deploy from GitHub repo** → pick the repo you just pushed.
+3. **In Railway**, create a **new project** (a brand-new project, not one you already use for something else) → **Deploy from GitHub repo** → pick the repo you just pushed.
    Railway detects `requirements.txt` + `Procfile` automatically; no extra
    config needed for it to build and run this.
 4. **Add a Volume** to that service (Railway's Volumes tab) and set
