@@ -1,0 +1,6 @@
+{
+  "$schema": "https://railway.com/railway.schema.json",
+  "deploy": {
+    "startCommand": "gunicorn credential_api:app --workers 1 --threads 4 --timeout 120 --access-logfile -"
+  }
+}
