@@ -706,7 +706,17 @@ def admin_members():
     cfg = load_config()
 
     from member_registry import list_all
+    from urllib.parse import quote
     members = sorted(list_all(), key=lambda m: m.get("issued_at", ""), reverse=True)
+
+    # Where a member's personal access link points: the same
+    # `{members page}?id=..&h=..` shape email_sender.py puts in the welcome
+    # email. With no email service set up (or when an email just didn't
+    # arrive), the creator copies it from here and sends it by hand — it's
+    # the member's way in. "Members page URL" must be set to the real page
+    # where the widget is embedded, or the link goes nowhere useful.
+    members_page = (cfg.get("members_page") or "").strip()
+    members_page_unset = (not members_page) or ("your-domain.com" in members_page)
 
     rows = ""
     for m in members:
@@ -736,6 +746,20 @@ def admin_members():
             f'<button class="revoke-btn" data-id="{cred_id}" data-name="{name_esc}">Revoke</button>'
         )
 
+        # The link carries the member's credential ID and the first 32
+        # characters of their bundle hash — exactly what the welcome email
+        # sends. No link for a revoked credential (it would just be
+        # rejected) or for an old entry that never stored a bundle hash.
+        bundle_hash = m.get("bundle_hash") or ""
+        if revoked or not bundle_hash or not members_page:
+            link_cell = '—'
+        else:
+            sep = "&" if "?" in members_page else "?"
+            access_link = (f"{members_page}{sep}id={quote(m.get('credential_id', ''), safe='')}"
+                           f"&h={quote(bundle_hash[:32], safe='')}")
+            link_cell = (f'<button class="copy-link-btn" data-link="{esc_html(access_link)}">'
+                         f'Copy link</button>')
+
         rows += f"""
         <tr>
           <td>{name_esc}</td>
@@ -747,11 +771,21 @@ def admin_members():
           <td>{status_label}</td>
           <td>{m.get('verified_count', 0)}</td>
           <td title="{esc_html(ip_title)}">{ip_count}</td>
+          <td>{link_cell}</td>
           <td>{revoke_cell}</td>
         </tr>"""
 
     accent = esc_html(cfg["accent_color"])
     title  = esc_html(cfg["card_title"])
+
+    members_page_warning = ""
+    if members_page_unset:
+        members_page_warning = (
+            '<div class="warn">⚠ Your <b>Members page URL</b> isn\'t set to a real page yet '
+            f'(it\'s currently "{esc_html(members_page) or "empty"}"), so copied links won\'t lead anywhere useful. '
+            'Set it on the <a href="/admin/dashboard">Dashboard</a> (Branding → Members page URL) to the page '
+            'where you embedded the widget, save, then come back and copy links.</div>'
+        )
 
     html = f"""<!DOCTYPE html>
 <html><head><meta charset="UTF-8">
@@ -771,6 +805,13 @@ def admin_members():
   }}
   .revoke-btn:hover {{ background:{accent}; color:#0a0908; }}
   .revoke-btn:disabled {{ opacity:0.5; cursor:default; }}
+  .copy-link-btn {{
+    background:{accent}; border:1px solid {accent}; color:#0a0908;
+    font-family:'Courier New',monospace; font-size:10px; letter-spacing:1px;
+    text-transform:uppercase; padding:5px 10px; cursor:pointer; white-space:nowrap;
+  }}
+  .warn {{ background:#3a2a10; color:#f0c674; font-size:11px; line-height:1.6; padding:10px 14px; margin:14px 0 0; }}
+  .warn a {{ color:#f0c674; }}
   .nav {{ margin-bottom:18px; font-size:11px; letter-spacing:1px; }}
   .nav a {{ color:{accent}; text-decoration:none; margin-right:18px; }}
   .nav a:hover {{ text-decoration:underline; }}
@@ -780,11 +821,38 @@ def admin_members():
   <h1>{title} — Members ({len(members)})</h1>
   <div class="count">Newest first. This reads whatever's currently in the live registry.</div>
   <div class="count">"IPs" = distinct addresses seen verifying this credential (hover for the list) — 1-2 is normal for one person, a lot more is worth a look and a manual revoke if it's being shared.</div>
+  <div class="count">"Copy link" copies that member's personal access link — send it to them yourself if no email service is set up, or if their email didn't arrive. Treat it like a password: anyone holding the link has that member's access.</div>
+  {members_page_warning}
   <table>
-    <tr><th>Name</th><th>Email</th><th>Tier</th><th>Sections</th><th>Issued</th><th>Expires</th><th>Status</th><th>Verified ×</th><th>IPs</th><th>Revoke</th></tr>
+    <tr><th>Name</th><th>Email</th><th>Tier</th><th>Sections</th><th>Issued</th><th>Expires</th><th>Status</th><th>Verified ×</th><th>IPs</th><th>Access link</th><th>Revoke</th></tr>
     {rows}
   </table>
   <script>
+    document.querySelectorAll('.copy-link-btn').forEach(btn => {{
+      btn.addEventListener('click', () => {{
+        const link = btn.dataset.link;
+        const original = btn.textContent;
+        const done = () => {{
+          btn.textContent = 'Copied \\u2713';
+          setTimeout(() => {{ btn.textContent = original; }}, 1800);
+        }};
+        const fallback = () => {{
+          const ta = document.createElement('textarea');
+          ta.value = link;
+          document.body.appendChild(ta);
+          ta.select();
+          try {{ document.execCommand('copy'); done(); }}
+          catch (e) {{ window.prompt('Copy this link:', link); }}
+          ta.remove();
+        }};
+        if (navigator.clipboard && window.isSecureContext) {{
+          navigator.clipboard.writeText(link).then(done, fallback);
+        }} else {{
+          fallback();
+        }}
+      }});
+    }});
+
     // No secret to embed here anymore — the browser's session cookie
     // (set at /admin/login) is what authorizes this fetch call now.
     document.querySelectorAll('.revoke-btn').forEach(btn => {{
