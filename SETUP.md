@@ -250,8 +250,14 @@ This covers getting from "files on disk" to a real, public dashboard URL
 that redeploys itself every time you push a change — no further manual
 deploy step after this one-time setup. It needs a GitHub repo first,
 since that's what Railway watches for pushes. Any host that runs
-`web: python credential_api.py` (see `Procfile`) works in principle, but
-these steps are specifically for Railway, which is what Miann's live
+the start command in `Procfile` works in principle (it runs the app with
+**gunicorn**, a production web server — Flask's built-in server is only
+for local testing, and `python credential_api.py` still starts that one
+on your own machine). Gunicorn only runs on Linux/macOS, which is fine for
+Railway; on Windows, just keep using `python credential_api.py` locally.
+The Procfile deliberately runs a single worker with a few threads: the
+member registry and the other runtime data are plain files, and a single
+process is what keeps writes to them from colliding. These steps are specifically for Railway, which is what Miann's live
 deployment already uses (as a completely separate project — none of this
 touches that one).
 

@@ -1473,7 +1473,20 @@ def serve_widget():
     from flask import send_file
     return send_file(BASE_DIR / "cp.js", mimetype="application/javascript")
 
+# Startup warnings, printed at import time rather than under __main__ so
+# they show up in the logs however the app is started: `python
+# credential_api.py` locally, or gunicorn on Railway (which imports this
+# module and never runs the __main__ block below).
+if not ADMIN_SECRET:
+    print("⚠ ADMIN_SECRET is not set — admin login, /revoke, and /admin/members will refuse everyone until it is.")
+print("ℹ Payment provider defaults to 'manual' (admin-approval queue, no account needed) until changed in /admin/dashboard.")
+if not (stripe and STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET):
+    print("⚠ Stripe is not fully configured — switching payment_provider to 'stripe' will refuse checkout until it is. See SETUP.md.")
+
 if __name__ == "__main__":
+    # Local development entry point (`python credential_api.py`) — Flask's
+    # built-in dev server. In production, Railway starts the app with
+    # gunicorn instead (see Procfile), which imports `app` directly.
     port = int(os.environ.get("PORT", 5001))
     print(f"Credential Protocol API — http://localhost:{port}")
     print(f"POST /issue          — issue a free-tier credential directly")
@@ -1499,13 +1512,6 @@ if __name__ == "__main__":
     print("  DATA_DIR           — persistent storage path in production (also where the")
     print("                       signing keypair lives — see credential_issuer.py)")
     print("  STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET — only needed if payment_provider is 'stripe'")
-    if not ADMIN_SECRET:
-        print()
-        print("⚠ ADMIN_SECRET is not set — admin login, /revoke, and /admin/members will refuse everyone until it is.")
-    print("ℹ Payment provider defaults to 'manual' (admin-approval queue, no account needed) until changed in /admin/dashboard.")
-    if not (stripe and STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET):
-        print("⚠ Stripe is not fully configured — switching payment_provider to 'stripe' will refuse checkout until it is. See SETUP.md.")
-
     # Debug mode is OFF unless explicitly turned on — fine (and useful) for
     # local testing, a real risk on a public deployment: an unhandled
     # error can expose Flask's interactive debugger, which lets whoever

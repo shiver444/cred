@@ -4,3 +4,4 @@ ecdsa
 qrcode
 reportlab
 stripe
+gunicorn
