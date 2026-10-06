@@ -1157,6 +1157,10 @@ def _dashboard_page() -> str:
   .preview-btn {{ background:transparent; border:1px solid {accent}; color:{accent}; font-family:'Courier New',monospace;
            font-size:10px; letter-spacing:1px; padding:8px 14px; cursor:pointer; flex:1 1 100%; }}
   .preview-frame {{ width:100%; height:480px; border:1px solid #3a1210; margin-top:10px; flex:1 1 100%; background:#050403; }}
+  .embed-code {{ background:#13100f; border:1px solid #3a1210; color:#e6dfd2; font-family:'Courier New',monospace;
+           font-size:12px; line-height:1.7; padding:12px 14px; margin:8px 0; white-space:pre-wrap; word-break:break-all; }}
+  .copy-btn {{ background:{accent}; color:#0a0908; border:none; font-family:'Courier New',monospace;
+           font-size:11px; letter-spacing:1.5px; text-transform:uppercase; padding:8px 16px; cursor:pointer; }}
 </style></head>
 <body>
   <div class="nav"><a href="/admin/members">Members →</a><a href="/admin/logout">Log out</a></div>
@@ -1169,6 +1173,11 @@ def _dashboard_page() -> str:
     <div><b>{s['revoked']}</b>revoked</div>
     <div><b>{s['expired']}</b>expired</div>
   </div>
+
+  <h2>Embed on your website</h2>
+  <div class="hint">Paste these two lines into any page of your site, wherever you want the member widget to appear. That's all it takes — the widget finds this server by itself. (The address below is filled in from the page you're on right now, so open this dashboard at your real public address before copying.)</div>
+  <pre class="embed-code" id="embed-code"></pre>
+  <button type="button" class="copy-btn" id="embed-copy">Copy</button>
 
   <form method="POST" action="/admin/dashboard" enctype="multipart/form-data">
 
@@ -1270,6 +1279,38 @@ def _dashboard_page() -> str:
   </template>
 
   <script>
+    // Embed snippet — built here (not in the HTML above) for two reasons:
+    // the address comes from window.location so it's always this exact
+    // deployment's real public URL with nothing to configure, and the
+    // closing script tag has to be assembled from pieces, since a literal
+    // one inside this inline script would end it early.
+    (function() {{
+      const code = '<div id="crith-access"></div>\\n<' + 'script src="' +
+                   window.location.origin + '/cp.js"></' + 'script>';
+      document.getElementById('embed-code').textContent = code;
+      const btn = document.getElementById('embed-copy');
+      function done() {{
+        btn.textContent = 'Copied \\u2713';
+        setTimeout(() => {{ btn.textContent = 'Copy'; }}, 1800);
+      }}
+      function fallback() {{
+        const ta = document.createElement('textarea');
+        ta.value = code;
+        document.body.appendChild(ta);
+        ta.select();
+        try {{ document.execCommand('copy'); done(); }}
+        catch (e) {{ btn.textContent = 'Select the text and copy it by hand'; }}
+        ta.remove();
+      }}
+      btn.addEventListener('click', () => {{
+        if (navigator.clipboard && window.isSecureContext) {{
+          navigator.clipboard.writeText(code).then(done, fallback);
+        }} else {{
+          fallback();
+        }}
+      }});
+    }})();
+
     document.getElementById('add-tier').addEventListener('click', () => {{
       const tpl = document.getElementById('tier-row-template');
       const rows = tpl.content.cloneNode(true);

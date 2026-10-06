@@ -2,16 +2,61 @@
  * CrithAccess Widget — cp.js
  * Drop two lines on any site. Everything else is handled.
  *
- * Usage:
- * <script src="https://your-api.com/cp.js" data-api="https://your-api.com"></script>
+ * Usage (the two lines — your dashboard's "Embed on your website" box
+ * shows them with your real address filled in, ready to copy):
+ *
  * <div id="crith-access"></div>
+ * <script src="https://your-api.com/cp.js"></script>
+ *
+ * The widget finds its server automatically from the address cp.js was
+ * loaded from. `data-api="https://..."` on the script tag is an optional
+ * override, only needed if cp.js is served from somewhere other than the
+ * API itself (a CDN or a copy hosted on your own site, say).
  */
 
 (async function() {
-  const script    = document.currentScript
-  const API_BASE  = script.getAttribute('data-api') || 'http://localhost:5001'
-  const container = document.getElementById('crith-access')
-  if (!container) return
+  // Must be captured synchronously, before anything is awaited —
+  // document.currentScript is null once this function has yielded.
+  const script = document.currentScript
+
+  // Where's the API? An explicit data-api wins; otherwise it's wherever
+  // this very script was loaded from (cp.js is served by the API itself,
+  // so that's the right answer on a normal install); otherwise the old
+  // local-development default.
+  const API_BASE = (function() {
+    const explicit = script && script.getAttribute('data-api')
+    if (explicit) return explicit.replace(/\/+$/, '')
+    if (script && script.src) {
+      try { return new URL(script.src, window.location.href).origin } catch (e) {}
+    }
+    return 'http://localhost:5001'
+  })()
+
+  // The script tag is often placed before the div it fills (or in <head>),
+  // in which case the div doesn't exist yet when this first runs — wait
+  // for the page to finish parsing rather than silently finding nothing.
+  if (document.readyState === 'loading') {
+    await new Promise(resolve => document.addEventListener('DOMContentLoaded', resolve))
+  }
+
+  // `credential-widget` is accepted too: it's what older instructions told
+  // people to use. It's renamed so the widget's styles (scoped to
+  // #crith-access) apply to it.
+  const container = document.getElementById('crith-access') ||
+                    document.getElementById('credential-widget')
+  if (!container) {
+    // Never fail silently — a missing div used to just produce a blank
+    // page with nothing to say why.
+    console.error('Credential widget: no <div id="crith-access"></div> found on this page, so there is nowhere to draw the widget. Add that line where you want it to appear.')
+    if (script && script.parentNode) {
+      const note = document.createElement('p')
+      note.style.cssText = 'color:#888;font-family:monospace;font-size:11px;'
+      note.textContent = 'Credential widget: add <div id="crith-access"></div> where this should appear.'
+      script.parentNode.insertBefore(note, script)
+    }
+    return
+  }
+  if (container.id !== 'crith-access') container.id = 'crith-access'
 
   // ── Load config and content ──
   let config  = {}

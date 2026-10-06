@@ -213,15 +213,36 @@ one-off charges) and member-facing renewal UI that don't exist here yet.
 
 ## 7. Embed the member widget on your actual site
 
-Host a page with:
+The easy way: open your dashboard (at its real public address), scroll to
+**Embed on your website**, and click **Copy**. Paste it into any page of
+your site, wherever you want the widget to appear. It's two lines:
 
 ```html
-<div id="credential-widget"></div>
+<div id="crith-access"></div>
 <script src="https://your-railway-domain/cp.js"></script>
 ```
 
-`cp.js` fetches `/config` and `/content` from this API at runtime, so your
-branding and gated content show up without editing `cp.js` itself.
+That's all. The widget works out where your server is from the address
+`cp.js` was loaded from, so there's nothing else to fill in — no API
+address, no keys. It fetches `/config` and `/content` from your server
+at runtime, so your branding and gated content show up without editing
+`cp.js` itself.
+
+Notes:
+
+- The div's id has to be exactly `crith-access` (the older
+  `credential-widget` is still accepted, but use `crith-access`). If the
+  div is missing, the widget now prints a visible note on the page and an
+  error in the browser console instead of silently showing nothing.
+- The script tag can go before or after the div; the widget waits for the
+  page to finish loading.
+- **Optional:** if you ever serve `cp.js` from somewhere other than your
+  server itself (a CDN, or a copy hosted on your own site), tell it where
+  the API is with `data-api`:
+  `<script src="..." data-api="https://your-railway-domain"></script>`.
+  You don't need this for a normal install.
+- To try it before touching your real site, save the two lines in a plain
+  file called `test.html` and open it in your browser.
 
 ## 8. Deploy — Railway, connected to GitHub, so pushes auto-deploy
 
