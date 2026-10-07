@@ -19,6 +19,9 @@ import qrcode.image.svg
 from io import BytesIO
 from pathlib import Path
 from datetime import datetime
+from html import escape as _esc
+
+from logo_utils import is_logo_data_uri
 
 BASE_DIR = Path(__file__).resolve().parent
 
@@ -28,8 +31,10 @@ DATA_DIR  = Path(os.environ.get("DATA_DIR", str(BASE_DIR)))
 CARDS_DIR = DATA_DIR / "cards"
 CARDS_DIR.mkdir(parents=True, exist_ok=True)
 
-# Drop your own logo at assets/logo.png — it's optional. If it's missing,
-# the card simply renders without one (see _load_logo_data_uri below).
+# The logo normally comes from the dashboard (Branding → Card logo, or a
+# tier's own logo). assets/logo.png is only a last-resort fallback for
+# someone running the code by hand; with neither, the card renders without
+# a logo (see _load_logo_data_uri below).
 LOGO_PATH = BASE_DIR / "assets" / "logo.png"
 
 
@@ -88,6 +93,8 @@ def generate_card(
     accent_color: str = "#00e87a",
     show_barcode: bool = True,
     logo_data_uri: str = None,
+    card_label: str = "",
+    card_style: str = "distressed",
 ) -> str:
     """
     Generate the HTML membership keycard.
@@ -115,6 +122,11 @@ def generate_card(
     proof: the real signature/audit trail still lives in the .zip bundle
     (manifest.sig, chain_of_evidence.txt, the PDF certificate).
 
+    `card_label` is the small "(MEMBER KEYCARD)" line under the title
+    (blank = "Member Keycard"). `card_style` is "distressed" (the default
+    worn-keycard look: film grain, scratches, vignette) or "clean" (the
+    same card, smooth and unworn).
+
     `show_barcode` and `logo_data_uri` exist so a specific tier/pass type
     can override the deployment's global look (see the per-tier "design"
     editor in /admin/dashboard) — `logo_data_uri`, when given, is used
@@ -122,6 +134,8 @@ def generate_card(
     """
 
     creator_name = creator_name or card_title or "MEMBER"
+    card_style   = card_style if card_style in ("distressed", "clean") else "distressed"
+    label_text   = (card_label or "").strip()[:40] or "Member Keycard"
 
     sections = sections or []
     card_manifest = {
@@ -133,7 +147,10 @@ def generate_card(
         "issued_at":      issued_at,
         "expires_at":     expires_at,
     }
-    card_manifest_json = json.dumps(card_manifest, separators=(",", ":"))
+    # Goes inside a <script> block: "<" is written as \u003c so a name like
+    # "</script><script>…" can never close the block (JSON.parse reads it back
+    # as the same text).
+    card_manifest_json = json.dumps(card_manifest, separators=(",", ":")).replace("<", "\\u003c")
 
     # The card's tap-to-verify link — same shape as the personal link cp.js
     # already reads off the page URL on load, so both a phone's native
@@ -152,8 +169,18 @@ def generate_card(
     qr_payload = f"{access_link}&src=qr"
 
     qr_svg = generate_qr_svg(qr_payload)
-    logo_uri = logo_data_uri if logo_data_uri else _load_logo_data_uri()
+    logo_uri = logo_data_uri if is_logo_data_uri(logo_data_uri) else _load_logo_data_uri()
     formatted_id = _format_id(credential_id)
+
+    # Everything typed by a person is escaped before it goes into the page.
+    e_title   = _esc(card_title)
+    e_tier    = _esc(tier)
+    e_creator = _esc(creator_name)
+    e_issuer  = _esc(issuer_name.upper()) if issuer_name else ""
+    e_label   = _esc(label_text.upper())
+    e_link    = _esc(access_link, quote=True)
+    accent_color = _esc(accent_color, quote=True)
+    logo_html = f'<img class="card-logo" src="{_esc(logo_uri, quote=True)}" alt="{_esc(creator_name, quote=True)}">' if logo_uri else ""
     barcode_html = '<div class="card-barcode"></div>' if show_barcode else ''
 
     html = f"""<!DOCTYPE html>
@@ -161,7 +188,7 @@ def generate_card(
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>{card_title} — {tier} Keycard</title>
+<title>{e_title} — {e_tier} Keycard</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Nosifer&family=Bebas+Neue&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
@@ -340,30 +367,37 @@ def generate_card(
       transparent 13px, transparent 17px
     );
   }}
+
+  /* "clean" style: same layout, smooth and unworn */
+  .card--clean {{
+    background: linear-gradient(165deg, #15100e, #070605 70%);
+  }}
+  .card--clean::before, .card--clean::after, .card--clean .card-vignette {{ display: none; }}
+  .card--clean .card-logo {{ filter: none; }}
 </style>
 </head>
 <body>
 
-<div class="card">
+<div class="card{' card--clean' if card_style == 'clean' else ''}">
   <div class="card-vignette"></div>
   <div class="card-content">
-    <img class="card-logo" src="{logo_uri}" alt="{creator_name}">
-    <div class="card-brand-title">{card_title}</div>
-    <div class="card-kind">(MEMBER KEYCARD)</div>
+    {logo_html}
+    <div class="card-brand-title">{e_title}</div>
+    <div class="card-kind">({e_label})</div>
 
     <div class="card-hr"></div>
 
     <div class="card-meta">
-      <div><b>ACCESS CLASS</b> // <span>{tier}</span></div>
+      <div><b>ACCESS CLASS</b> // <span>{e_tier}</span></div>
       <div><b>ID</b> // <span>{formatted_id}</span></div>
     </div>
 
     <div class="card-bottom-row">
       <div class="card-brand-block">
-        <div>{(issuer_name.upper() + " // ") if issuer_name else ""}{creator_name.upper()}</div>
+        <div>{(e_issuer + " // ") if e_issuer else ""}{_esc(creator_name.upper())}</div>
         <div class="dim">AUTHORIZED ACCESS</div>
       </div>
-      <a class="card-qr-link" href="{access_link}" target="_blank" rel="noopener">
+      <a class="card-qr-link" href="{e_link}" target="_blank" rel="noopener">
         <div class="card-qr-box">{qr_svg}</div>
       </a>
     </div>

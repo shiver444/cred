@@ -394,7 +394,25 @@ either (it's a single-password, single-admin tool at this stage) — fine
 for a small/direct-support deployment, worth hardening before this is ever
 multi-tenant or exposed more broadly.
 
-## Optional: your logo
+## Your card's look
 
-Drop a `logo.png` into `assets/`. If it's missing, cards simply render
-without one — this isn't required to run.
+Everything about how the member card looks is set in the dashboard under
+**Branding** (no files to upload to the server):
+
+- **Card logo:** upload a PNG, JPG, GIF or WEBP. It's shrunk automatically
+  to a sensible size (long side 600 px) and shown on every card. A tier can
+  have its own logo under **Design ▾**, which wins over this one. Remove
+  the logo and cards simply have none.
+- **Card style:** *Distressed* (the worn keycard look, with film grain and
+  scratches) or *Clean* (the same card, smooth and unworn). A tier can pick
+  its own under **Design ▾**.
+- **Card label:** the small line under the title, e.g. "Member Keycard".
+  A tier can override it too.
+- **Preview the card →** (under Branding, and inside each tier's Design
+  panel) shows the result using what's currently on screen, before you save.
+
+Only cards issued after a change use the new look; cards members already
+have stay as they were.
+
+(If you run the code by hand rather than through the dashboard, a
+`logo.png` in `assets/` is still used as a last-resort logo.)
