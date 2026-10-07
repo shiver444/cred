@@ -150,6 +150,8 @@ def _limit_request_size():
     path = request.path
     if path == "/admin/content/upload":
         request.max_content_length = MAX_UPLOAD_BYTES + 1024 * 1024
+    elif path == "/admin/content/preview":
+        request.max_content_length = content_store.MAX_PREVIEW_UPLOAD + 1024 * 1024
     elif path == "/admin/backup/restore":
         request.max_content_length = MAX_RESTORE_BYTES + 1024 * 1024
     elif path.startswith("/admin/dashboard"):
@@ -162,6 +164,7 @@ def _too_big(_e):
     if request.path == "/admin/backup/restore":
         return redirect("/admin/dashboard?backup_note=" + _q(f"That backup file is too big for this server to accept (the limit is {MAX_RESTORE_MB} MB).") + "#backup")
     msg = (f"That file is too big (the limit is {MAX_UPLOAD_MB} MB)." if request.path == "/admin/content/upload"
+           else "That picture is too big (over 10 MB). Use a smaller one." if request.path == "/admin/content/preview"
            else "That request is too large.")
     return jsonify({"success": False, "error": msg}), 413
 
@@ -184,6 +187,7 @@ _PUBLIC_RULES = [
     ("/verify",         "check",  120, 60),
     ("/member-content", "check",  120, 60),
     ("/member-file/",   "file",   60,  60),
+    ("/member-preview/","thumb",  600, 60),     # a grid of pictures loads many at once
 ]
 
 def _too_many(wait: int, msg: str = "Too many requests. Please wait a little and try again."):
@@ -1204,7 +1208,7 @@ def admin_members():
     # `{members page}?id=..&h=..` shape email_sender.py puts in the welcome
     # email. With no email service set up (or when an email just didn't
     # arrive), the creator copies it from here and sends it by hand — it's
-    # the member's way in. "Members page URL" must be set to the real page
+    # the member's way in. "Members page address" must be set to the real page
     # where the widget is embedded, or the link goes nowhere useful.
     members_page = (cfg.get("members_page") or "").strip()
     members_page_unset = (not members_page) or ("your-domain.com" in members_page)
@@ -1322,10 +1326,10 @@ def admin_members():
     members_page_warning = ""
     if members_page_unset:
         members_page_warning = (
-            '<div class="warn">⚠ Your <b>Members page URL</b> isn\'t set to a real page yet '
-            f'(it\'s currently "{esc_html(members_page) or "empty"}"), so copied links won\'t lead anywhere useful. '
-            'Set it on the <a href="/admin/dashboard">Dashboard</a> (Branding → Members page URL) to the page '
-            'where you embedded the widget, save, then come back and copy links.</div>'
+            '<div class="warn">⚠ Your <b>Members page address</b> isn\'t set yet '
+            f'(it\'s currently "{esc_html(members_page) or "empty"}"), so copied links won\'t work. '
+            'Set it on the <a href="/admin/dashboard">Dashboard</a> (Branding → Members page address) to the page '
+            'of your site with the widget, save, then come back.</div>'
         )
 
     tier_opts = ""
@@ -1419,12 +1423,12 @@ def admin_members():
 <body {body_attrs}>
   <div class="nav"><a href="/admin/dashboard">← Dashboard</a><a href="/admin/content">Content →</a><a href="/admin/logout">Log out</a></div>
   <h1>{title} — Members ({len(members)})</h1>
-  <div class="count">Newest first. This reads whatever's currently in the live registry.</div>
+  <div class="count">Newest first.</div>
   <details class="mhelp" open><summary>What do these columns and buttons mean?</summary>
-  <div class="count">"IPs" = distinct addresses seen verifying this credential (hover for the list) — 1-2 is normal for one person, a lot more is worth a look and a manual revoke if it's being shared.</div>
-  <div class="count">"Extend" adds days to a member's access (renewal): same card and same link, only the end date moves. A card that already ran out restarts from today. The date printed on the member's original card file doesn't change — the live check uses the date kept here.</div>
-  <div class="count">"Delete" erases a member for good: their entry, card and bundle files, and old payment-request records for their email. Their old card and link stop working for ever and their spot and email are free again. To just cut off access and keep the record, use Revoke. Backups you downloaded earlier still contain them.</div>
-  <div class="count">"Copy link" copies that member's personal access link — send it to them yourself if no email service is set up, or if their email didn't arrive. Treat it like a password: anyone holding the link has that member's access.</div>
+  <div class="count"><b>IPs</b>: how many different places used this card. 1-2 is normal. Many more may mean it's being shared.</div>
+  <div class="count"><b>Extend</b>: adds days to a member's access. Same card, same link; only the end date moves. An expired card restarts from today.</div>
+  <div class="count"><b>Delete</b>: removes a member for good. Their card and link stop working. To only cut off access and keep the record, use Revoke.</div>
+  <div class="count"><b>Copy link</b>: copies the member's personal link. Send it yourself if email isn't set up. Treat it like a password.</div>
   </details>
   {members_page_warning}
   {issue_box}
@@ -1504,7 +1508,7 @@ def admin_members():
           link = data.link || '';
           linkRow.style.display = '';
           f('issue-copy').style.display = link ? '' : 'none';
-          if (!link) say(msg.textContent + ' (Set the Members page URL on the Dashboard to get a copyable link.)', true);
+          if (!link) say(msg.textContent + ' (Set the Members page address on the Dashboard to get a copyable link.)', true);
           f('issue-name').value = ''; f('issue-email').value = ''; f('issue-days').value = '';
         }}).catch(e => {{ btn.disabled = false; say('Failed: ' + e.message, false); }});
       }});
@@ -1873,62 +1877,60 @@ def _setup_checklist_html(cfg: dict, provider: str) -> str:
     items.append((
         cfg["creator_name"] != "Your Creator Name" and cfg["card_title"] != "YOUR BRAND HERE",
         "Set your branding",
-        "Enter your Creator name and Card title under Branding below, then Save.",
+        "Enter your Creator name and Card title under Branding, then Save.",
     ))
 
     if on_railway:
         items.append((
             has_storage,
             "Persistent storage (Volume)",
-            "This deployment has NO persistent storage, so members, your signing key and settings are wiped on every redeploy. "
-            "In Railway: open this service, attach a Volume (mount path /data) and redeploy — before issuing any real card."
+            "No permanent storage yet, so members, your key and settings would be wiped on every redeploy. "
+            "In Railway, add a Volume (mount path /data) to this service and redeploy before issuing real cards."
             if not has_storage else
-            "Your members, signing key and settings are stored on a persistent Volume and survive redeploys.",
+            "Your members, key and settings are saved on a permanent Volume.",
         ))
 
     items.append((
         bool(os.environ.get("SESSION_SECRET_KEY")),
         "Admin login stays signed in across deploys",
-        "Set a SESSION_SECRET_KEY environment variable (any long random text) — otherwise you're logged out of this dashboard every time the app restarts.",
+        "Set a SESSION_SECRET_KEY variable (any long random text), or you will be logged out each time the app restarts.",
     ))
 
     items.append((
         bool(members_page) and "your-domain.com" not in members_page,
-        "Set your Members page URL",
-        "Under Branding below, set \"Members page URL\" to the page on your site where you embed the widget — member access links point there.",
+        "Set your Members page address",
+        "Under Branding, set the Members page address to the page of your site with the widget.",
     ))
 
     if has_paid_tier:
         if provider == "stripe":
             pay_done = bool(stripe and STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET)
-            pay_detail = "Stripe needs the STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET environment variables — see SETUP.md — or switch the provider to Manual approval."
+            pay_detail = "Stripe needs the STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET variables (see SETUP.md), or choose another way to pay under Payment."
         elif provider == "custom":
             pay_done = bool(cfg.get("custom_payment_url") or cfg.get("custom_payment_links"))
-            pay_detail = "You have a paid tier on Custom payment link — paste the link people should pay at (and, if you like, a few words of instructions) under Payment, then Save."
+            pay_detail = "You have a paid tier that sends members to a payment link — paste that link under Payment (and, if you like, a short message for the member), then Save."
         else:
             pay_done = bool((cfg.get("manual_payment_instructions") or "").strip())
-            pay_detail = "You have a paid tier on Manual approval — tell members how to pay you by filling in \"Payment instructions\" under Payment, then Save."
+            pay_detail = "You have a paid tier you approve yourself — tell members how to pay you by filling in \"Message to the member\" under Payment, then Save."
         items.append((pay_done, "Payments for your paid tier", pay_detail))
 
     items.append((
         content_store.has_any_content(content_store.load()),
         "Add your members-only content",
-        "Nothing is in your members-only area yet, so a new member would see an empty page. Open Content (top of this page) and add the links, "
-        "downloads or discount code your members get.",
+        "Nothing is in your members-only area yet. Open Content and add the links, downloads or discount code your members get.",
     ))
 
     items.append((
         backup.backup_is_recent(DATA_DIR),
         "Download a backup",
-        "Your members, signing key and settings live in one place on this server. Download a backup file (Backup & restore, at the bottom of this page) "
-        "and keep it somewhere safe. This ticks again when your last backup is under 30 days old.",
+        "Download a backup file (Backup & restore) and keep it somewhere safe. This ticks again when your last backup is under 30 days old.",
     ))
 
     items.append((
         bool(os.environ.get("BREVO_API_KEY") and os.environ.get("GMAIL_ADDRESS")),
         "Email (optional)",
-        "Not set up, so members won't be emailed their card and link. That's fine: copy each member's link from Members → \"Copy link\" and send it yourself. "
-        "To enable emails, set BREVO_API_KEY and GMAIL_ADDRESS — see SETUP.md.",
+        "Not set up, so members won't be emailed. That's fine: copy each member's link from Members and send it yourself. "
+        "To turn emails on, set BREVO_API_KEY and GMAIL_ADDRESS (see SETUP.md).",
     ))
 
     done_count = sum(1 for d, _, _ in items if d)
@@ -1969,7 +1971,7 @@ def _dashboard_page() -> str:
     elif stripe and STRIPE_SECRET_KEY:
         payment_status_html = '<b style="color:var(--bad);">⚠ STRIPE_SECRET_KEY is set but STRIPE_WEBHOOK_SECRET is not</b> — checkout will start, but payments will never actually fulfill.<br>'
     else:
-        payment_status_html = '<b style="color:var(--soft);">Stripe is not set up</b> — that is fine unless you choose Stripe above; "Manual approval" and "Custom payment link" need no keys.<br>'
+        payment_status_html = '<b style="color:var(--bad);">Stripe is not set up yet</b> — add the two keys before using it, or pick another way to pay above.<br>'
 
     provider = (cfg.get("payment_provider") or "manual").strip().lower()
     if provider not in ("manual", "stripe", "custom"):
@@ -2019,7 +2021,7 @@ def _dashboard_page() -> str:
           {req_rows}
         </table>"""
     else:
-        pending_requests_html = '<div class="hint">No pending payment requests right now.</div>'
+        pending_requests_html = '<div class="hint">Nothing is waiting right now.</div>'
 
     try:
         from member_registry import list_all as _registry_list
@@ -2067,7 +2069,7 @@ def _dashboard_page() -> str:
         if not logo_utils.is_logo_data_uri(logo_uri):
             logo_uri = ""
         t_style = design.get("card_style", "")
-        logo_thumb = f'<img class="logo-thumb" src="{logo_uri}">' if logo_uri else '<span class="no-logo">none — uses global</span>'
+        logo_thumb = f'<img class="logo-thumb" src="{logo_uri}">' if logo_uri else '<span class="no-logo">none — uses the main logo</span>'
         barcode_on = design.get("show_barcode", True)
         tier_rows += f"""
         <tr class="tier-row">
@@ -2084,21 +2086,21 @@ def _dashboard_page() -> str:
             {_limits_panel(t)}
             <div class="design-panel">
               <div class="design-field">
-                <label>Card title override</label>
+                <label>Card title</label>
                 <input name="tier_design_card_title" value="{esc_html(design.get('card_title',''))}" placeholder="blank = use global &quot;{esc_html(cfg['card_title'])}&quot;">
               </div>
               <div class="design-field">
-                <label>Accent color override</label>
+                <label>Accent color</label>
                 <input name="tier_design_accent_color" value="{esc_html(design.get('accent_color',''))}" placeholder="blank = use global {esc_html(cfg['accent_color'])}">
               </div>
               <div class="design-field">
-                <label>Card label override</label>
-                <input name="tier_design_card_label" value="{esc_html(design.get('card_label',''))}" maxlength="40" placeholder="blank = use global">
+                <label>Small line under the title</label>
+                <input name="tier_design_card_label" value="{esc_html(design.get('card_label',''))}" maxlength="40" placeholder="blank = same as Branding">
               </div>
               <div class="design-field">
                 <label>Card style</label>
                 <select name="tier_design_style">
-                  <option value="" {"selected" if t_style not in CARD_STYLES else ""}>Use global</option>
+                  <option value="" {"selected" if t_style not in CARD_STYLES else ""}>Same as Branding</option>
                   <option value="distressed" {"selected" if t_style == "distressed" else ""}>Distressed</option>
                   <option value="clean" {"selected" if t_style == "clean" else ""}>Clean</option>
                 </select>
@@ -2111,7 +2113,7 @@ def _dashboard_page() -> str:
                 </select>
               </div>
               <div class="design-field">
-                <label>Logo override</label>
+                <label>Logo</label>
                 <div class="logo-row">
                   {logo_thumb}
                   <input type="file" name="tier_design_logo" accept="image/png,image/jpeg,image/gif,image/webp">
@@ -2157,16 +2159,16 @@ def _dashboard_page() -> str:
     backup_html = f"""
   <div id="backup" class="backup-box">
     <h2>Backup &amp; restore</h2>
-    <div class="hint">Your members ({_sz["members"]}), your signing key, settings and content live in one place on this server. If that storage were ever lost, they would be gone, and every card you issued would stop working. A backup is one file you keep somewhere safe.</div>
+    <div class="hint">Your members ({_sz["members"]}), signing key, settings and content live in one place on this server. If it were ever lost, every card you issued would stop working. A backup is one file you keep somewhere safe.</div>
     {_last_html}
-    <div class="warn">The backup file contains your private signing key and your members' email addresses. Keep it private, and don't email it or put it anywhere others can open it.</div>
+    <div class="warn">The backup file holds your private signing key and your members' emails. Keep it private; don't email it or share it.</div>
     <div style="display:flex;gap:10px;flex-wrap:wrap;margin:10px 0;">
       <a class="bk-btn" href="/admin/backup/download">Download backup ({_hb(_sz["data_bytes"])}: members, key, settings)</a>
       {_up_btn}
     </div>
     <details class="bk-restore">
       <summary>Restore from a backup</summary>
-      <div class="hint" style="margin:8px 0;">Use this on a new or empty copy of the app to get your members, key and settings back, or to go back to an earlier state. It replaces what is on this server now (the replaced data is kept aside, not deleted). Download a backup of the current state first if you're not sure.</div>
+      <div class="hint" style="margin:8px 0;">Use this on a new or empty copy of the app to get everything back, or to go back to an earlier state. It replaces what is on this server now (the old data is kept aside, not deleted). If you're not sure, download a backup first.</div>
       <form method="POST" action="/admin/backup/restore" enctype="multipart/form-data">
         <label>Backup file (.zip)</label>
         <input type="file" name="backup" accept=".zip,application/zip" required>
@@ -2253,6 +2255,7 @@ def _dashboard_page() -> str:
   .bk-status.warn {{ color:var(--warn); background:var(--warn-bg); border-color:transparent; }}
   .backup-box .warn {{ background:var(--warn-bg); color:var(--warn); font-size:11px; line-height:1.6; padding:10px 14px; margin:12px 0; border-radius:var(--radius, 0); }}
   .bk-restore summary {{ cursor:pointer; color:var(--soft); font-size:11px; letter-spacing:1px; text-transform:uppercase; margin:6px 0; }}
+  .adv-box summary {{ cursor:pointer; color:var(--accent-text); font-size:12px; margin:4px 0; }}
   .placeholder {{ color:var(--muted); font-size:11px; line-height:1.7; border-left:2px solid var(--line); padding:10px 14px; }}
   .banner {{ background:var(--ok-bg); color:var(--ok); font-size:11px; padding:10px 14px; margin-bottom:16px; letter-spacing:1px; text-transform:uppercase; }}
   .design-toggle {{ background:transparent; border:1px solid var(--line); color:var(--soft); font-family:var(--font);
@@ -2296,7 +2299,7 @@ def _dashboard_page() -> str:
   {checklist_html}
 
   <h2>Embed on your website</h2>
-  <div class="hint">Paste these two lines into any page of your site, wherever you want the member widget to appear. That's all it takes — the widget finds this server by itself. (The address below is filled in from the page you're on right now, so open this dashboard at your real public address before copying.)</div>
+  <div class="hint">Paste these two lines into the page of your site where you want the member widget. Open this dashboard at your real public address before copying, because the address below comes from the page you are on.</div>
   <pre class="embed-code" id="embed-code"></pre>
   <button type="button" class="copy-btn" id="embed-copy">Copy</button>
   </section>
@@ -2305,7 +2308,7 @@ def _dashboard_page() -> str:
 
     <section class="dsec" id="sec-style" data-title="Dashboard style">
     <h2>Dashboard style</h2>
-    <div class="hint" style="margin-bottom:10px;">How these admin pages look. Only you see this: your members' cards, emails and the widget are not affected. The style changes when you press <b>Save changes</b> at the bottom.</div>
+    <div class="hint" style="margin-bottom:10px;">How these admin pages look. Only you see it; cards, emails and the widget don't change. Press <b>Save changes</b> to apply.</div>
     <div class="style-cards">{style_cards}</div>
 
     </section>
@@ -2314,18 +2317,18 @@ def _dashboard_page() -> str:
     <h2>Branding</h2>
     <label>Creator name</label>
     <input name="creator_name" value="{esc_html(cfg['creator_name'])}">
-    <label>Card title (the headline brand shown on cards/emails)</label>
+    <label>Card title (the big name on cards and emails)</label>
     <input name="card_title" value="{esc_html(cfg['card_title'])}">
-    <label>Card label (the small line under the title on the card, e.g. "Member Keycard")</label>
+    <label>Small line under the title (like "Member Keycard")</label>
     <input name="card_subtitle" value="{esc_html(cfg['card_subtitle'])}" maxlength="40">
-    <label>Accent color (used on cards, email, the member widget, and this dashboard)</label>
+    <label>Accent color</label>
     <input name="accent_color" type="color" value="{esc_html(cfg['accent_color'])}">
     <label>Card style</label>
     <select name="card_style">
-      <option value="distressed" {"selected" if g_style == "distressed" else ""}>Distressed — worn keycard look (film grain, scratches)</option>
-      <option value="clean" {"selected" if g_style == "clean" else ""}>Clean — the same card, smooth and unworn</option>
+      <option value="distressed" {"selected" if g_style == "distressed" else ""}>Distressed — worn keycard look</option>
+      <option value="clean" {"selected" if g_style == "clean" else ""}>Clean — smooth and unworn</option>
     </select>
-    <label>Card logo (shown on every card unless a tier has its own; PNG, JPG, GIF or WEBP — it's shrunk automatically)</label>
+    <label>Card logo (PNG, JPG, GIF or WEBP; shrunk automatically)</label>
     <div class="logo-row">
       {global_logo_thumb}
       <input type="file" name="global_logo" accept="image/png,image/jpeg,image/gif,image/webp">
@@ -2334,9 +2337,9 @@ def _dashboard_page() -> str:
     <input type="hidden" name="global_logo_clear" id="global-logo-clear" value="0">
     <button type="button" class="preview-btn" id="global-preview-btn" style="display:block;margin-top:12px;max-width:260px;">Preview the card →</button>
     <iframe class="preview-frame" id="global-preview-frame" style="display:none"></iframe>
-    <label>Members page URL (where cp.js is embedded — overridden at runtime if the MEMBERS_PAGE env var is set)</label>
+    <label>Members page address (the page of your site with the widget; member links point here)</label>
     <input name="members_page" value="{esc_html(cfg['members_page'])}">
-    <label>API base URL (informational — where this API is deployed)</label>
+    <label>This server's address (just for your notes)</label>
     <input name="api_base" value="{esc_html(cfg['api_base'])}">
 
 
@@ -2344,7 +2347,7 @@ def _dashboard_page() -> str:
 
     <section class="dsec" id="sec-widget" data-title="Widget look">
     <h2>Widget look</h2>
-    <div class="hint" style="margin-bottom:8px;">How the member widget looks on your site. The default, <b>Match my page</b>, reads the colors and font of the page it sits on, so it fits a dark page, a light page or anything in between. The two previews below show it on a dark and on a light page and follow what you change here, even before you save. The accent color is set under Branding above.</div>
+    <div class="hint" style="margin-bottom:8px;">How the member widget looks on your site. <b>Match my page</b> copies the colors and font of the page it sits on. The previews follow your changes before you save. The accent color is under Branding.</div>
     <div class="wl-grid">
       <div>
         <label>Colors</label>
@@ -2374,7 +2377,7 @@ def _dashboard_page() -> str:
       <div><label>Background color</label><input type="color" name="widget_bg" id="wl-bg" value="{esc_html(cfg['widget_bg'])}"></div>
       <div><label>Text color</label><input type="color" name="widget_text" id="wl-text" value="{esc_html(cfg['widget_text'])}"></div>
     </div>
-    <label style="margin-top:14px;">Wording (leave a box empty to use the standard wording shown in it)</label>
+    <label style="margin-top:14px;">Wording (leave a box empty to use the standard words)</label>
     <div class="wl-grid">
       <div><div class="hint">Banner</div><input name="widget_banner_text" id="wl-banner" maxlength="80" value="{esc_html(cfg['widget_banner_text'])}" placeholder="{esc_html(widget_look.TEXTS['widget_banner_text'][1])}"></div>
       <div><div class="hint">Card drop box: title</div><input name="widget_drop_title" id="wl-drop-title" maxlength="60" value="{esc_html(cfg['widget_drop_title'])}" placeholder="{esc_html(widget_look.TEXTS['widget_drop_title'][1])}"></div>
@@ -2391,16 +2394,16 @@ def _dashboard_page() -> str:
       <div><div class="hint">On a dark page</div><iframe class="wl-frame" id="wl-frame-dark" sandbox="allow-scripts"></iframe></div>
       <div><div class="hint">On a light page</div><iframe class="wl-frame" id="wl-frame-light" sandbox="allow-scripts"></iframe></div>
     </div>
-    <div class="hint">The previews are your real widget, loaded from this server. Pages with a photo or a gradient behind the widget work too: it works out whether that area is dark or light.</div>
+    <div class="hint">The previews are your real widget.</div>
 
     </section>
 
     <section class="dsec" id="sec-tiers" data-title="Tiers &amp; pricing">
     <h2>Tiers &amp; pricing</h2>
     {tier_sections_hint}
-    <div class="hint" style="margin-bottom:8px;">Each tier is a pass type. "More ▾" opens that tier's limits (a maximum number of members, and how many cards one email address can get) and its own card design (title, accent color, logo, barcode), so a specific tier like a Daily Pass can look different without affecting the others. Anything left blank in the design part just uses the branding above.</div>
+    <div class="hint" style="margin-bottom:8px;">Each tier is a pass type. "More ▾" opens its limits (how many members, cards per email) and its own card design. Anything left blank uses the Branding settings.</div>
     <table>
-      <tr><th>Name</th><th>Label</th><th>Price</th><th>Expiry (days)</th><th>Sections (comma-separated)</th><th></th><th></th></tr>
+      <tr><th>Name</th><th>Label</th><th>Price</th><th>Expiry (days)</th><th>Sections (separated by commas)</th><th></th><th></th></tr>
       <tbody id="tier-body">{tier_rows}</tbody>
     </table>
     <button type="button" class="add-tier" id="add-tier">+ Add tier</button>
@@ -2409,54 +2412,58 @@ def _dashboard_page() -> str:
 
     <section class="dsec" id="sec-payment" data-title="Payment">
     <h2>Payment</h2>
-    <label>Payment provider (how a paid tier actually gets fulfilled)</label>
+    <label>How do members pay?</label>
     <select name="payment_provider">
-      <option value="manual" {"selected" if provider == "manual" else ""}>Manual approval — works in any country, no payment account needed</option>
-      <option value="custom" {"selected" if provider == "custom" else ""}>Custom payment link — PayPal, Ko-fi, Gumroad or any service that gives you a link</option>
-      <option value="stripe" {"selected" if provider == "stripe" else ""}>Stripe — automatic card checkout</option>
+      <option value="manual" {"selected" if provider == "manual" else ""}>I arrange it myself (bank transfer, cash, anything)</option>
+      <option value="custom" {"selected" if provider == "custom" else ""}>Send them to a payment link (PayPal, Ko-fi, Gumroad...)</option>
+      <option value="stripe" {"selected" if provider == "stripe" else ""}>Automatic card payments (Stripe)</option>
     </select>
-    <div class="hint" style="margin-top:4px;">"Manual approval" needs nothing set up: a member requests a paid tier, you confirm payment arrived however it actually did for you, and approve it in the queue below — that issues the credential. "Custom payment link" works the same way, but the member also gets a button that opens your PayPal / Ko-fi / Gumroad (or any other) payment link; you still press Approve once the money arrives. Switch to Stripe once you want automatic card checkout; Stripe isn't available (or allowed) everywhere, so manual is the default.</div>
+    <div class="hint pv-hint" data-for="manual" style="margin-top:4px;{"" if provider == "manual" else "display:none;"}">The member asks for a tier and sees your message below. When you have been paid, press Approve in the list at the bottom and they get their card.</div>
+    <div class="hint pv-hint" data-for="custom" style="margin-top:4px;{"" if provider == "custom" else "display:none;"}">The member asks for a tier and gets a button that opens your payment link. When the money arrives, press Approve in the list at the bottom and they get their card.</div>
+    <div class="hint pv-hint" data-for="stripe" style="margin-top:4px;{"" if provider == "stripe" else "display:none;"}">Members pay by card and get their card automatically, with nothing for you to approve. Needs a Stripe account (see below).</div>
 
-    <label>Currency (3-letter code, e.g. usd, eur, gbp)</label>
+    <label>Currency (3 letters, like usd, eur, gbp)</label>
     <input name="currency" value="{esc_html(cfg.get('currency','usd'))}" maxlength="3" style="max-width:100px;">
 
     <div id="custom-box" class="custom-box"{"" if provider == "custom" else ' style="display:none"'}>
-      <label>Name of the service (shown on the button, e.g. PayPal)</label>
+      <label>Name of the service (shown on the button)</label>
       <input name="custom_provider_name" value="{esc_html(cfg.get('custom_provider_name',''))}" maxlength="{custom_payment.MAX_NAME}" placeholder="PayPal" style="max-width:260px;">
-      <label>Payment link (where the member goes to pay)</label>
-      <input name="custom_payment_url" value="{esc_html(cfg.get('custom_payment_url',''))}" maxlength="{custom_payment.MAX_URL}" placeholder="https://paypal.me/yourname/{{amount}}{{currency}}">
-      <div class="hint" style="margin-top:4px;">Must start with https://. You can put these words in curly brackets and they are filled in for each person: <b>{{amount}}</b>, <b>{{currency}}</b>, <b>{{tier}}</b>, <b>{{email}}</b>, <b>{{name}}</b> and <b>{{reference}}</b> (a short code that also shows in the queue below, so you can match a payment to a request). Leave it blank to show only your written instructions.</div>
-      <label>A different link for a specific tier (optional, one per line, like <code>MEMBER = https://...</code>)</label>
-      <textarea name="custom_payment_links" rows="3" placeholder="MEMBER = https://ko-fi.com/s/abc123&#10;VIP = https://ko-fi.com/s/def456">{esc_html(cfg.get('custom_payment_links',''))}</textarea>
-      <div class="hint" style="margin-top:4px;">Your tiers: <b>{esc_html(", ".join(str(t.get("name","")) for t in (cfg.get("tiers") or [])) or "none yet")}</b>. A link can't tell this app a payment arrived: when the money shows up in that service, press <b>Approve</b> in the queue below and the card is sent. The widget tells the member this.</div>
+      <label>Payment link</label>
+      <input name="custom_payment_url" value="{esc_html(cfg.get('custom_payment_url',''))}" maxlength="{custom_payment.MAX_URL}" placeholder="https://paypal.me/yourname">
+      <div class="hint" style="margin-top:4px;">Paste the link where members pay. It has to start with https://</div>
+      <details class="adv-box" style="margin-top:10px;">
+        <summary>More options (you can skip this)</summary>
+        <label>A different link for one tier</label>
+        <textarea name="custom_payment_links" rows="3" placeholder="MEMBER = https://ko-fi.com/s/abc123&#10;VIP = https://ko-fi.com/s/def456">{esc_html(cfg.get('custom_payment_links',''))}</textarea>
+        <div class="hint" style="margin-top:4px;">One per line: the tier's name, an equals sign, then its link. Your tiers: <b>{esc_html(", ".join(str(t.get("name","")) for t in (cfg.get("tiers") or [])) or "none yet")}</b>. Tiers without a line use the link above.</div>
+        <div class="hint" style="margin-top:8px;">In any link you can write <b>{{amount}}</b>, <b>{{currency}}</b>, <b>{{tier}}</b>, <b>{{email}}</b>, <b>{{name}}</b> or <b>{{reference}}</b> and it is filled in for each member (for example <code>https://paypal.me/yourname/{{amount}}{{currency}}</code>). <b>{{reference}}</b> is a short code that also appears in the list at the bottom, so you can match a payment to a request.</div>
+      </details>
     </div>
 
-    <label>Payment instructions (shown to a member when they request a paid tier; with "Custom payment link" they appear next to the pay button)</label>
-    <textarea name="manual_payment_instructions" rows="3" placeholder="e.g. Send $9.99 via PayPal to you@example.com or by bank transfer to ..., then message me your email and I'll approve your access within a day.">{esc_html(cfg.get('manual_payment_instructions',''))}</textarea>
+    <label>Message to the member (optional)</label>
+    <textarea name="manual_payment_instructions" rows="3" placeholder="e.g. Send $9.99 to you@example.com, then I'll approve your access within a day.">{esc_html(cfg.get('manual_payment_instructions',''))}</textarea>
 
-    <div class="placeholder" style="margin-top:14px;">
+    <div id="stripe-box" class="placeholder" style="margin-top:14px;{"" if provider == "stripe" else "display:none;"}">
       {payment_status_html}
-      Stripe keys are secrets and aren't entered here — they're set as
+      Stripe keys are secrets, so they are not typed here. They are set as
       environment variables (<code>STRIPE_SECRET_KEY</code>,
-      <code>STRIPE_WEBHOOK_SECRET</code>) so they're never stored in
-      config.json or rendered into this page. See SETUP.md for how to get
-      them and wire up the webhook. A tier priced at 0 always issues
-      instantly with no payment step, regardless of which provider is active.
+      <code>STRIPE_WEBHOOK_SECRET</code>); see SETUP.md.
     </div>
+    <div class="hint" style="margin-top:10px;">A tier that costs 0 is always free and instant, whatever you pick here.</div>
 
-    <label style="margin-top:20px;">Pending payment requests (Manual approval and Custom payment link)</label>
+    <label style="margin-top:20px;">Payments waiting for your OK</label>
     {pending_requests_html}
 
     </section>
 
     <section class="dsec" id="sec-emails" data-title="Emails">
     <h2>Welcome email</h2>
-    <div class="hint" style="margin-bottom:8px;">The email a member gets with their card and access link. You can change the subject, the welcome text and add a sign-off; the card, bundle and link are always included. You can use <b>{{name}}</b>, <b>{{tier}}</b>, <b>{{creator}}</b>, <b>{{brand}}</b> and <b>{{expires}}</b> and they're filled in for each member. Leave the subject or welcome text blank to use the standard wording.</div>
+    <div class="hint" style="margin-bottom:8px;">The email a member gets with their card and access link (those are always included). You can write <b>{{name}}</b>, <b>{{tier}}</b>, <b>{{creator}}</b>, <b>{{brand}}</b> and <b>{{expires}}</b>, and they are filled in for each member. Leave a box empty to use the standard words.</div>
     <label>Subject</label>
     <input name="email_subject" id="email-subject" maxlength="150" value="{esc_html(cfg['email_subject'])}">
     <label>Welcome text</label>
     <textarea name="email_intro" id="email-intro" rows="3" maxlength="1000">{esc_html(cfg['email_intro'])}</textarea>
-    <label>Sign-off (optional — a personal note at the end, e.g. "See you inside. — {{creator}}")</label>
+    <label>Sign-off (optional, like "See you inside. — {{creator}}")</label>
     <textarea name="email_signoff" id="email-signoff" rows="2" maxlength="600">{esc_html(cfg['email_signoff'])}</textarea>
     <div style="margin-top:12px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
       <button type="button" class="add-tier" id="email-preview-btn" style="margin-top:0;">Preview email →</button>
@@ -2464,19 +2471,19 @@ def _dashboard_page() -> str:
       <button type="button" class="add-tier" id="email-test-btn" style="margin-top:0;">Send test</button>
     </div>
     <div class="hint" id="email-status" style="margin-top:8px;min-height:14px;"></div>
-    <div class="hint">Preview and test use what's typed above, even before you save. A test needs email set up on the server (BREVO_API_KEY and GMAIL_ADDRESS, see SETUP.md).</div>
+    <div class="hint">Preview and test use what is typed above, even before you save. Sending a test needs email set up (see SETUP.md).</div>
     <iframe id="email-preview-frame" sandbox="" style="display:none;width:100%;height:620px;border:1px solid var(--line);margin-top:10px;background:var(--frame-bg);"></iframe>
 
     <h2>Expiry reminder</h2>
-    <div class="hint" style="margin-bottom:8px;">Emails a member a few days before their access ends, once per end date. When you extend a member (Members page) the clock restarts for the new date. It only works when email is set up on the server (see SETUP.md). Switching it on also reminds everyone who is <i>already</i> inside the window. You can use <b>{{name}}</b>, <b>{{tier}}</b>, <b>{{creator}}</b>, <b>{{brand}}</b>, <b>{{expires}}</b> and <b>{{days}}</b> (becomes "3 days"). The email always includes the member's access link.</div>
-    <label>Send the reminder this many days before access ends (0 = don't send reminders)</label>
+    <div class="hint" style="margin-bottom:8px;">Emails a member a few days before their access ends, once per end date. Needs email set up (see SETUP.md). Turning it on also reminds members who are already inside the window. You can write <b>{{name}}</b>, <b>{{tier}}</b>, <b>{{creator}}</b>, <b>{{brand}}</b>, <b>{{expires}}</b> and <b>{{days}}</b>. The member's access link is always included.</div>
+    <label>Days before access ends to send it (0 = off)</label>
     <input name="reminder_days" id="reminder-days" type="number" min="0" max="{reminders.MAX_REMINDER_DAYS}" step="1" value="{cfg['reminder_days']}" style="max-width:100px;">
-    <div class="hint" style="margin-top:4px;">A pass that lasts no longer than this many days isn't reminded (it would be reminded the moment it was issued).</div>
+    <div class="hint" style="margin-top:4px;">Passes that last no longer than this are not reminded.</div>
     <label>Subject</label>
     <input name="reminder_subject" id="reminder-subject" maxlength="150" value="{esc_html(cfg['reminder_subject'])}">
     <label>Reminder text</label>
     <textarea name="reminder_text" id="reminder-text" rows="3" maxlength="1000">{esc_html(cfg['reminder_text'])}</textarea>
-    <label>Where to renew (optional web address — adds a "Renew" button, e.g. your payment or contact page)</label>
+    <label>Renew link (optional, adds a "Renew" button)</label>
     <input name="reminder_renew_url" id="reminder-renew" type="url" maxlength="500" placeholder="https://..." value="{esc_html(cfg['reminder_renew_url'])}">
     <div style="margin-top:12px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
       <button type="button" class="add-tier" id="reminder-preview-btn" style="margin-top:0;">Preview reminder →</button>
@@ -2530,21 +2537,21 @@ def _dashboard_page() -> str:
         </div>
         <div class="design-panel">
           <div class="design-field">
-            <label>Card title override</label>
-            <input name="tier_design_card_title" value="" placeholder="blank = use global">
+            <label>Card title</label>
+            <input name="tier_design_card_title" value="" placeholder="blank = same as Branding">
           </div>
           <div class="design-field">
-            <label>Accent color override</label>
-            <input name="tier_design_accent_color" value="" placeholder="blank = use global">
+            <label>Accent color</label>
+            <input name="tier_design_accent_color" value="" placeholder="blank = same as Branding">
           </div>
           <div class="design-field">
-            <label>Card label override</label>
-            <input name="tier_design_card_label" value="" maxlength="40" placeholder="blank = use global">
+            <label>Small line under the title</label>
+            <input name="tier_design_card_label" value="" maxlength="40" placeholder="blank = same as Branding">
           </div>
           <div class="design-field">
             <label>Card style</label>
             <select name="tier_design_style">
-              <option value="" selected>Use global</option>
+              <option value="" selected>Same as Branding</option>
               <option value="distressed">Distressed</option>
               <option value="clean">Clean</option>
             </select>
@@ -2557,9 +2564,9 @@ def _dashboard_page() -> str:
             </select>
           </div>
           <div class="design-field">
-            <label>Logo override</label>
+            <label>Logo</label>
             <div class="logo-row">
-              <span class="no-logo">none — uses global</span>
+              <span class="no-logo">none — uses the main logo</span>
               <input type="file" name="tier_design_logo" accept="image/png,image/jpeg,image/gif,image/webp">
               <button type="button" class="remove-logo">Remove logo</button>
             </div>
@@ -2855,8 +2862,15 @@ def _dashboard_page() -> str:
         }});
     }}
     (function() {{
-      const sel = document.querySelector('select[name=payment_provider]'), box = document.getElementById('custom-box');
-      if (sel && box) sel.addEventListener('change', () => {{ box.style.display = sel.value === 'custom' ? '' : 'none'; }});
+      const sel = document.querySelector('select[name=payment_provider]');
+      if (!sel) return;
+      const box = document.getElementById('custom-box'), sbox = document.getElementById('stripe-box');
+      const show = () => {{
+        if (box) box.style.display = sel.value === 'custom' ? '' : 'none';
+        if (sbox) sbox.style.display = sel.value === 'stripe' ? '' : 'none';
+        document.querySelectorAll('.pv-hint').forEach(h => {{ h.style.display = h.dataset.for === sel.value ? '' : 'none'; }});
+      }};
+      sel.addEventListener('change', show);
     }})();
 
     document.querySelectorAll('.approve-req-btn').forEach(btn => {{
@@ -3058,7 +3072,42 @@ def admin_content_upload():
     meta, error = content_store.save_upload(request.files.get("file"), MAX_UPLOAD_BYTES)
     if not meta:
         return jsonify({"success": False, "error": error}), 400
-    return jsonify({"success": True, "file": meta, "used_bytes": content_store.used_bytes()})
+    # An uploaded picture gets its thumbnail automatically (None for other files).
+    preview = content_store.make_preview_from_stored(meta["id"])
+    return jsonify({"success": True, "file": meta, "preview": preview, "used_bytes": content_store.used_bytes()})
+
+
+# A preview picture for an item (any item: a link, a file, something for sale).
+# Stored as a small JPEG thumbnail; becomes part of the content once saved.
+@app.route("/admin/content/preview", methods=["POST"])
+def admin_content_preview():
+    if not check_admin(request):
+        return jsonify({"success": False, "error": "Not logged in."}), 401
+    meta, error = content_store.make_preview(request.files.get("file"))
+    if not meta:
+        return jsonify({"success": False, "error": error}), 400
+    return jsonify({"success": True, "preview": meta, "used_bytes": content_store.used_bytes()})
+
+
+# The thumbnail itself, for the Content page's own display (admin only).
+@app.route("/admin/content/preview/<pid>", methods=["GET"])
+def admin_content_preview_get(pid):
+    if not check_admin(request):
+        return app.response_class("Not logged in.", status=401, mimetype="text/plain")
+    return _send_thumb(pid)
+
+
+def _send_thumb(pid):
+    """A stored thumbnail as an image. Thumbnails are always re-encoded JPEGs
+    made by content_store.make_preview, so the type is fixed here."""
+    from flask import send_file
+    path = content_store.path_for(pid)
+    if path is None or not path.is_file():
+        return app.response_class("Not found.", status=404, mimetype="text/plain")
+    resp = send_file(path, mimetype="image/jpeg", conditional=True, max_age=0)
+    resp.headers["Cache-Control"] = "private, no-store"
+    resp.headers["X-Content-Type-Options"] = "nosniff"
+    return resp
 
 
 # ── Backup and restore (see backup.py) ──
@@ -3254,7 +3303,13 @@ def member_content():
                 for it in sec.get("items", []):
                     it = dict(it)
                     f = it.pop("file", None)
-                    if f:
+                    pv = it.pop("preview", None)
+                    if pv:
+                        it["thumb"] = f"/member-preview/{pv['id']}?t={_file_token(cid, pv['id'])}"
+                    if it.get("buy_url"):
+                        # For sale: a Buy button only. The file/link behind it isn't offered here.
+                        it["url"] = ""
+                    elif f:
                         it["file"] = {"name": f["name"], "size": f["size"]}
                         it["download"] = f"/member-file/{f['id']}?t={_file_token(cid, f['id'])}"
                     items.append(it)
@@ -3265,6 +3320,22 @@ def member_content():
         return resp
     except Exception:
         return denied()
+
+
+# ── GET /member-preview/<id>?t=<ticket> ──
+# An item's thumbnail. Same ticket rules as /member-file: the credential must
+# still be good and the picture must belong to a section its tier includes.
+@app.route("/member-preview/<pid>", methods=["GET"])
+def member_preview(pid):
+    def denied():
+        r = app.response_class("Access denied.", status=403, mimetype="text/plain")
+        r.headers["Cache-Control"] = "no-store"
+        return r
+    cid = _check_file_token(request.args.get("t", ""), pid)
+    entry = _member_entry(cid) if cid else None
+    if not entry or not content_store.find_preview_item(content_store.load(), pid, entry.get("sections", [])):
+        return denied()
+    return _send_thumb(pid)
 
 
 # ── GET /member-file/<id>?t=<ticket> ──

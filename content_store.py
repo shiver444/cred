@@ -13,6 +13,16 @@ A links item can carry an uploaded file instead of a link: the file lives
 on the server (DATA_DIR/uploads/<id>.bin) and is only ever handed to a
 verified member (see credential_api.py: /member-content, /member-file).
 
+A links item can also have:
+  preview  — a small picture shown next to it (a thumbnail, made on the
+             server from an uploaded picture: see make_preview). An uploaded
+             picture file gets one automatically.
+  price + buy_url — "for sale": members see the price and a Buy button that
+             opens your payment link, instead of a download. Nothing is
+             unlocked by buying; you deliver from that link.
+A links section can show its items as a "list" (default) or a "grid" of
+pictures (layout).
+
 A section's `key` is the name tiers refer to in their "Sections" field
 (e.g. a tier with sections "downloads, chat" unlocks the sections whose
 keys are `downloads` and `chat`).
@@ -20,10 +30,11 @@ keys are `downloads` and `chat`).
 Stored as:
   {"sections": [
      {"key": "downloads", "title": "Downloads", "type": "links",
-      "button": "↓ Download",
+      "button": "↓ Download", "layout": "list",
       "items": [{"title": "...", "url": "https://...", "note": "..."},
                 {"title": "...", "url": "", "note": "...",
-                 "file": {"id": "<24 hex>", "name": "ep1.mp4", "size": 123456}}]},
+                 "file": {"id": "<24 hex>", "name": "ep1.mp4", "size": 123456},
+                 "preview": {"id": "<24 hex>"}, "price": "$5", "buy_url": "https://..."}]},
      {"key": "merch", "title": "Merch Discount", "type": "merch",
       "label": "...", "url": "https://...", "code": "..."},
      {"key": "chat", "title": "Chat", "type": "chat"}
@@ -51,6 +62,11 @@ MAX_SECTIONS = 30
 MAX_ITEMS    = 200
 MAX_TEXT     = 300
 MAX_URL      = 2000
+MAX_PRICE    = 30
+LAYOUTS      = ("list", "grid")
+PREVIEW_SIDE = 480                 # px, longest side of a thumbnail
+MAX_PREVIEW_UPLOAD = 10 * 1024 * 1024
+MAX_PREVIEW_PIXELS = 40_000_000
 
 _LEGACY_TITLES = {"downloads": "Downloads", "bts": "Behind The Scenes",
                   "merch": "Merch Discount", "chat": "Chat"}
@@ -69,6 +85,12 @@ def safe_url(url: str) -> str:
     if re.match(r"^(https?://|mailto:)", url, re.I):
         return url
     return ""
+
+
+def safe_web_url(url) -> str:
+    """A buy link: http(s) only (no mailto:, no relative paths)."""
+    u = safe_url(str(url or ""))
+    return u if re.match(r"^https?://", u, re.I) else ""
 
 
 def _text(value, limit=MAX_TEXT) -> str:
@@ -134,6 +156,7 @@ def _clean(data: dict, warnings: list = None) -> dict:
         sec = {"key": key, "title": _text(s.get("title"), 80) or key.replace("-", " ").replace("_", " ").title(), "type": typ}
         if typ == "links":
             sec["button"] = _text(s.get("button"), 30)
+            sec["layout"] = _text(s.get("layout"), 10).lower() if _text(s.get("layout"), 10).lower() in LAYOUTS else "list"
             items = []
             for it in (s.get("items") or [])[:MAX_ITEMS]:
                 if not isinstance(it, dict):
@@ -145,6 +168,21 @@ def _clean(data: dict, warnings: list = None) -> dict:
                 if _text(it.get("url"), MAX_URL) and not url:
                     warn.append(f"\"{title}\" in \"{key}\": the link isn't a valid http(s) or mailto address, so it was removed.")
                 item = {"title": title, "url": url, "note": _text(it.get("note"))}
+                price = _text(it.get("price"), MAX_PRICE)
+                buy = safe_web_url(it.get("buy_url"))
+                if _text(it.get("buy_url"), MAX_URL) and not buy:
+                    warn.append(f"\"{title}\" in \"{key}\": the buy link has to start with https:// (or http://), so it was removed.")
+                if price:
+                    item["price"] = price
+                if buy:
+                    item["buy_url"] = buy
+                pv = it.get("preview")
+                if pv:
+                    ppath = path_for(pv.get("id")) if isinstance(pv, dict) else None
+                    if ppath is not None and ppath.is_file():
+                        item["preview"] = {"id": pv["id"]}
+                    else:
+                        warn.append(f"\"{title}\" in \"{key}\": its preview picture is no longer on the server, so it was removed — add it again.")
                 f = it.get("file")
                 if f:
                     fpath = path_for(f.get("id")) if isinstance(f, dict) else None
@@ -265,8 +303,120 @@ def save_upload(file_storage, max_bytes: int) -> tuple:
 
 
 def referenced_ids(content: dict) -> set:
-    return {it["file"]["id"] for s in content.get("sections", []) if s.get("type") == "links"
-            for it in s.get("items", []) if it.get("file")}
+    ids = set()
+    for s in content.get("sections", []):
+        if s.get("type") != "links":
+            continue
+        for it in s.get("items", []):
+            if it.get("file"):
+                ids.add(it["file"]["id"])
+            if it.get("preview"):
+                ids.add(it["preview"]["id"])
+    return ids
+
+
+def find_preview_item(content: dict, preview_id: str, allowed_keys) -> dict:
+    """The item whose preview picture is `preview_id` — but only if it sits in
+    a section whose key is in `allowed_keys` (the member's tier)."""
+    allowed = {str(k).strip().lower() for k in (allowed_keys or [])}
+    for s in content.get("sections", []):
+        if s.get("type") == "links" and s["key"] in allowed:
+            for it in s.get("items", []):
+                if it.get("preview") and it["preview"]["id"] == preview_id:
+                    return it
+    return None
+
+
+# ── Preview pictures (thumbnails) ───────────────────────────────────────
+# A thumbnail is made on the server from the picture, so the member's phone
+# never has to download the original (a photo can be many megabytes). It is
+# re-encoded as a plain JPEG: no metadata, nothing a browser could run.
+
+def _thumb_from_image(img, Image):
+    from PIL import ImageOps
+    img = ImageOps.exif_transpose(img)
+    if img.mode in ("RGBA", "LA", "PA") or (img.mode == "P" and "transparency" in img.info):
+        rgba = img.convert("RGBA")
+        bg = Image.new("RGB", rgba.size, (255, 255, 255))
+        bg.paste(rgba, mask=rgba.split()[-1])
+        img = bg
+    else:
+        img = img.convert("RGB")
+    if max(img.size) > PREVIEW_SIDE:
+        img.thumbnail((PREVIEW_SIDE, PREVIEW_SIDE), Image.LANCZOS)
+    return img
+
+
+def _store_thumb(img_opener) -> tuple:
+    """img_opener() -> an opened PIL image. Returns ({"id"}, "") or (None, reason)."""
+    try:
+        from PIL import Image
+    except ImportError:
+        return None, "Pictures can't be processed on this server (Pillow is missing)."
+    try:
+        Image.MAX_IMAGE_PIXELS = MAX_PREVIEW_PIXELS
+        img = img_opener()
+        if img.size[0] * img.size[1] > MAX_PREVIEW_PIXELS:
+            return None, "That picture is too large (too many pixels). Use a smaller one."
+        img.load()
+        thumb = _thumb_from_image(img, Image)
+        d = uploads_dir()
+        d.mkdir(parents=True, exist_ok=True)
+        fid = secrets.token_hex(12)
+        path = d / f"{fid}.bin"
+        try:
+            thumb.save(path, "JPEG", quality=82, optimize=True)
+        except OSError:
+            path.unlink(missing_ok=True)
+            return None, "The picture couldn't be saved (the server may be out of storage space)."
+        return {"id": fid}, ""
+    except Exception as e:
+        if "decompression" in type(e).__name__.lower() or "pixels" in str(e).lower():
+            return None, "That picture is too large (too many pixels). Use a smaller one."
+        return None, "That picture couldn't be read."
+
+
+_IMAGE_SIGS = (b"\x89PNG\r\n\x1a\n", b"\xff\xd8\xff", b"GIF87a", b"GIF89a")
+
+
+def _looks_like_image(head: bytes) -> bool:
+    return head.startswith(_IMAGE_SIGS) or (head[:4] == b"RIFF" and head[8:12] == b"WEBP")
+
+
+def make_preview(file_storage) -> tuple:
+    """A preview picture uploaded for an item. Only real PNG / JPEG / GIF /
+    WEBP pictures are accepted (decoded, not trusted by name). Returns
+    ({"id"}, "") or (None, reason)."""
+    from io import BytesIO
+    if not file_storage or not file_storage.filename:
+        return None, "No picture was chosen."
+    raw = file_storage.stream.read(MAX_PREVIEW_UPLOAD + 1)
+    if not raw:
+        return None, "That file is empty."
+    if len(raw) > MAX_PREVIEW_UPLOAD:
+        return None, "That picture is too big (over 10 MB). Use a smaller one."
+    if not _looks_like_image(raw[:16]):
+        return None, "That isn't a PNG, JPG, GIF or WEBP picture."
+    from PIL import Image  # noqa: F401 (ImportError handled in _store_thumb)
+    return _store_thumb(lambda: Image.open(BytesIO(raw)))
+
+
+def make_preview_from_stored(file_id: str) -> dict:
+    """If the stored upload `file_id` is a picture, make its thumbnail and
+    return {"id"}; otherwise None (no error: not every file is a picture)."""
+    path = path_for(file_id)
+    if path is None or not path.is_file():
+        return None
+    try:
+        with open(path, "rb") as f:
+            head = f.read(16)
+        if not _looks_like_image(head):
+            return None
+        from PIL import Image
+        meta, _err = _store_thumb(lambda: Image.open(path))
+        return meta
+    except Exception:
+        return None
 
 
 def find_file_item(content: dict, file_id: str, allowed_keys) -> dict:

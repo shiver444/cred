@@ -94,6 +94,13 @@ _TEMPLATE = r"""<!DOCTYPE html>
   .small { background:transparent; border:1px solid var(--line); color:var(--soft); font-size:10px; letter-spacing:1px; text-transform:uppercase; padding:5px 9px; }
   .small:hover { border-color:var(--accent-text); color:var(--accent-text); }
   .stor { }
+  .pv { display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
+  .pv img { width:64px; height:64px; object-fit:cover; border:1px solid var(--line); background:var(--field); border-radius:var(--radius, 0); }
+  .pv .none { width:64px; height:64px; border:1px dashed var(--dash); display:flex; align-items:center; justify-content:center; color:var(--muted); font-size:10px; border-radius:var(--radius, 0); }
+  .sale-box summary { cursor:pointer; color:var(--accent-text); font-size:12px; margin:4px 0; }
+  .sale { display:flex; gap:8px; flex-wrap:wrap; }
+  .sale > div { flex:1 1 160px; }
+  .sale > div.price { flex:0 1 120px; }
   #storage-info { border:1px solid var(--line); background:var(--panel); padding:14px 16px; margin:14px 0; border-radius:var(--radius, 0); }
   .stor-head { display:flex; justify-content:space-between; gap:10px; align-items:baseline; flex-wrap:wrap; font-size:12px; color:var(--fg); }
   .stor-head span { color:var(--muted); font-size:11px; }
@@ -114,8 +121,8 @@ __THEME__</style></head>
   <div class="nav"><a href="/admin/dashboard">← Dashboard</a><a href="/admin/members">Members →</a><a href="/admin/logout">Log out</a></div>
   <h1>__TITLE__ — Content</h1>
   <details class="chelp" open><summary>How this page works</summary>
-  <div class="hint">What members see after they verify. Each <b>section</b> has a <b>key</b> (a short lowercase name, like <b>downloads</b>); a tier unlocks the sections whose keys are listed in its "Sections" field on the Dashboard. Changes only take effect when you press <b>Save content</b>.</div>
-  <div class="hint">Members' content is only sent to someone holding a valid, unrevoked, unexpired credential for a tier that includes the section. An item can be a <b>link</b> or an <b>uploaded file</b>. Uploaded files live on this server and can only be downloaded by a verified member of a tier that includes the section (the download link a member gets stops working after 15 minutes, and revoking a member cuts them off). A plain <b>link</b> you add can still be opened by anyone who is given it, so for truly private files, upload them here or use a link that is private on its own side.</div>
+  <div class="hint">This is what members see after they verify. Each <b>section</b> has a short name (like <b>downloads</b>). A tier unlocks the sections listed in its "Sections" field on the Dashboard. Press <b>Save content</b> when you're done.</div>
+  <div class="hint">Add a <b>link</b> or <b>upload a file</b>. Uploaded files can only be downloaded by verified members. A plain link can be opened by anyone who has it.</div>
   </details>
   <div id="storage-info"></div>
 
@@ -226,7 +233,7 @@ __THEME__</style></head>
     xhr.onload = function () {
       var j; try { j = JSON.parse(xhr.responseText); } catch (e) { j = { success: false, error: 'The server sent an unexpected answer (status ' + xhr.status + ').' }; }
       if (xhr.status === 401) { done(null, 'You were logged out — log in again, then upload.'); return; }
-      if (j.success) { if (typeof j.used_bytes === 'number') { meta.used_bytes = j.used_bytes; renderStorage(); } done(j.file, ''); }
+      if (j.success) { if (typeof j.used_bytes === 'number') { meta.used_bytes = j.used_bytes; renderStorage(); } done(j.file, '', j.preview || null); }
       else done(null, j.error || 'Upload failed.');
     };
     xhr.onerror = function () { done(null, 'Could not reach the server — nothing was uploaded.'); };
@@ -240,10 +247,10 @@ __THEME__</style></head>
     picker.addEventListener('change', function () {
       var f = picker.files[0]; if (!f) return;
       msg.className = 'upmsg'; msg.textContent = 'Uploading… 0%';
-      uploadFile(f, function (pct) { msg.textContent = 'Uploading… ' + pct + '%'; }, function (file, error) {
+      uploadFile(f, function (pct) { msg.textContent = 'Uploading… ' + pct + '%'; }, function (file, error, preview) {
         picker.value = '';
         if (!file) { msg.className = 'upmsg err'; msg.textContent = error; return; }
-        it.file = file; it.url = ''; touch(); render();
+        it.file = file; it.url = ''; if (preview && preview.id && !it.preview) it.preview = preview; touch(); render();
       });
     });
     if (it.file) {
@@ -263,9 +270,63 @@ __THEME__</style></head>
     return wrap;
   }
 
+  // The preview picture of one item: a small thumbnail, with add / replace / remove
+  function itemPreview(it) {
+    var wrap = el('div', { class: 'wide' });
+    var msg = el('div', { class: 'upmsg' });
+    var picker = el('input', { type: 'file', accept: 'image/png,image/jpeg,image/gif,image/webp', style: 'display:none' });
+    picker.addEventListener('change', function () {
+      var f = picker.files[0]; if (!f) return;
+      msg.className = 'upmsg'; msg.textContent = 'Uploading…';
+      var fd = new FormData(); fd.append('file', f);
+      var xhr = new XMLHttpRequest();
+      xhr.open('POST', '/admin/content/preview');
+      xhr.onload = function () {
+        picker.value = '';
+        var j; try { j = JSON.parse(xhr.responseText); } catch (e) { j = { success: false, error: 'The server sent an unexpected answer (status ' + xhr.status + ').' }; }
+        if (xhr.status === 401) { msg.className = 'upmsg err'; msg.textContent = 'You were logged out — log in again, then add the picture.'; return; }
+        if (!j.success) { msg.className = 'upmsg err'; msg.textContent = j.error || 'The picture could not be added.'; return; }
+        if (typeof j.used_bytes === 'number') { meta.used_bytes = j.used_bytes; renderStorage(); }
+        it.preview = j.preview; touch(); render();
+      };
+      xhr.onerror = function () { msg.className = 'upmsg err'; msg.textContent = 'Could not reach the server — nothing was uploaded.'; };
+      xhr.send(fd);
+    });
+    var row = el('div', { class: 'pv' });
+    if (it.preview && it.preview.id) {
+      row.appendChild(el('img', { src: '/admin/content/preview/' + encodeURIComponent(it.preview.id), alt: 'Preview picture' }));
+      row.appendChild(el('button', { type: 'button', class: 'small', text: 'Change picture', on: { click: function () { picker.click(); } } }));
+      row.appendChild(el('button', { type: 'button', class: 'small', text: 'Remove picture', on: { click: function () { delete it.preview; touch(); render(); } } }));
+    } else {
+      row.appendChild(el('div', { class: 'none', text: 'no picture' }));
+      row.appendChild(el('button', { type: 'button', class: 'small', text: 'Add a preview picture', on: { click: function () { picker.click(); } } }));
+    }
+    wrap.appendChild(el('label', { text: 'Preview picture (optional)' }));
+    wrap.appendChild(row); wrap.appendChild(picker); wrap.appendChild(msg);
+    return wrap;
+  }
+  // Optional price and buy link of one item (folded away unless already used)
+  function itemSale(it) {
+    var wrap = el('div', { class: 'wide' });
+    var box = el('details', { class: 'sale-box' });
+    if (it.price || it.buy_url) box.setAttribute('open', '');
+    box.appendChild(el('summary', { text: 'Sell this item (optional)' }));
+    box.appendChild(el('div', { class: 'sale' }, [
+      (function () { var d = field('Price', it, 'price', { max: 30, placeholder: '$5' }); d.className = 'price'; return d; })(),
+      field('Buy link', it, 'buy_url', { max: 2000, placeholder: 'https://…' })
+    ]));
+    box.appendChild(el('div', { class: 'hint', text: 'Members see a Buy button instead of the download. Buying does not unlock anything by itself: you deliver from your payment page.' }));
+    wrap.appendChild(box);
+    return wrap;
+  }
+
   function renderLinks(sec) {
     var box = el('div');
     box.appendChild(field('Button text on each item (optional, e.g. "↓ Download")', sec, 'button', { max: 30 }));
+    var lay = el('select', {}, [el('option', { value: 'list', text: 'A list' }), el('option', { value: 'grid', text: 'A grid of pictures' })]);
+    lay.value = sec.layout === 'grid' ? 'grid' : 'list';
+    lay.addEventListener('change', function () { sec.layout = lay.value; touch(); });
+    box.appendChild(el('div', {}, [el('label', { text: 'Show the items as' }), lay]));
     sec.items = sec.items || [];
     if (!sec.items.length) box.appendChild(el('div', { class: 'empty', text: 'No items yet.' }));
     sec.items.forEach(function (it, i) {
@@ -273,7 +334,9 @@ __THEME__</style></head>
         el('div', { class: 'fields' }, [
           field('Title', it, 'title', { max: 160, placeholder: 'Episode 12 — Raw Footage' }),
           itemSource(it),
-          field('Short note (optional)', it, 'note', { wide: true, placeholder: 'Raw footage, 12 minutes' })
+          itemPreview(it),
+          field('Short note (optional)', it, 'note', { wide: true, placeholder: 'Raw footage, 12 minutes' }),
+          itemSale(it)
         ]),
         el('div', { class: 'tools' }, [
           el('button', { type: 'button', class: 'mini', text: '↑', title: 'Move up', on: { click: function () { move(sec.items, i, -1); } } }),

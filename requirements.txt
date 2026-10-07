@@ -3,5 +3,6 @@ flask-cors
 ecdsa
 qrcode
 reportlab
+Pillow
 stripe
 gunicorn

@@ -139,6 +139,20 @@ files that must stay private, upload them here or use a link that's private
 on its own side. Files you remove from an item are deleted from the server
 about an hour after you save.
 
+**Pictures (thumbnails).** If an item is an uploaded picture (PNG, JPG, GIF or
+WEBP), a small preview is made automatically, so a section of pictures looks
+like a gallery. For anything else (a zip, a video link) you can add your own
+preview picture with "Add preview picture". Preview pictures are shrunk to a
+small JPEG and are only shown to verified members of the right tier. Set a
+section to **Grid** (pictures side by side) or **List** (one per row) at the
+top of the section.
+
+**Selling one item.** Open "Sell this item" on an item, type a price (for
+example `$5`) and a buy link (a PayPal, Gumroad or Ko-fi link; it must start
+with `https://`). Members then see a **Buy** button on that item. This is a
+simple shop link: it does not unlock anything by itself, so send or
+publish the file after you get paid.
+
 Mind your storage: uploads live on the same Volume as your members and
 signing key, and the Volume has a fixed size (see your Railway plan). The
 Content page shows how much the uploads use. One file can be up to
@@ -319,7 +333,7 @@ With `payment_provider` left at `"manual"` (or anything else unrecognized —
 it fails *safe* to this, never to an unconfigured automated provider), no
 payment account of any kind is required. The flow: a member requests a
 paid tier, this app records a pending request and shows them whatever text
-you put in **Payment instructions** in the dashboard (e.g. "Send
+you put in **Message to the member** in the dashboard (e.g. "Send
 $9.99 via PayPal to me@example.com, or by e-transfer to..., then message
 me your email"). You confirm payment arrived however it actually does for
 you, then click **Approve** next to that request in the dashboard's
@@ -336,35 +350,29 @@ details yet. The trade-off is it's manual — there's no automatic "payment
 received" signal, so there will be a delay between someone paying and you
 approving.
 
-### 6a-2. "Custom payment link" — any service that gives you a link
+### 6a-2. Send members to a payment link (PayPal, Ko-fi, Gumroad...)
 
-Pick **Custom payment link** in the dashboard's Payment section when your
-payment service (PayPal.me, Ko-fi, Buy Me a Coffee, Gumroad, a regional or
-adult-friendly processor, a payment page of your own) can give you a link to
-send people to. Fill in:
+In the dashboard's Payment screen, choose **Send them to a payment link**.
+Type the **name of the service** (for example PayPal) and paste the **payment
+link** where members pay. It has to start with `https://`. That is all you
+need.
 
-- **Name of the service** — shown on the member's button ("Pay with PayPal").
-- **Payment link** — where the member goes to pay. Must start with `https://`.
-  You can put these words in curly brackets and they are filled in for each
-  person: `{amount}`, `{currency}`, `{tier}`, `{email}`, `{name}` and
-  `{reference}`, for example `https://paypal.me/yourname/{amount}{currency}`.
-  Leave it blank to show only your written instructions.
-- **A different link for a specific tier** (optional) — one per line, like
-  `MEMBER = https://ko-fi.com/s/abc123`. Useful when each tier is its own
-  product in that service. A tier without a line uses the main link.
-- **Payment instructions** — the same text box as Manual approval; it appears
-  next to the pay button.
+What happens: the member picks a paid tier and enters name and email. The
+widget shows your message, a short reference code and a **Pay with ...**
+button that opens your link in a new tab. The request also lands in the
+**Payments waiting for your OK** list, the same list used when you arrange
+payment yourself. A link can't tell this app that the money arrived, so when
+you see the payment in that service you press **Approve** and the member gets
+their card.
 
-What happens: the member picks a paid tier, enters name and email, and the
-request goes into the same pending list as Manual approval. The widget shows
-your instructions, a short **reference** code and a **Pay with ...** button
-that opens your link in a new tab. A link can't tell this app that the money
-arrived, so when you see the payment in that service you press **Approve** in
-the pending list — that sends the card. The **Reference** column in that list
-matches a payment to a request; put `{reference}` in the link when the service
-has a note or message field that carries it. Only `http(s)` links are ever
-accepted, and the web site part of the link can't contain a bracketed word, so
-a visitor's name can never decide where they are sent.
+Under **More options** (you can skip it): a different link for one tier (one
+per line, like `MEMBER = https://ko-fi.com/s/abc123`), and fill-in words you
+can write inside any link: `{amount}`, `{currency}`, `{tier}`, `{email}`,
+`{name}` and `{reference}`, for example
+`https://paypal.me/yourname/{amount}{currency}`. The reference is a short code
+that also appears in the waiting list, so you can match a payment to a
+request. Only `https` links are accepted, and a visitor's name can never decide
+where they are sent.
 
 ### 6b. Stripe — automatic card checkout
 

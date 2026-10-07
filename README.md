@@ -53,7 +53,8 @@ can revoke any of them at any time.
   PayPal, Ko-fi, Gumroad or other payment link first. Stripe is built in as an
   optional automatic alternative.
 - Members-only content: links, files you upload (only verified members of the
-  right tier can download them) and a merch discount, shown per tier.
+  right tier can download them) and a merch discount, shown per tier, with
+  picture thumbnails, a list or grid view, and a Buy button on single items.
 - Backup and restore: one downloadable file with your members, signing key,
   settings and content, and a restore that works on a brand-new server.
 - Send a card to anyone for free (a friend, a winner) from the Members page,

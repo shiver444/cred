@@ -397,6 +397,13 @@
       border-bottom: 1px solid var(--ca-line);
       gap: 12px;
     }
+    .ca-track-main { display: flex; align-items: center; gap: 12px; min-width: 0; }
+    .ca-thumb { width: 56px; height: 56px; flex: 0 0 56px; object-fit: cover; display: block;
+                border: 1px solid var(--ca-line); background: var(--ca-line); }
+    .ca-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 12px; margin-top: 6px; }
+    .ca-card { display: flex; flex-direction: column; gap: 8px; border: 1px solid var(--ca-line); padding: 8px; min-width: 0; }
+    .ca-card .ca-thumb { width: 100%; height: auto; aspect-ratio: 1 / 1; flex: none; border: 0; }
+    .ca-card .ca-dl-btn { text-align: center; }
     .ca-track-title { font-size: 11px; margin-bottom: 3px; color: var(--ca-fg); }
     .ca-track-meta  { font-size: 8px; color: var(--ca-ash); letter-spacing: 1px; }
     .ca-dl-btn {
@@ -585,7 +592,7 @@
     #credential-widget.ca-keycard .ca-banner-text { text-shadow: 0 0 12px ${accent}55; }
     #credential-widget.ca-solid { background: var(--ca-bg); padding: 24px; border-radius: var(--ca-radius); }
     #credential-widget .ca-banner, #credential-widget .ca-drop-zone, #credential-widget .ca-modal,
-    #credential-widget .ca-field, #credential-widget .ca-tier-option, #credential-widget .ca-dl-btn,
+    #credential-widget .ca-field, #credential-widget .ca-tier-option, #credential-widget .ca-dl-btn, #credential-widget .ca-thumb, #credential-widget .ca-card,
     #credential-widget .ca-chat-messages, #credential-widget .ca-result, #credential-widget .ca-video-thumb,
     #credential-widget .ca-qr-video-wrap, #credential-widget .ca-submit, #credential-widget .ca-close { border-radius: var(--ca-radius); }
     #credential-widget .ca-token-input, #credential-widget .ca-chat-input { border-radius: var(--ca-radius) 0 0 var(--ca-radius); }
@@ -1292,6 +1299,7 @@
     const title = `<div class="ca-panel-title">${esc(sec.title || sec.key)}</div>`
 
     if (sec.type === 'links') {
+      const grid = sec.layout === 'grid'
       const items = (sec.items || []).map(it => {
         // An uploaded file arrives as a short-lived download path on the API
         // (/member-file/…); anything else is a plain link the creator added.
@@ -1300,21 +1308,40 @@
         const url = isFile ? API_BASE + it.download : safeUrl(it.url)
         const fileInfo = isFile && it.file ? [it.file.name, fmtSize(it.file.size)].filter(Boolean).join(' · ') : ''
         const meta = [it.note, fileInfo].filter(Boolean).join(' · ')
-        const btn = url
-          ? (isFile
-              ? `<a href="${esc(url)}" class="ca-dl-btn" rel="noopener">${esc(sec.button || '↓ Download')}</a>`
-              : `<a href="${esc(url)}" class="ca-dl-btn" target="_blank" rel="noopener">${esc(sec.button || 'Open →')}</a>`)
-          : ''
-        return `
-        <div class="ca-track">
-          <div>
+        // For sale: a Buy button (http/https only, opened in a new tab) replaces the download.
+        const buyRaw = safeUrl(it.buy_url)
+        const buyUrl = /^https?:\/\//i.test(buyRaw) ? buyRaw : ''
+        const price = String(it.price || '').slice(0, 30)
+        // The preview picture arrives as a short-lived path on the API (/member-preview/…).
+        const hasThumb = typeof it.thumb === 'string' &&
+                         /^\/member-preview\/[a-f0-9]{24}\?t=[A-Za-z0-9_.=-]+$/.test(it.thumb)
+        const thumb = hasThumb ? `<img class="ca-thumb" src="${esc(API_BASE + it.thumb)}" alt="" loading="lazy">` : ''
+        const btn = buyUrl
+          ? `<a href="${esc(buyUrl)}" class="ca-dl-btn" target="_blank" rel="noopener noreferrer">${esc('Buy' + (price ? ' · ' + price : ''))}</a>`
+          : url
+            ? (isFile
+                ? `<a href="${esc(url)}" class="ca-dl-btn" rel="noopener">${esc(sec.button || '↓ Download')}</a>`
+                : `<a href="${esc(url)}" class="ca-dl-btn" target="_blank" rel="noopener">${esc(sec.button || 'Open →')}</a>`)
+            : ''
+        const text = `<div>
             <div class="ca-track-title">${esc(it.title)}</div>
             <div class="ca-track-meta">${esc(meta)}</div>
-          </div>
+          </div>`
+        if (grid) {
+          return `
+        <div class="ca-card">
+          ${thumb}
+          ${text}
+          ${btn}
+        </div>`
+        }
+        return `
+        <div class="ca-track">
+          <div class="ca-track-main">${thumb}${text}</div>
           ${btn}
         </div>`
       }).join('')
-      return title + items
+      return title + (grid ? `<div class="ca-grid">${items}</div>` : items)
     }
 
     if (sec.type === 'merch') {
