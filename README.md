@@ -47,6 +47,8 @@ can revoke any of them at any time.
   click. Stripe is built in as an optional automatic alternative.
 - Members-only content: links, files you upload (only verified members of the
   right tier can download them) and a merch discount, shown per tier.
+- Backup and restore: one downloadable file with your members, signing key,
+  settings and content, and a restore that works on a brand-new server.
 - Limits per tier: cap how many members a tier can have (it shows as
   "Sold out" when full) and allow one card per email address.
 - Built-in protections: admin login lockout, forged-request protection and

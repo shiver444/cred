@@ -18,3 +18,11 @@ venv/
 .env
 .idea/
 uploads/
+
+# Backup/restore working files (live in DATA_DIR; only matter when running locally)
+backup_state.json
+.backup-*.zip
+.backup-state-*.tmp
+.upload-*.zip
+.restore-*/
+.replaced-*/

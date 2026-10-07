@@ -159,6 +159,7 @@ host is usually the better choice.
 | `STRIPE_WEBHOOK_SECRET` | Only if `payment_provider` is `"stripe"` | The signing secret for your Stripe webhook endpoint (`whsec_...`). Without it, `/webhook/stripe` refuses everything — there is no default/fallback secret, same philosophy as `ADMIN_SECRET`. |
 | `MAX_UPLOAD_MB` | No | Largest single file you can upload on the Content page, in megabytes. Defaults to 100. Keep it well below your Volume's size. |
 | `SIGNUP_LIMIT_PER_HOUR` | No | Most sign-ups (all visitors together) the server will accept per hour. Defaults to 300. Raise it for a big launch. |
+| `MAX_RESTORE_MB` | No | Largest backup file the dashboard's "Restore from a backup" will accept, in megabytes. Defaults to 1024 (1 GB). |
 | `PORT` | No | Defaults to 5001. |
 | `FLASK_DEBUG` | No — leave unset in production | Set to `1` for local testing to get Flask's debugger/auto-reload back. Off by default on purpose — leaving it on in a public deployment can expose that interactive debugger to anyone who triggers an unhandled error. Never set this on Railway. |
 
@@ -203,6 +204,48 @@ Scripts/curl can still authenticate to `/revoke` with the
   disk with cards or burn your email quota. Raise it before a big launch.
 - The login cookie is marked secure on Railway, admin pages can't be shown
   inside another site's frame, and admin pages are never cached.
+
+## Backups: keep a copy of what you own
+
+Everything that matters lives in one place on your server: your **signing
+key**, your **members**, your settings, your content, the cards you issued
+and any files you uploaded. If that storage were ever lost (a deleted
+Railway project or Volume, for example), all of it would be gone, and every
+card you ever issued would stop working, because the key that signed them
+would be gone too. A backup is one `.zip` file you keep somewhere safe.
+
+**Make one:** Dashboard → scroll to **Backup & restore** at the bottom →
+**Download backup**. The first button saves your members, key, settings and
+content (usually well under a few MB). If you have uploaded files, a second
+button includes them too (as big as your uploads are). The checklist at the
+top of the dashboard reminds you until you have one under 30 days old.
+
+**Keep it safe and private.** The file contains your private signing key and
+your members' email addresses. Don't email it or leave it anywhere others can
+open it. A private cloud folder or an encrypted drive is fine. Make a fresh
+one now and then, and always after something important (for example before a
+big launch).
+
+**Restore it:** on the same server, or on a brand-new copy of the app (deploy
+the template again, log in, open **Backup & restore → Restore from a
+backup**), choose the file, type `RESTORE` and press the button. Your members,
+key, settings and content come back, old cards keep working, and the people
+whose cards you revoked stay revoked. A restore replaces what is on that
+server now; what it replaced is kept aside on the server (a folder named
+`.replaced-…`, only the latest one is kept) rather than deleted. If anything
+about the file looks wrong (damaged, not one of this app's backups, a missing
+key, files that try to escape the folder) nothing is changed and you get a
+plain message saying why.
+
+**Automate it (optional):** you can fetch the same file from a script with
+your admin password, for example on a schedule on your own computer:
+
+```
+curl -H "X-Admin-Secret: YOUR_ADMIN_SECRET" -o backup.zip "https://your-domain/admin/backup/download?files=1"
+```
+
+(Leave off `?files=1` for the small one without uploaded files.) Wrong
+passwords from a script count toward the same lockout as the login page.
 
 ## 6. Taking payment for paid tiers
 

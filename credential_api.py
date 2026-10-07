@@ -44,8 +44,10 @@ import hmac
 import json
 import os
 import secrets
+import tempfile
 import threading
 import time
+from urllib.parse import quote as _q
 
 # On Railway, a service with a Volume attached automatically gets
 # RAILWAY_VOLUME_MOUNT_PATH (e.g. "/data"). If DATA_DIR wasn't set by hand,
@@ -72,6 +74,7 @@ import config_store
 import content_store
 import content_page
 import email_sender
+import backup
 import limits
 import logo_utils
 import security
@@ -123,6 +126,14 @@ except ValueError:
 MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
 FILE_TOKEN_TTL   = 15 * 60     # seconds a member's download link stays valid
 
+# Largest backup zip that "Restore from a backup" accepts (a backup that
+# includes uploaded files can be big). See SETUP.md.
+try:
+    MAX_RESTORE_MB = max(10, int(os.environ.get("MAX_RESTORE_MB", "1024")))
+except ValueError:
+    MAX_RESTORE_MB = 1024
+MAX_RESTORE_BYTES = MAX_RESTORE_MB * 1024 * 1024
+
 @app.before_request
 def _limit_request_size():
     """Cap how much any request may send, per route. Nothing used to be
@@ -131,6 +142,8 @@ def _limit_request_size():
     path = request.path
     if path == "/admin/content/upload":
         request.max_content_length = MAX_UPLOAD_BYTES + 1024 * 1024
+    elif path == "/admin/backup/restore":
+        request.max_content_length = MAX_RESTORE_BYTES + 1024 * 1024
     elif path.startswith("/admin/dashboard"):
         request.max_content_length = 40 * 1024 * 1024
     else:
@@ -138,6 +151,8 @@ def _limit_request_size():
 
 @app.errorhandler(413)
 def _too_big(_e):
+    if request.path == "/admin/backup/restore":
+        return redirect("/admin/dashboard?backup_note=" + _q(f"That backup file is too big for this server to accept (the limit is {MAX_RESTORE_MB} MB).") + "#backup")
     msg = (f"That file is too big (the limit is {MAX_UPLOAD_MB} MB)." if request.path == "/admin/content/upload"
            else "That request is too large.")
     return jsonify({"success": False, "error": msg}), 413
@@ -1410,6 +1425,13 @@ def _setup_checklist_html(cfg: dict, provider: str) -> str:
     ))
 
     items.append((
+        backup.backup_is_recent(DATA_DIR),
+        "Download a backup",
+        "Your members, signing key and settings live in one place on this server. Download a backup file (Backup & restore, at the bottom of this page) "
+        "and keep it somewhere safe. This ticks again when your last backup is under 30 days old.",
+    ))
+
+    items.append((
         bool(os.environ.get("BREVO_API_KEY") and os.environ.get("GMAIL_ADDRESS")),
         "Email (optional)",
         "Not set up, so members won't be emailed their card and link. That's fine: copy each member's link from Members → \"Copy link\" and send it yourself. "
@@ -1611,6 +1633,51 @@ def _dashboard_page() -> str:
         saved_banner += ('<div class="banner" style="background:#3a2a10;color:#f0c674;text-transform:none;">'
                          '⚠ ' + esc_html(request.args.get("logo_note")[:300]) + '</div>')
 
+    if request.args.get("backup_note"):
+        good = bool(request.args.get("backup_ok"))
+        saved_banner += (f'<div class="banner" style="{"" if good else "background:#3a2a10;color:#f0c674;"}text-transform:none;">'
+                         + ('✓ ' if good else '⚠ ') + esc_html(request.args.get("backup_note")[:400]) + '</div>')
+
+    # Backup & restore box (below the main form).
+    def _hb(n: int) -> str:
+        for unit in ("bytes", "KB", "MB", "GB"):
+            if n < 1024 or unit == "GB":
+                return f"{n:.0f} {unit}" if unit in ("bytes", "KB") else f"{n:.1f} {unit}"
+            n /= 1024
+    _sz = backup.sizes(DATA_DIR)
+    _last = backup.last_backup_at(DATA_DIR)
+    if _last:
+        _age = (datetime.now(timezone.utc) - _last).days
+        _when = _last.strftime("%Y-%m-%d %H:%M UTC") + (" (today)" if _age == 0 else f" ({_age} day{'s' if _age != 1 else ''} ago)")
+        _last_html = (f'<div class="hint">Last backup downloaded: <b>{esc_html(_when)}</b>'
+                      + (' <span style="color:#f0c674;">— it\'s getting old, download a fresh one.</span>' if _age >= 30 else '') + '</div>')
+    else:
+        _last_html = '<div class="hint" style="color:#f0c674;">You have not downloaded a backup yet.</div>'
+    _up_btn = (f'<a class="bk-btn" href="/admin/backup/download?files=1">Download backup with uploaded files ({_hb(_sz["data_bytes"] + _sz["uploads_bytes"])})</a>'
+               if _sz["uploads_bytes"] else '')
+    backup_html = f"""
+  <div id="backup" class="backup-box">
+    <h2>Backup &amp; restore</h2>
+    <div class="hint">Your members ({_sz["members"]}), your signing key, settings and content live in one place on this server. If that storage were ever lost, they would be gone, and every card you issued would stop working. A backup is one file you keep somewhere safe.</div>
+    {_last_html}
+    <div class="hint" style="margin:8px 0;color:#f0c674;">The backup file contains your private signing key and your members' email addresses. Keep it private, and don't email it or put it anywhere others can open it.</div>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;margin:10px 0;">
+      <a class="bk-btn" href="/admin/backup/download">Download backup ({_hb(_sz["data_bytes"])}: members, key, settings)</a>
+      {_up_btn}
+    </div>
+    <details class="bk-restore">
+      <summary>Restore from a backup</summary>
+      <div class="hint" style="margin:8px 0;">Use this on a new or empty copy of the app to get your members, key and settings back, or to go back to an earlier state. It replaces what is on this server now (the replaced data is kept aside, not deleted). Download a backup of the current state first if you're not sure.</div>
+      <form method="POST" action="/admin/backup/restore" enctype="multipart/form-data">
+        <label>Backup file (.zip)</label>
+        <input type="file" name="backup" accept=".zip,application/zip" required>
+        <label>Type RESTORE to confirm</label>
+        <input name="confirm" autocomplete="off" placeholder="RESTORE" style="max-width:200px;" required>
+        <button type="submit" class="bk-btn" style="margin-top:12px;">Restore this backup</button>
+      </form>
+    </details>
+  </div>"""
+
     g_logo = cfg.get("logo_data_uri") if logo_utils.is_logo_data_uri(cfg.get("logo_data_uri")) else ""
     global_logo_thumb = (f'<img class="logo-thumb" id="global-logo-thumb" src="{esc_html(g_logo)}">' if g_logo
                          else '<span class="no-logo">none — cards show no logo</span>')
@@ -1652,6 +1719,10 @@ def _dashboard_page() -> str:
   .add-tier, .save-btn {{ background:{accent}; color:#0a0908; border:none; font-family:'Courier New',monospace;
            font-size:11px; letter-spacing:1.5px; text-transform:uppercase; padding:10px 18px; cursor:pointer; margin-top:12px; }}
   .add-tier {{ background:transparent; border:1px solid {accent}; color:{accent}; }}
+  .bk-btn {{ display:inline-block; background:transparent; border:1px solid {accent}; color:{accent}; font-family:'Courier New',monospace;
+             font-size:11px; letter-spacing:1px; text-transform:uppercase; padding:10px 14px; cursor:pointer; text-decoration:none; }}
+  .bk-btn:hover {{ background:{accent}22; }}
+  .bk-restore summary {{ cursor:pointer; color:#a8a094; font-size:11px; letter-spacing:1px; text-transform:uppercase; margin:6px 0; }}
   .placeholder {{ color:#6b6058; font-size:11px; line-height:1.7; border-left:2px solid #3a1210; padding:10px 14px; }}
   .banner {{ background:#13371f; color:#5fd98a; font-size:11px; padding:10px 14px; margin-bottom:16px; letter-spacing:1px; text-transform:uppercase; }}
   .design-toggle {{ background:transparent; border:1px solid #3a1210; color:#a8a094; font-family:'Courier New',monospace;
@@ -1784,6 +1855,7 @@ def _dashboard_page() -> str:
     <h2></h2>
     <button type="submit" class="save-btn">Save changes</button>
   </form>
+  {backup_html}
 
   <template id="tier-row-template">
     <tr class="tier-row">
@@ -2228,6 +2300,82 @@ def admin_content_upload():
         return jsonify({"success": False, "error": error}), 400
     return jsonify({"success": True, "file": meta, "used_bytes": content_store.used_bytes()})
 
+
+# ── Backup and restore (see backup.py) ──
+# Download one zip with everything this deployment owns. Works from the
+# dashboard (logged in) and from a script with the admin secret header, so a
+# creator can also automate it: curl -H "X-Admin-Secret: …" -o backup.zip
+# "https://your-domain/admin/backup/download?files=1"
+@app.route("/admin/backup/download", methods=["GET"])
+def admin_backup_download():
+    if not check_admin(request):
+        return redirect("/admin/login?next=/admin/dashboard")
+    include_uploads = request.args.get("files") == "1"
+    sz = backup.sizes(DATA_DIR)
+    need = sz["data_bytes"] + (sz["uploads_bytes"] if include_uploads else 0)
+    if backup.free_bytes(DATA_DIR) < need + backup.SPARE_BYTES:
+        return redirect("/admin/dashboard?backup_note=" + _q("There isn't enough free storage on this server to prepare that backup. "
+                        "Try the one without uploaded files.") + "#backup")
+    for stale in DATA_DIR.glob(".backup-*.zip"):          # leftovers from an interrupted earlier backup
+        try:
+            if time.time() - stale.stat().st_mtime > 600:
+                stale.unlink()
+        except OSError:
+            pass
+    fd, tmp_path = tempfile.mkstemp(dir=str(DATA_DIR), prefix=".backup-", suffix=".zip")
+    try:
+        with os.fdopen(fd, "wb") as f:
+            backup.build_backup(DATA_DIR, f, include_uploads=include_uploads,
+                                creator_name=load_config().get("creator_name", ""))
+    except Exception as e:
+        try: os.remove(tmp_path)
+        except OSError: pass
+        print("Backup failed:", e)
+        return redirect("/admin/dashboard?backup_note=" + _q(f"The backup could not be prepared: {e}") + "#backup")
+    backup.record_backup(DATA_DIR)
+    stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    name = f"credential-backup-{stamp}{'-with-files' if include_uploads else ''}.zip"
+    from flask import send_file
+    # Open the finished zip, then delete its name: on Linux the open handle
+    # keeps the bytes readable until the download ends, and nothing is left
+    # behind to clean up afterwards. (Where a file can't be deleted while it
+    # is open, e.g. Windows, it stays and is swept up by the next download.)
+    fh = open(tmp_path, "rb")
+    try:
+        os.remove(tmp_path)
+    except OSError:
+        pass
+    resp = send_file(fh, mimetype="application/zip", as_attachment=True, download_name=name, conditional=False)
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
+
+@app.route("/admin/backup/restore", methods=["POST"])
+def admin_backup_restore():
+    if not check_admin(request):
+        return redirect("/admin/login?next=/admin/dashboard")
+    def back(msg, good=False):
+        return redirect("/admin/dashboard?" + ("backup_ok=1&" if good else "") + "backup_note=" + _q(msg[:400]) + "#backup")
+    if (request.form.get("confirm") or "").strip().upper() != "RESTORE":
+        return back("Nothing was restored. Type RESTORE in the box to confirm.")
+    up = request.files.get("backup")
+    if not up or not up.filename:
+        return back("Nothing was restored. Choose a backup file first.")
+    fd, tmp_path = tempfile.mkstemp(dir=str(DATA_DIR), prefix=".upload-", suffix=".zip")
+    os.close(fd)
+    try:
+        up.save(tmp_path)
+        info = backup.restore_backup(Path(tmp_path), DATA_DIR, MAX_RESTORE_BYTES * 2, lock=_signup_lock)
+    except backup.BackupError as e:
+        return back(str(e))
+    except Exception as e:
+        print("Restore failed:", e)
+        return back(f"The restore failed and nothing was changed ({e}).")
+    finally:
+        try: os.remove(tmp_path)
+        except OSError: pass
+    n = info.get("members")
+    return back(f"Backup restored ({n if n is not None else 'unknown number of'} members). "
+                "Your previous data was kept aside on the server in case you need it.", good=True)
 
 @app.route("/config", methods=["GET"])
 def get_config():
