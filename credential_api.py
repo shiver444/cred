@@ -38,10 +38,13 @@ from flask_cors import CORS
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
 from html import escape as esc_html
+import base64
+import hashlib
 import hmac
 import json
 import os
 import secrets
+import time
 
 # On Railway, a service with a Volume attached automatically gets
 # RAILWAY_VOLUME_MOUNT_PATH (e.g. "/data"). If DATA_DIR wasn't set by hand,
@@ -101,6 +104,35 @@ app.secret_key = _session_secret
 app.config["SESSION_COOKIE_HTTPONLY"] = True
 app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
 app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(hours=12)
+
+# Uploaded members-only files (Content page). One file may be this big;
+# the Railway Volume's own size is the real ceiling, so set MAX_UPLOAD_MB
+# to suit it. See SETUP.md.
+try:
+    MAX_UPLOAD_MB = max(1, int(os.environ.get("MAX_UPLOAD_MB", "100")))
+except ValueError:
+    MAX_UPLOAD_MB = 100
+MAX_UPLOAD_BYTES = MAX_UPLOAD_MB * 1024 * 1024
+FILE_TOKEN_TTL   = 15 * 60     # seconds a member's download link stays valid
+
+@app.before_request
+def _limit_request_size():
+    """Cap how much any request may send, per route. Nothing used to be
+    capped, and a JSON endpoint reads its whole body into memory. Only the
+    upload route takes big bodies; the dashboard form can carry a few logos."""
+    path = request.path
+    if path == "/admin/content/upload":
+        request.max_content_length = MAX_UPLOAD_BYTES + 1024 * 1024
+    elif path.startswith("/admin/dashboard"):
+        request.max_content_length = 40 * 1024 * 1024
+    else:
+        request.max_content_length = 4 * 1024 * 1024
+
+@app.errorhandler(413)
+def _too_big(_e):
+    msg = (f"That file is too big (the limit is {MAX_UPLOAD_MB} MB)." if request.path == "/admin/content/upload"
+           else "That request is too large.")
+    return jsonify({"success": False, "error": msg}), 413
 
 # Stripe — payments are entirely opt-in. With these unset, /checkout still
 # works for free (price 0) tiers; any tier with a price simply returns a
@@ -1917,7 +1949,8 @@ def admin_content():
         return redirect_resp
     cfg = load_config()
     resp = app.response_class(
-        content_page.render(cfg["accent_color"], cfg["card_title"], content_store.load(), cfg.get("tiers") or []),
+        content_page.render(cfg["accent_color"], cfg["card_title"], content_store.load(), cfg.get("tiers") or [],
+                            max_mb=MAX_UPLOAD_MB, used_bytes=content_store.used_bytes()),
         mimetype="text/html")
     resp.headers["Cache-Control"] = "no-store"
     return resp
@@ -1932,7 +1965,19 @@ def admin_content_save():
     if not isinstance(payload, dict) or not isinstance(payload.get("sections"), list):
         return jsonify({"success": False, "error": "Expected JSON like {\"sections\": [...]}."}), 400
     clean, warnings = content_store.save(payload)
+    content_store.cleanup_orphans(clean)   # files no item uses any more (after a grace period)
     return jsonify({"success": True, "content": clean, "warnings": warnings})
+
+# Upload a file for an item on the Content page. The file is stored right
+# away, but only becomes part of the content once the page is saved.
+@app.route("/admin/content/upload", methods=["POST"])
+def admin_content_upload():
+    if not check_admin(request):
+        return jsonify({"success": False, "error": "Not logged in."}), 401
+    meta, error = content_store.save_upload(request.files.get("file"), MAX_UPLOAD_BYTES)
+    if not meta:
+        return jsonify({"success": False, "error": error}), 400
+    return jsonify({"success": True, "file": meta, "used_bytes": content_store.used_bytes()})
 
 
 @app.route("/config", methods=["GET"])
@@ -1960,13 +2005,66 @@ def get_content():
     return resp
 
 
+# ── Who may see members-only content ──
+def _member_entry(cid: str, h: str = None):
+    """The registry entry for a credential that is currently good: exists,
+    not revoked, not expired, not on the revocation list — and, when `h`
+    (the access code from the member's link / card / bundle) is given, the
+    code matches. None otherwise. Checked against the live registry every
+    time, so revoking or expiring someone cuts them off immediately."""
+    try:
+        from member_registry import get_by_id
+        from credential_verifier import is_on_revocation_list
+        entry = get_by_id(cid)
+        if not entry or entry.get("revoked"):
+            return None
+        if datetime.fromisoformat(entry["expires_at"]) < datetime.now(timezone.utc):
+            return None
+        if h is not None:
+            stored = (entry.get("bundle_hash") or "").lower()
+            n = min(len(h), 32)
+            if len(h) < 16 or len(stored) < 16 or not hmac.compare_digest(stored[:n], h[:n]):
+                return None
+        if is_on_revocation_list(cid, entry.get("bundle_hash")):
+            return None
+        return entry
+    except Exception:
+        return None
+
+
+def _file_token(cid: str, fid: str) -> str:
+    """A short-lived, signed download ticket for one member and one file.
+    A plain link can't carry the member's credentials safely, so
+    /member-content hands out these instead."""
+    msg = f"{cid}|{fid}|{int(time.time()) + FILE_TOKEN_TTL}"
+    sig = hmac.new(app.secret_key.encode(), b"file-download|" + msg.encode(), hashlib.sha256).hexdigest()
+    return base64.urlsafe_b64encode(msg.encode()).decode().rstrip("=") + "." + sig
+
+
+def _check_file_token(token: str, fid: str):
+    """The credential id a download ticket was issued to, or None if it is
+    forged, for a different file, or expired."""
+    try:
+        body, sig = token.split(".", 1)
+        msg = base64.urlsafe_b64decode(body + "=" * (-len(body) % 4)).decode()
+        want = hmac.new(app.secret_key.encode(), b"file-download|" + msg.encode(), hashlib.sha256).hexdigest()
+        if not hmac.compare_digest(sig, want):
+            return None
+        cid, tok_fid, exp = msg.split("|")
+        if tok_fid != fid or int(exp) < time.time():
+            return None
+        return cid
+    except Exception:
+        return None
+
+
 # ── POST /member-content ──
 # The members-only content a credential unlocks. Needs BOTH the credential
 # id and its access hash (the `h` in the member's link / card QR), checked
-# against the live registry on every call — so revoking or expiring a
-# credential cuts off content at once — and returns only the sections that
-# credential's tier includes. Any failure gets the same generic answer, so
-# this can't be used to probe which ids exist.
+# against the live registry on every call, and returns only the sections
+# that credential's tier includes. Any failure gets the same generic
+# answer, so this can't be used to probe which ids exist. Uploaded files
+# come back as a `download` path with a short-lived ticket (/member-file).
 @app.route("/member-content", methods=["POST"])
 def member_content():
     denied = lambda: (jsonify({"success": False, "error": "Access denied."}), 403)
@@ -1975,26 +2073,58 @@ def member_content():
     h    = str(data.get("bundle_hash") or "").strip().lower()
     if not cid or len(h) < 16:
         return denied()
+    entry = _member_entry(cid, h)
+    if not entry:
+        return denied()
     try:
-        from member_registry import get_by_id
-        from credential_verifier import is_on_revocation_list
-        entry = get_by_id(cid)
-        if not entry or entry.get("revoked"):
-            return denied()
-        if datetime.fromisoformat(entry["expires_at"]) < datetime.now(timezone.utc):
-            return denied()
-        stored = (entry.get("bundle_hash") or "").lower()
-        n = min(len(h), 32)
-        if len(stored) < 16 or not hmac.compare_digest(stored[:n], h[:n]):
-            return denied()
-        if is_on_revocation_list(cid, entry.get("bundle_hash")):
-            return denied()
-        sections = content_store.sections_for_member(content_store.load(), entry.get("sections", []))
+        sections = []
+        for sec in content_store.sections_for_member(content_store.load(), entry.get("sections", [])):
+            sec = dict(sec)
+            if sec.get("type") == "links":
+                items = []
+                for it in sec.get("items", []):
+                    it = dict(it)
+                    f = it.pop("file", None)
+                    if f:
+                        it["file"] = {"name": f["name"], "size": f["size"]}
+                        it["download"] = f"/member-file/{f['id']}?t={_file_token(cid, f['id'])}"
+                    items.append(it)
+                sec["items"] = items
+            sections.append(sec)
         resp = jsonify({"success": True, "sections": sections})
         resp.headers["Cache-Control"] = "no-store"
         return resp
     except Exception:
         return denied()
+
+
+# ── GET /member-file/<id>?t=<ticket> ──
+# Download an uploaded file. Needs a ticket from /member-content (so the
+# caller proved a valid credential moments ago), and re-checks that the
+# credential is STILL good and that the file sits in a section its tier
+# includes. Always sent as a download of unknown type — never displayed by
+# the browser — so an uploaded .html file can't run on this site.
+@app.route("/member-file/<fid>", methods=["GET"])
+def member_file(fid):
+    from flask import send_file
+    def denied():
+        r = app.response_class("Access denied.", status=403, mimetype="text/plain")
+        r.headers["Cache-Control"] = "no-store"
+        return r
+    cid = _check_file_token(request.args.get("t", ""), fid)
+    entry = _member_entry(cid) if cid else None
+    if not entry:
+        return denied()
+    item = content_store.find_file_item(content_store.load(), fid, entry.get("sections", []))
+    path = content_store.path_for(fid)
+    if not item or path is None or not path.is_file():
+        return denied()
+    resp = send_file(path, mimetype="application/octet-stream", as_attachment=True,
+                     download_name=item["file"]["name"], conditional=True, max_age=0)
+    resp.headers["Cache-Control"] = "private, no-store"
+    resp.headers["X-Content-Type-Options"] = "nosniff"
+    return resp
+
 
 @app.route("/cp.js", methods=["GET"])
 def serve_widget():
@@ -2030,7 +2160,7 @@ if __name__ == "__main__":
     print("GET  /admin/login     — admin login (password = ADMIN_SECRET)")
     print("GET  /admin/dashboard — edit branding/tiers/pricing/payment provider")
     print("GET  /admin/members   — view/revoke credentials")
-    print("GET  /admin/content   — manage the members-only content")
+    print("GET  /admin/content   — manage the members-only content (and upload files for it)")
     print()
     print("Set these env vars before running (see SETUP.md):")
     print("  GMAIL_ADDRESS      — your verified Brevo sender address")

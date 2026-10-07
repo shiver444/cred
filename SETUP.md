@@ -95,10 +95,25 @@ Content is only sent to a member who proves they hold a valid credential
 (their access link, card file or bundle) for a tier that includes the
 section, and it is checked again every time the page loads — so revoking
 or expiring a member shuts them out immediately. The `/content` address
-no longer lists anything. One thing to know: a link you add can still be
-opened by whoever is given it, so for files that must stay private, use
-a link that's private on its own side (an unlisted or expiring share link).
-Uploading files straight to this server is a planned addition.
+no longer lists anything.
+
+**Links and uploaded files.** Each item in a Links section is either a link
+or an uploaded file (press "or upload a file instead…" on the item, pick the
+file, then **Save content**). Uploaded files are stored on your Volume and
+can only be downloaded by a verified member whose tier includes that
+section: the download link a member's page gets works for 15 minutes and
+stops working at once if you revoke them. Files are always sent as a
+download, never displayed, so an uploaded web page can't run on your site.
+A plain **link** you add is different: whoever is given it can open it, so for
+files that must stay private, upload them here or use a link that's private
+on its own side. Files you remove from an item are deleted from the server
+about an hour after you save.
+
+Mind your storage: uploads live on the same Volume as your members and
+signing key, and the Volume has a fixed size (see your Railway plan). The
+Content page shows how much the uploads use. One file can be up to
+`MAX_UPLOAD_MB` (default 100) megabytes. For big videos, a link to a video
+host is usually the better choice.
 
 ## 5. Set environment variables
 
@@ -112,6 +127,7 @@ Uploading files straight to this server is a planned addition.
 | `DATA_DIR` | Recommended in production | Path to persistent storage (e.g. a Railway Volume) so issued credentials, your signing key, and your dashboard settings survive redeploys. On Railway it's picked up automatically from an attached Volume if you don't set it; setting it yourself (to the Volume's mount path) always wins. Falls back to the local folder, which is fine for local dev only. |
 | `STRIPE_SECRET_KEY` | Only if `payment_provider` is `"stripe"` | Your Stripe secret key (`sk_test_...` or `sk_live_...`). Not needed at all with the default `"manual"` provider — see step 6. |
 | `STRIPE_WEBHOOK_SECRET` | Only if `payment_provider` is `"stripe"` | The signing secret for your Stripe webhook endpoint (`whsec_...`). Without it, `/webhook/stripe` refuses everything — there is no default/fallback secret, same philosophy as `ADMIN_SECRET`. |
+| `MAX_UPLOAD_MB` | No | Largest single file you can upload on the Content page, in megabytes. Defaults to 100. Keep it well below your Volume's size. |
 | `PORT` | No | Defaults to 5001. |
 | `FLASK_DEBUG` | No — leave unset in production | Set to `1` for local testing to get Flask's debugger/auto-reload back. Off by default on purpose — leaving it on in a public deployment can expose that interactive debugger to anyone who triggers an unhandled error. Never set this on Railway. |
 

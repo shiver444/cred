@@ -28,14 +28,15 @@ def _json_for_script(obj) -> str:
             .replace(" ", "\\u2029"))
 
 
-def render(accent: str, title: str, content: dict, tiers: list) -> str:
+def render(accent: str, title: str, content: dict, tiers: list, max_mb: int = 100, used_bytes: int = 0) -> str:
     tier_info = [{"name": t.get("name", ""), "sections": list(t.get("sections") or [])}
                  for t in (tiers or [])]
     return (_TEMPLATE
             .replace("__ACCENT__", esc_html(accent, quote=True))
             .replace("__TITLE__", esc_html(title))
             .replace("__CONTENT__", _json_for_script(content))
-            .replace("__TIERS__", _json_for_script(tier_info)))
+            .replace("__TIERS__", _json_for_script(tier_info))
+            .replace("__META__", _json_for_script({"max_mb": int(max_mb), "used_bytes": int(used_bytes)})))
 
 
 _TEMPLATE = r"""<!DOCTYPE html>
@@ -81,12 +82,20 @@ _TEMPLATE = r"""<!DOCTYPE html>
   .tiers { border:1px solid #3a1210; padding:12px 16px; margin:16px 0; font-size:12px; line-height:1.8; }
   .ok-k { color:#5fd98a; } .no-k { color:#e8232b; }
   .empty { color:#6b6058; font-size:11px; padding:8px 0; }
+  .chip { display:flex; align-items:center; gap:8px; flex-wrap:wrap; background:#1a100e; border:1px solid #3a1210; padding:7px 10px; font-size:12px; }
+  .chip .nm { word-break:break-all; }
+  .chip .sz { color:#6b6058; }
+  .small { background:transparent; border:1px solid #3a1210; color:#a8a094; font-size:10px; letter-spacing:1px; text-transform:uppercase; padding:5px 9px; }
+  .small:hover { border-color:var(--accent); color:var(--accent); }
+  .upmsg { font-size:11px; margin-top:4px; min-height:14px; color:#6b6058; }
+  .upmsg.err { color:#e8232b; }
 </style></head>
 <body>
   <div class="nav"><a href="/admin/dashboard">← Dashboard</a><a href="/admin/members">Members →</a><a href="/admin/logout">Log out</a></div>
   <h1>__TITLE__ — Content</h1>
   <div class="hint">What members see after they verify. Each <b>section</b> has a <b>key</b> (a short lowercase name, like <b>downloads</b>); a tier unlocks the sections whose keys are listed in its "Sections" field on the Dashboard. Changes only take effect when you press <b>Save content</b>.</div>
-  <div class="hint">Members' content is only sent to someone holding a valid, unrevoked, unexpired credential for a tier that includes the section, so it is no longer readable by the public. A link you add here can still be opened by anyone who is given it, so for truly private files use a link that is private on its own side (a private share link, an unlisted video, ...). Uploading files straight to this server is a planned addition.</div>
+  <div class="hint">Members' content is only sent to someone holding a valid, unrevoked, unexpired credential for a tier that includes the section. An item can be a <b>link</b> or an <b>uploaded file</b>. Uploaded files live on this server and can only be downloaded by a verified member of a tier that includes the section (the download link a member gets stops working after 15 minutes, and revoking a member cuts them off). A plain <b>link</b> you add can still be opened by anyone who is given it, so for truly private files, upload them here or use a link that is private on its own side.</div>
+  <div class="hint" id="storage-info"></div>
 
   <div class="tiers" id="tier-check"></div>
 
@@ -109,11 +118,13 @@ _TEMPLATE = r"""<!DOCTYPE html>
 
 <script id="init-content" type="application/json">__CONTENT__</script>
 <script id="init-tiers" type="application/json">__TIERS__</script>
+<script id="init-meta" type="application/json">__META__</script>
 <script>
 (function () {
   var KEY_RE = /^[a-z0-9][a-z0-9_-]{0,31}$/;
   var state = JSON.parse(document.getElementById('init-content').textContent);
   var tiers = JSON.parse(document.getElementById('init-tiers').textContent);
+  var meta = JSON.parse(document.getElementById('init-meta').textContent);
   var dirty = false;
 
   var root = document.getElementById('sections');
@@ -149,6 +160,63 @@ _TEMPLATE = r"""<!DOCTYPE html>
     return el('div', { class: opts.wide ? 'wide' : '' }, [el('label', { text: label }), inp]);
   }
 
+  function fmtSize(n) {
+    if (n >= 1073741824) return (n / 1073741824).toFixed(1) + ' GB';
+    if (n >= 1048576) return (n / 1048576).toFixed(1) + ' MB';
+    if (n >= 1024) return Math.round(n / 1024) + ' KB';
+    return n + ' B';
+  }
+  function renderStorage() {
+    document.getElementById('storage-info').textContent =
+      'Uploaded files take ' + fmtSize(meta.used_bytes) + ' of this server\'s storage so far. One file can be up to ' + meta.max_mb + ' MB.';
+  }
+  // Upload one file; reports progress; calls done(file meta or null, error text).
+  function uploadFile(file, onProgress, done) {
+    if (file.size > meta.max_mb * 1048576) { done(null, 'That file is ' + fmtSize(file.size) + ' — the limit is ' + meta.max_mb + ' MB.'); return; }
+    var fd = new FormData(); fd.append('file', file);
+    var xhr = new XMLHttpRequest();
+    xhr.open('POST', '/admin/content/upload');
+    xhr.upload.onprogress = function (e) { if (e.lengthComputable) onProgress(Math.round(e.loaded * 100 / e.total)); };
+    xhr.onload = function () {
+      var j; try { j = JSON.parse(xhr.responseText); } catch (e) { j = { success: false, error: 'The server sent an unexpected answer (status ' + xhr.status + ').' }; }
+      if (xhr.status === 401) { done(null, 'You were logged out — log in again, then upload.'); return; }
+      if (j.success) { if (typeof j.used_bytes === 'number') { meta.used_bytes = j.used_bytes; renderStorage(); } done(j.file, ''); }
+      else done(null, j.error || 'Upload failed.');
+    };
+    xhr.onerror = function () { done(null, 'Could not reach the server — nothing was uploaded.'); };
+    xhr.send(fd);
+  }
+  // The "link or file" part of one item
+  function itemSource(it) {
+    var wrap = el('div', { class: 'wide' });
+    var msg = el('div', { class: 'upmsg' });
+    var picker = el('input', { type: 'file', style: 'display:none' });
+    picker.addEventListener('change', function () {
+      var f = picker.files[0]; if (!f) return;
+      msg.className = 'upmsg'; msg.textContent = 'Uploading… 0%';
+      uploadFile(f, function (pct) { msg.textContent = 'Uploading… ' + pct + '%'; }, function (file, error) {
+        picker.value = '';
+        if (!file) { msg.className = 'upmsg err'; msg.textContent = error; return; }
+        it.file = file; it.url = ''; touch(); render();
+      });
+    });
+    if (it.file) {
+      wrap.appendChild(el('label', { text: 'File (members download it from here)' }));
+      wrap.appendChild(el('div', { class: 'chip' }, [
+        el('span', { text: '📎' }),
+        el('span', { class: 'nm', text: it.file.name }),
+        el('span', { class: 'sz', text: fmtSize(it.file.size) }),
+        el('button', { type: 'button', class: 'small', text: 'Replace', on: { click: function () { picker.click(); } } }),
+        el('button', { type: 'button', class: 'small', text: 'Remove file', on: { click: function () { delete it.file; touch(); render(); } } })
+      ]));
+    } else {
+      wrap.appendChild(field('Link (https://…)', it, 'url', { max: 2000, placeholder: 'https://…' }));
+      wrap.appendChild(el('button', { type: 'button', class: 'small', style: 'margin-top:6px', text: 'or upload a file instead…', on: { click: function () { picker.click(); } } }));
+    }
+    wrap.appendChild(picker); wrap.appendChild(msg);
+    return wrap;
+  }
+
   function renderLinks(sec) {
     var box = el('div');
     box.appendChild(field('Button text on each item (optional, e.g. "↓ Download")', sec, 'button', { max: 30 }));
@@ -158,8 +226,8 @@ _TEMPLATE = r"""<!DOCTYPE html>
       box.appendChild(el('div', { class: 'item' }, [
         el('div', { class: 'fields' }, [
           field('Title', it, 'title', { max: 160, placeholder: 'Episode 12 — Raw Footage' }),
-          field('Link (https://…)', it, 'url', { max: 2000, placeholder: 'https://…' }),
-          field('Short note (optional)', it, 'note', { wide: true, placeholder: '1.2 GB · MP4' })
+          itemSource(it),
+          field('Short note (optional)', it, 'note', { wide: true, placeholder: 'Raw footage, 12 minutes' })
         ]),
         el('div', { class: 'tools' }, [
           el('button', { type: 'button', class: 'mini', text: '↑', title: 'Move up', on: { click: function () { move(sec.items, i, -1); } } }),
@@ -269,6 +337,7 @@ _TEMPLATE = r"""<!DOCTYPE html>
   });
 
   window.addEventListener('beforeunload', function (e) { if (dirty) { e.preventDefault(); e.returnValue = ''; } });
+  renderStorage();
   render();
 })();
 </script>

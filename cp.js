@@ -73,6 +73,14 @@
     return /^(https?:\/\/|mailto:)/i.test(u) ? u : ''
   }
 
+  function fmtSize(n) {
+    n = Number(n) || 0
+    if (n >= 1073741824) return (n / 1073741824).toFixed(1) + ' GB'
+    if (n >= 1048576) return (n / 1048576).toFixed(1) + ' MB'
+    if (n >= 1024) return Math.round(n / 1024) + ' KB'
+    return n ? n + ' B' : ''
+  }
+
   // ── Load config ──
   // Members-only content is NOT loaded here. It is requested only after a
   // member has proved they hold a valid credential (see loadMemberContent).
@@ -1077,15 +1085,23 @@
 
     if (sec.type === 'links') {
       const items = (sec.items || []).map(it => {
-        const url = safeUrl(it.url)
+        // An uploaded file arrives as a short-lived download path on the API
+        // (/member-file/…); anything else is a plain link the creator added.
+        const isFile = typeof it.download === 'string' &&
+                       /^\/member-file\/[a-f0-9]{24}\?t=[A-Za-z0-9_.=-]+$/.test(it.download)
+        const url = isFile ? API_BASE + it.download : safeUrl(it.url)
+        const fileInfo = isFile && it.file ? [it.file.name, fmtSize(it.file.size)].filter(Boolean).join(' · ') : ''
+        const meta = [it.note, fileInfo].filter(Boolean).join(' · ')
         const btn = url
-          ? `<a href="${esc(url)}" class="ca-dl-btn" target="_blank" rel="noopener">${esc(sec.button || 'Open →')}</a>`
+          ? (isFile
+              ? `<a href="${esc(url)}" class="ca-dl-btn" rel="noopener">${esc(sec.button || '↓ Download')}</a>`
+              : `<a href="${esc(url)}" class="ca-dl-btn" target="_blank" rel="noopener">${esc(sec.button || 'Open →')}</a>`)
           : ''
         return `
         <div class="ca-track">
           <div>
             <div class="ca-track-title">${esc(it.title)}</div>
-            <div class="ca-track-meta">${esc(it.note || '')}</div>
+            <div class="ca-track-meta">${esc(meta)}</div>
           </div>
           ${btn}
         </div>`
