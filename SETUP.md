@@ -310,7 +310,8 @@ deliberately **not hardcoded to one processor** — creators using this
 template are in different countries, under different regulations, and not
 every processor serves every category of business (Stripe in particular
 won't serve some categories at all — adult content among them). There are
-two providers built in, and a documented way to add more.
+three providers built in (Manual approval, Custom payment link and Stripe),
+and a documented way to add more.
 
 ### 6a. "Manual approval" — the default, and the one that works everywhere
 
@@ -318,7 +319,7 @@ With `payment_provider` left at `"manual"` (or anything else unrecognized —
 it fails *safe* to this, never to an unconfigured automated provider), no
 payment account of any kind is required. The flow: a member requests a
 paid tier, this app records a pending request and shows them whatever text
-you put in **Manual payment instructions** in the dashboard (e.g. "Send
+you put in **Payment instructions** in the dashboard (e.g. "Send
 $9.99 via PayPal to me@example.com, or by e-transfer to..., then message
 me your email"). You confirm payment arrived however it actually does for
 you, then click **Approve** next to that request in the dashboard's
@@ -334,6 +335,36 @@ are available, or simply not wanting to hand a third party your business
 details yet. The trade-off is it's manual — there's no automatic "payment
 received" signal, so there will be a delay between someone paying and you
 approving.
+
+### 6a-2. "Custom payment link" — any service that gives you a link
+
+Pick **Custom payment link** in the dashboard's Payment section when your
+payment service (PayPal.me, Ko-fi, Buy Me a Coffee, Gumroad, a regional or
+adult-friendly processor, a payment page of your own) can give you a link to
+send people to. Fill in:
+
+- **Name of the service** — shown on the member's button ("Pay with PayPal").
+- **Payment link** — where the member goes to pay. Must start with `https://`.
+  You can put these words in curly brackets and they are filled in for each
+  person: `{amount}`, `{currency}`, `{tier}`, `{email}`, `{name}` and
+  `{reference}`, for example `https://paypal.me/yourname/{amount}{currency}`.
+  Leave it blank to show only your written instructions.
+- **A different link for a specific tier** (optional) — one per line, like
+  `MEMBER = https://ko-fi.com/s/abc123`. Useful when each tier is its own
+  product in that service. A tier without a line uses the main link.
+- **Payment instructions** — the same text box as Manual approval; it appears
+  next to the pay button.
+
+What happens: the member picks a paid tier, enters name and email, and the
+request goes into the same pending list as Manual approval. The widget shows
+your instructions, a short **reference** code and a **Pay with ...** button
+that opens your link in a new tab. A link can't tell this app that the money
+arrived, so when you see the payment in that service you press **Approve** in
+the pending list — that sends the card. The **Reference** column in that list
+matches a payment to a request; put `{reference}` in the link when the service
+has a note or message field that carries it. Only `http(s)` links are ever
+accepted, and the web site part of the link can't contain a bracketed word, so
+a visitor's name can never decide where they are sent.
 
 ### 6b. Stripe — automatic card checkout
 
@@ -513,6 +544,10 @@ looks:
   look, Tiers, Payment, Emails, Dashboard style, Backup) that you open one at
   a time. When you change something, a **Save changes** bar appears; nothing is
   saved until you press it.
+  On a phone, the Members page shows each member as a card: tap a card to open
+  it and see the email, dates and the Copy link, Extend, Revoke and Delete
+  buttons. The Content page keeps its **Save content** button in reach at the
+  bottom of the screen.
 
 This only changes your own admin pages. Cards, emails and the member widget
 are not affected (the widget has its own look settings, see above). Your

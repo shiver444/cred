@@ -113,8 +113,10 @@ __THEME__</style></head>
 <body __BODY_ATTRS__>
   <div class="nav"><a href="/admin/dashboard">← Dashboard</a><a href="/admin/members">Members →</a><a href="/admin/logout">Log out</a></div>
   <h1>__TITLE__ — Content</h1>
+  <details class="chelp" open><summary>How this page works</summary>
   <div class="hint">What members see after they verify. Each <b>section</b> has a <b>key</b> (a short lowercase name, like <b>downloads</b>); a tier unlocks the sections whose keys are listed in its "Sections" field on the Dashboard. Changes only take effect when you press <b>Save content</b>.</div>
   <div class="hint">Members' content is only sent to someone holding a valid, unrevoked, unexpired credential for a tier that includes the section. An item can be a <b>link</b> or an <b>uploaded file</b>. Uploaded files live on this server and can only be downloaded by a verified member of a tier that includes the section (the download link a member gets stops working after 15 minutes, and revoking a member cuts them off). A plain <b>link</b> you add can still be opened by anyone who is given it, so for truly private files, upload them here or use a link that is private on its own side.</div>
+  </details>
   <div id="storage-info"></div>
 
   <div class="tiers" id="tier-check"></div>
@@ -382,6 +384,7 @@ __THEME__</style></head>
 
   window.addEventListener('beforeunload', function (e) { if (dirty) { e.preventDefault(); e.returnValue = ''; } });
   renderStorage();
+  try { var ch = document.querySelector('.chelp'); if (ch && document.body.getAttribute('data-layout') === 'app' && window.matchMedia && window.matchMedia('(max-width:899px)').matches) ch.open = false; } catch (e) {}
   render();
 })();
 </script>

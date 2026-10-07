@@ -49,7 +49,9 @@ can revoke any of them at any time.
   your deployment and kept on your own storage.
 - Paid tiers without needing a payment processor: members request a paid
   tier, you confirm you were paid however you like, and approve it with one
-  click. Stripe is built in as an optional automatic alternative.
+  click. A "custom payment link" option sends members to your own
+  PayPal, Ko-fi, Gumroad or other payment link first. Stripe is built in as an
+  optional automatic alternative.
 - Members-only content: links, files you upload (only verified members of the
   right tier can download them) and a merch discount, shown per tier.
 - Backup and restore: one downloadable file with your members, signing key,

@@ -870,6 +870,9 @@
         const t = tiers[Number(opt.dataset.i)]
         if (t.sold_out) return          // full: can't be picked
         selectedTier = t
+        // Picking again after a "Pay with ..." button appeared: back to the normal send button.
+        const sb = document.getElementById('ca-submit'), ok = document.getElementById('ca-signup-ok')
+        if (sb && sb.onclick !== requestCard) { sb.onclick = requestCard; sb.textContent = T.send; sb.disabled = false; if (ok) ok.style.display = 'none' }
         renderTierPicker()
       }
     })
@@ -1409,9 +1412,23 @@
         if (data.pending) {
           // Manual-approval provider — a request is now queued for the
           // creator; nothing is issued until they approve it.
-          okEl.innerHTML = esc(data.instructions || 'Request received. Your access will be issued once payment is confirmed.').replace(/\n/g, '<br>')
+          let msg = esc(data.instructions || 'Request received. Your access will be issued once payment is confirmed.').replace(/\n/g, '<br>')
+          // "Custom payment link" provider: a pay link comes with the request.
+          // Only plain http(s) links are ever opened, and in a new tab.
+          const payUrl = (typeof data.pay_url === 'string' && /^https?:\/\//i.test(data.pay_url)) ? data.pay_url : ''
+          if (payUrl) {
+            if (data.reference) msg += '<br><br>Your reference: <b>' + esc(String(data.reference)) + '</b>'
+            msg += '<br><br>Once your payment is received, your card is sent to you.'
+          }
+          okEl.innerHTML = msg
           okEl.style.display = 'block'
-          btn.textContent = 'Request sent'
+          if (payUrl) {
+            btn.textContent = String(data.pay_label || 'Pay now').slice(0, 60)
+            btn.disabled    = false
+            btn.onclick     = () => { window.open(payUrl, '_blank', 'noopener,noreferrer') }
+          } else {
+            btn.textContent = 'Request sent'
+          }
           return
         }
         if (data.email_sent === false) {

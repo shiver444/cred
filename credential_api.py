@@ -7,7 +7,9 @@ Flask HTTP server handling:
                        `payment_provider` config.json names — "manual"
                        (default: an admin-approval queue, no payment
                        account needed, works in any country) or "stripe"
-                       (automatic card checkout, needs STRIPE_SECRET_KEY).
+                       (automatic card checkout, needs STRIPE_SECRET_KEY), or
+                       "custom" (the member is sent to any payment link you
+                       enter; you approve once the money arrives).
   POST /webhook/stripe — Stripe calls this on payment completion. Only
                        relevant when payment_provider is "stripe".
   POST /admin/payment-requests/<id>/approve, /reject — admin decides a
@@ -82,6 +84,7 @@ import member_registry
 import reminders
 import security
 import widget_look
+import custom_payment
 import admin_theme
 
 app = Flask(__name__)
@@ -370,6 +373,12 @@ def load_config() -> dict:
         # add another one without touching this fallback logic.
         "payment_provider": cfg.get("payment_provider", "manual"),
         "manual_payment_instructions": cfg.get("manual_payment_instructions", ""),
+        # "custom" provider (custom_payment.py): the service's name, a default
+        # pay link and optional per-tier links. Cleaned on every read, so a
+        # hand-edited config.json can't smuggle in an unsafe link.
+        "custom_provider_name":  custom_payment.clean_name(cfg.get("custom_provider_name")),
+        "custom_payment_url":    custom_payment.clean_url(cfg.get("custom_payment_url")),
+        "custom_payment_links":  custom_payment.clean_links(cfg.get("custom_payment_links")),
         # Wording of the welcome email (edited under "Welcome email" in the
         # dashboard). Blank subject/intro mean "use the built-in text".
         "email_subject": cfg.get("email_subject", email_sender.DEFAULT_SUBJECT),
@@ -706,7 +715,7 @@ def checkout():
         except Exception as e:
             return err(f"Could not start checkout: {str(e)}", 500)
 
-    # provider == "manual", and the fallback for any unrecognized value —
+    # provider == "manual" or "custom", and the fallback for any unrecognized value —
     # the point of defaulting here rather than refusing is that this path
     # always works, in any country, with zero setup. Nothing is issued
     # yet; see /admin/payment-requests/<id>/approve below.
@@ -720,12 +729,23 @@ def checkout():
         "Contact the creator to arrange payment. Your access will be "
         "issued once payment is confirmed."
     )
-    return ok({
+    reply = {
         "provider":     "manual",
         "pending":      True,
         "request_id":   req["request_id"],
         "instructions": instructions,
-    })
+    }
+    if provider == "custom":
+        # Same queue as manual approval, plus a "Pay with <name>" link for the
+        # member (opened in a new tab by the widget). No link set up for this
+        # tier -> they just see the written instructions.
+        reply["provider"] = "custom"
+        reply["reference"] = req["request_id"]
+        pay_url = custom_payment.link_for(cfg, tier, name, email, price, currency, req["request_id"])
+        if pay_url:
+            reply["pay_url"] = pay_url
+            reply["pay_label"] = custom_payment.button_label(cfg)
+    return ok(reply)
 
 
 # ── POST /webhook/stripe ──
@@ -826,7 +846,7 @@ def admin_approve_payment_request(request_id):
             req["holder_name"], req["holder_email"], req["tier"], days, sections,
             cfg=cfg,
             payment_meta={
-                "provider":    "manual",
+                "provider":    "custom" if (cfg.get("payment_provider") or "") == "custom" else "manual",
                 "amount_paid": req.get("price"),
                 "currency":    req.get("currency"),
                 "approved_at": datetime.now(timezone.utc).isoformat(),
@@ -1267,21 +1287,30 @@ def admin_members():
             link_cell = (f'<button class="copy-link-btn" data-link="{esc_html(access_link)}">'
                          f'Copy link</button>')
 
+        if revoked:
+            st = "revoked"
+        elif not active_now:
+            st = "expired"
+        elif reminders.is_expiring_soon(m, soon_days, now_utc):
+            st = "soon"
+        else:
+            st = "active"
+        na = lambda cell: " na" if cell == "—" else ""
         rows += f"""
-        <tr>
-          <td>{name_esc}</td>
-          <td>{email_esc}</td>
-          <td>{tier_esc}</td>
-          <td>{sections_esc}</td>
-          <td>{(m.get('issued_at') or '')[:16].replace('T',' ')}</td>
-          <td class="exp-cell">{(m.get('expires_at') or '')[:16].replace('T',' ')}</td>
-          <td class="status-cell">{status_label}</td>
-          <td>{m.get('verified_count', 0)}</td>
-          <td title="{esc_html(ip_title)}">{ip_count}</td>
-          <td>{link_cell}</td>
-          <td>{extend_cell}</td>
-          <td>{revoke_cell}</td>
-          <td><button class="delete-btn" data-id="{cred_id}" data-name="{name_esc}">Delete</button></td>
+        <tr class="mrow" data-st="{st}">
+          <td class="c-name" data-label="Name">{name_esc}</td>
+          <td class="c-email" data-label="Email">{email_esc}</td>
+          <td class="c-tier" data-label="Tier">{tier_esc}</td>
+          <td class="c-sections" data-label="Sections">{sections_esc}</td>
+          <td class="c-issued" data-label="Issued">{(m.get('issued_at') or '')[:16].replace('T',' ')}</td>
+          <td class="exp-cell c-exp" data-label="Expires">{(m.get('expires_at') or '')[:16].replace('T',' ')}</td>
+          <td class="status-cell c-status" data-label="Status">{status_label}</td>
+          <td class="c-ver" data-label="Verified">{m.get('verified_count', 0)}</td>
+          <td class="c-ips" data-label="IPs" title="{esc_html(ip_title)}">{ip_count}</td>
+          <td class="c-link{na(link_cell)}" data-label="Access link">{link_cell}</td>
+          <td class="c-extend{na(extend_cell)}" data-label="Extend by (days)">{extend_cell}</td>
+          <td class="c-revoke{na(revoke_cell)}" data-label="Revoke">{revoke_cell}</td>
+          <td class="c-delete" data-label="Delete"><button class="delete-btn" data-id="{cred_id}" data-name="{name_esc}">Delete</button></td>
         </tr>"""
 
     accent = esc_html(cfg["accent_color"])
@@ -1391,17 +1420,31 @@ def admin_members():
   <div class="nav"><a href="/admin/dashboard">← Dashboard</a><a href="/admin/content">Content →</a><a href="/admin/logout">Log out</a></div>
   <h1>{title} — Members ({len(members)})</h1>
   <div class="count">Newest first. This reads whatever's currently in the live registry.</div>
+  <details class="mhelp" open><summary>What do these columns and buttons mean?</summary>
   <div class="count">"IPs" = distinct addresses seen verifying this credential (hover for the list) — 1-2 is normal for one person, a lot more is worth a look and a manual revoke if it's being shared.</div>
   <div class="count">"Extend" adds days to a member's access (renewal): same card and same link, only the end date moves. A card that already ran out restarts from today. The date printed on the member's original card file doesn't change — the live check uses the date kept here.</div>
   <div class="count">"Delete" erases a member for good: their entry, card and bundle files, and old payment-request records for their email. Their old card and link stop working for ever and their spot and email are free again. To just cut off access and keep the record, use Revoke. Backups you downloaded earlier still contain them.</div>
   <div class="count">"Copy link" copies that member's personal access link — send it to them yourself if no email service is set up, or if their email didn't arrive. Treat it like a password: anyone holding the link has that member's access.</div>
+  </details>
   {members_page_warning}
   {issue_box}
   <table>
-    <tr><th>Name</th><th>Email</th><th>Tier</th><th>Sections</th><th>Issued</th><th>Expires</th><th>Status</th><th>Verified ×</th><th>IPs</th><th>Access link</th><th>Extend by (days)</th><th>Revoke</th><th>Delete</th></tr>
+    <tr class="mhead"><th>Name</th><th>Email</th><th>Tier</th><th>Sections</th><th>Issued</th><th>Expires</th><th>Status</th><th>Verified ×</th><th>IPs</th><th>Access link</th><th>Extend by (days)</th><th>Revoke</th><th>Delete</th></tr>
     {rows}
   </table>
   <script>
+    (function() {{
+      // Phone + app layout: members are cards (tap one to open it) and the long help text starts folded.
+      const help = document.querySelector('.mhelp');
+      try {{ if (help && document.body.getAttribute('data-layout') === 'app' && window.matchMedia && window.matchMedia('(max-width:899px)').matches) help.open = false; }} catch (e) {{}}
+      document.querySelectorAll('tr.mrow').forEach(row => {{
+        row.addEventListener('click', e => {{
+          if (e.target.closest('button, input, a, label, select, textarea')) return;
+          row.classList.toggle('open');
+        }});
+      }});
+    }})();
+
     document.querySelectorAll('.copy-link-btn').forEach(btn => {{
       btn.addEventListener('click', () => {{
         const link = btn.dataset.link;
@@ -1785,9 +1828,12 @@ def admin_dashboard_save():
         "api_base":       (request.form.get("api_base") or "").strip(),
         "currency":       (request.form.get("currency") or "usd").strip().lower()[:3] or "usd",
         "payment_provider": (request.form.get("payment_provider") or "manual").strip().lower()
-                            if (request.form.get("payment_provider") or "").strip().lower() in ("manual", "stripe")
+                            if (request.form.get("payment_provider") or "").strip().lower() in ("manual", "stripe", "custom")
                             else "manual",
         "manual_payment_instructions": (request.form.get("manual_payment_instructions") or "").strip(),
+        "custom_provider_name": custom_payment.clean_name(request.form.get("custom_provider_name")),
+        "custom_payment_url":   custom_payment.clean_url(request.form.get("custom_payment_url")),
+        "custom_payment_links": custom_payment.clean_links(request.form.get("custom_payment_links")),
         "email_subject":  (request.form.get("email_subject") or "").strip()[:email_sender.MAX_SUBJECT],
         "email_intro":    (request.form.get("email_intro") or "").strip()[:email_sender.MAX_INTRO],
         "email_signoff":  (request.form.get("email_signoff") or "").strip()[:email_sender.MAX_SIGNOFF],
@@ -1856,9 +1902,12 @@ def _setup_checklist_html(cfg: dict, provider: str) -> str:
         if provider == "stripe":
             pay_done = bool(stripe and STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET)
             pay_detail = "Stripe needs the STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET environment variables — see SETUP.md — or switch the provider to Manual approval."
+        elif provider == "custom":
+            pay_done = bool(cfg.get("custom_payment_url") or cfg.get("custom_payment_links"))
+            pay_detail = "You have a paid tier on Custom payment link — paste the link people should pay at (and, if you like, a few words of instructions) under Payment, then Save."
         else:
             pay_done = bool((cfg.get("manual_payment_instructions") or "").strip())
-            pay_detail = "You have a paid tier on Manual approval — tell members how to pay you by filling in \"Manual payment instructions\" under Payment, then Save."
+            pay_detail = "You have a paid tier on Manual approval — tell members how to pay you by filling in \"Payment instructions\" under Payment, then Save."
         items.append((pay_done, "Payments for your paid tier", pay_detail))
 
     items.append((
@@ -1920,10 +1969,10 @@ def _dashboard_page() -> str:
     elif stripe and STRIPE_SECRET_KEY:
         payment_status_html = '<b style="color:var(--bad);">⚠ STRIPE_SECRET_KEY is set but STRIPE_WEBHOOK_SECRET is not</b> — checkout will start, but payments will never actually fulfill.<br>'
     else:
-        payment_status_html = '<b style="color:var(--soft);">✗ Stripe is not configured</b> — switch the provider below to "Manual approval" to sell paid tiers without it.<br>'
+        payment_status_html = '<b style="color:var(--soft);">Stripe is not set up</b> — that is fine unless you choose Stripe above; "Manual approval" and "Custom payment link" need no keys.<br>'
 
     provider = (cfg.get("payment_provider") or "manual").strip().lower()
-    if provider not in ("manual", "stripe"):
+    if provider not in ("manual", "stripe", "custom"):
         provider = "manual"
 
     checklist_html = _setup_checklist_html(cfg, provider)
@@ -1957,6 +2006,7 @@ def _dashboard_page() -> str:
               <td>{esc_html(r.get('holder_email',''))}</td>
               <td>{esc_html(r.get('tier',''))}</td>
               <td>{esc_html(amount)}</td>
+              <td><code>{esc_html(r.get('request_id',''))}</code></td>
               <td>{(r.get('requested_at') or '')[:16].replace('T',' ')}</td>
               <td>
                 <button type="button" class="approve-req-btn" data-id="{esc_html(r['request_id'])}">Approve</button>
@@ -1965,11 +2015,11 @@ def _dashboard_page() -> str:
             </tr>"""
         pending_requests_html = f"""
         <table>
-          <tr><th>Name</th><th>Email</th><th>Tier</th><th>Amount</th><th>Requested</th><th></th></tr>
+          <tr><th>Name</th><th>Email</th><th>Tier</th><th>Amount</th><th>Reference</th><th>Requested</th><th></th></tr>
           {req_rows}
         </table>"""
     else:
-        pending_requests_html = '<div class="hint">No pending manual payment requests right now.</div>'
+        pending_requests_html = '<div class="hint">No pending payment requests right now.</div>'
 
     try:
         from member_registry import list_all as _registry_list
@@ -2362,14 +2412,26 @@ def _dashboard_page() -> str:
     <label>Payment provider (how a paid tier actually gets fulfilled)</label>
     <select name="payment_provider">
       <option value="manual" {"selected" if provider == "manual" else ""}>Manual approval — works in any country, no payment account needed</option>
+      <option value="custom" {"selected" if provider == "custom" else ""}>Custom payment link — PayPal, Ko-fi, Gumroad or any service that gives you a link</option>
       <option value="stripe" {"selected" if provider == "stripe" else ""}>Stripe — automatic card checkout</option>
     </select>
-    <div class="hint" style="margin-top:4px;">"Manual approval" needs nothing set up: a member requests a paid tier, you confirm payment arrived however it actually did for you, and approve it in the queue below — that issues the credential. Switch to Stripe once you want automatic card checkout; Stripe isn't available (or allowed) everywhere, so manual is the default. See "Adding a new payment provider" in SETUP.md to wire in something else entirely (PayPal, a regional or adult-friendly processor, etc.) without touching this dropdown's code.</div>
+    <div class="hint" style="margin-top:4px;">"Manual approval" needs nothing set up: a member requests a paid tier, you confirm payment arrived however it actually did for you, and approve it in the queue below — that issues the credential. "Custom payment link" works the same way, but the member also gets a button that opens your PayPal / Ko-fi / Gumroad (or any other) payment link; you still press Approve once the money arrives. Switch to Stripe once you want automatic card checkout; Stripe isn't available (or allowed) everywhere, so manual is the default.</div>
 
     <label>Currency (3-letter code, e.g. usd, eur, gbp)</label>
     <input name="currency" value="{esc_html(cfg.get('currency','usd'))}" maxlength="3" style="max-width:100px;">
 
-    <label>Manual payment instructions (shown to a member when they request a paid tier, while "Manual approval" is the active provider)</label>
+    <div id="custom-box" class="custom-box"{"" if provider == "custom" else ' style="display:none"'}>
+      <label>Name of the service (shown on the button, e.g. PayPal)</label>
+      <input name="custom_provider_name" value="{esc_html(cfg.get('custom_provider_name',''))}" maxlength="{custom_payment.MAX_NAME}" placeholder="PayPal" style="max-width:260px;">
+      <label>Payment link (where the member goes to pay)</label>
+      <input name="custom_payment_url" value="{esc_html(cfg.get('custom_payment_url',''))}" maxlength="{custom_payment.MAX_URL}" placeholder="https://paypal.me/yourname/{{amount}}{{currency}}">
+      <div class="hint" style="margin-top:4px;">Must start with https://. You can put these words in curly brackets and they are filled in for each person: <b>{{amount}}</b>, <b>{{currency}}</b>, <b>{{tier}}</b>, <b>{{email}}</b>, <b>{{name}}</b> and <b>{{reference}}</b> (a short code that also shows in the queue below, so you can match a payment to a request). Leave it blank to show only your written instructions.</div>
+      <label>A different link for a specific tier (optional, one per line, like <code>MEMBER = https://...</code>)</label>
+      <textarea name="custom_payment_links" rows="3" placeholder="MEMBER = https://ko-fi.com/s/abc123&#10;VIP = https://ko-fi.com/s/def456">{esc_html(cfg.get('custom_payment_links',''))}</textarea>
+      <div class="hint" style="margin-top:4px;">Your tiers: <b>{esc_html(", ".join(str(t.get("name","")) for t in (cfg.get("tiers") or [])) or "none yet")}</b>. A link can't tell this app a payment arrived: when the money shows up in that service, press <b>Approve</b> in the queue below and the card is sent. The widget tells the member this.</div>
+    </div>
+
+    <label>Payment instructions (shown to a member when they request a paid tier; with "Custom payment link" they appear next to the pay button)</label>
     <textarea name="manual_payment_instructions" rows="3" placeholder="e.g. Send $9.99 via PayPal to you@example.com or by bank transfer to ..., then message me your email and I'll approve your access within a day.">{esc_html(cfg.get('manual_payment_instructions',''))}</textarea>
 
     <div class="placeholder" style="margin-top:14px;">
@@ -2382,7 +2444,7 @@ def _dashboard_page() -> str:
       instantly with no payment step, regardless of which provider is active.
     </div>
 
-    <label style="margin-top:20px;">Pending manual payment requests</label>
+    <label style="margin-top:20px;">Pending payment requests (Manual approval and Custom payment link)</label>
     {pending_requests_html}
 
     </section>
@@ -2792,6 +2854,11 @@ def _dashboard_page() -> str:
           row.querySelectorAll('button').forEach(b => b.disabled = false);
         }});
     }}
+    (function() {{
+      const sel = document.querySelector('select[name=payment_provider]'), box = document.getElementById('custom-box');
+      if (sel && box) sel.addEventListener('change', () => {{ box.style.display = sel.value === 'custom' ? '' : 'none'; }});
+    }})();
+
     document.querySelectorAll('.approve-req-btn').forEach(btn => {{
       btn.addEventListener('click', () => decidePaymentRequest(btn.dataset.id, 'approve', btn));
     }});

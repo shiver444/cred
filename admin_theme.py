@@ -292,6 +292,58 @@ body[data-layout=app].app-ready { max-width:none !important; margin:0 !important
   .app-main.plain > .app-card { padding:18px 16px 26px; box-shadow:none; }
   .app-savebar { left:0; right:0; bottom:calc(66px + env(safe-area-inset-bottom)); padding:10px 14px; }
 }
+.mhelp > summary, .chelp > summary { display:none; }
+
+/* Members on a phone: one card per member, tap to open the details and buttons. */
+@media (max-width:899px) {
+  body[data-page=members] .mhelp > summary { display:block; cursor:pointer; color:var(--accent-text); font-size:14px; font-weight:600; margin:6px 0; }
+  body[data-page=members] .app-main.plain > .app-card { background:none; border:0; padding:0; overflow:visible; }
+  body[data-page=members] .app-card > h1 { font-size:15px; font-weight:600; color:var(--muted); letter-spacing:0; text-transform:none; }
+  body[data-page=members] table { display:block; overflow:visible; margin-top:14px; }
+  body[data-page=members] tbody { display:block; }
+  body[data-page=members] tr.mhead { display:none; }
+  body[data-page=members] tr.mrow { display:grid; grid-template-columns:minmax(0,1fr) auto; column-gap:12px; row-gap:3px; align-items:baseline;
+    background:var(--bg); border:1px solid var(--line); border-radius:var(--radius-lg); padding:14px 16px; margin:0 0 10px; cursor:pointer; }
+  body[data-page=members] tr.mrow:hover { background:var(--bg); }
+  body[data-page=members] tr.mrow td { display:block; border:0; padding:0; font-size:14px; min-width:0; overflow-wrap:anywhere; }
+  body[data-page=members] td.c-name { grid-column:1; grid-row:1; font-size:17px; font-weight:600; color:var(--fg); }
+  body[data-page=members] td.c-name::after { content:""; display:inline-block; width:7px; height:7px; margin-left:11px; position:relative; top:-3px;
+    border-right:2px solid var(--muted); border-bottom:2px solid var(--muted); transform:rotate(45deg); transition:transform .15s; }
+  body[data-page=members] tr.mrow.open td.c-name::after { transform:rotate(225deg); top:1px; }
+  body[data-page=members] td.c-status { grid-column:2; grid-row:1; text-align:right; font-size:12.5px; font-weight:600; color:var(--ok); }
+  body[data-page=members] tr[data-st=soon] td.c-status { color:var(--warn); }
+  body[data-page=members] tr[data-st=expired] td.c-status, body[data-page=members] tr[data-st=revoked] td.c-status { color:var(--bad); }
+  body[data-page=members] td.c-tier { grid-column:1; grid-row:2; color:var(--soft); font-size:13.5px; }
+  body[data-page=members] td.c-exp { grid-column:2; grid-row:2; text-align:right; color:var(--muted); font-size:12.5px; }
+  body[data-page=members] td.c-exp::before { content:"until "; }
+  body[data-page=members] td.c-exp, body[data-page=members] td.c-exp { white-space:nowrap; }
+  body[data-page=members] tr.mrow:not(.open) td:not(.c-name):not(.c-status):not(.c-tier):not(.c-exp) { display:none; }
+  body[data-page=members] tr.mrow.open td.c-email, body[data-page=members] tr.mrow.open td.c-sections, body[data-page=members] tr.mrow.open td.c-issued,
+  body[data-page=members] tr.mrow.open td.c-ver, body[data-page=members] tr.mrow.open td.c-ips,
+  body[data-page=members] tr.mrow.open td.c-link, body[data-page=members] tr.mrow.open td.c-extend,
+  body[data-page=members] tr.mrow.open td.c-revoke, body[data-page=members] tr.mrow.open td.c-delete { grid-column:1 / -1; }
+  body[data-page=members] tr.mrow.open td.c-email { margin-top:10px; padding-top:12px; border-top:1px solid var(--line); }
+  body[data-page=members] tr.mrow.open td.c-email::before, body[data-page=members] tr.mrow.open td.c-sections::before, body[data-page=members] tr.mrow.open td.c-issued::before,
+  body[data-page=members] tr.mrow.open td.c-ver::before, body[data-page=members] tr.mrow.open td.c-ips::before { content:attr(data-label); display:inline-block; min-width:92px; color:var(--muted); font-size:12.5px; }
+  body[data-page=members] tr.mrow.open td.c-extend::before { content:attr(data-label); display:block; color:var(--muted); font-size:12.5px; margin-bottom:6px; }
+  body[data-page=members] tr.mrow.open td.na { display:none; }
+  body[data-page=members] tr.mrow.open td.c-link, body[data-page=members] tr.mrow.open td.c-extend { margin-top:10px; }
+  body[data-page=members] tr.mrow.open td.c-revoke, body[data-page=members] tr.mrow.open td.c-delete { margin-top:8px; }
+  body[data-page=members] td.c-link button, body[data-page=members] td.c-revoke button, body[data-page=members] td.c-delete button { width:100%; padding:11px 12px !important; font-size:13px !important; }
+  body[data-page=members] .extend-box { min-width:0; }
+  body[data-page=members] .extend-days { width:76px; padding:9px 8px; font-size:14px; border-radius:var(--radius); }
+  body[data-page=members] .extend-btn { padding:10px 16px !important; font-size:13px !important; }
+}
+
+/* Content on a phone: no card inside a card, folded intro, Save always within reach. */
+@media (max-width:899px) {
+  body[data-page=content] .chelp > summary { display:block; cursor:pointer; color:var(--accent-text); font-size:14px; font-weight:600; margin:6px 0; }
+  body[data-page=content] .app-main.plain > .app-card { background:none; border:0; padding:0; overflow:visible; }
+  body[data-page=content] .app-card > h1 { font-size:15px; font-weight:600; color:var(--muted); letter-spacing:0; text-transform:none; }
+  body[data-page=content] .bar:has(#save) { position:sticky; bottom:calc(72px + env(safe-area-inset-bottom)); z-index:30; background:var(--bg);
+    border:1px solid var(--line); border-radius:var(--radius-lg); padding:10px 14px; box-shadow:var(--shadow); }
+  body[data-page=content] .bar:has(#save) #save { flex:0 0 auto; }
+}
 """
 
 # The script that builds the shell (sidebar, tab bar, Settings list, save bar,
