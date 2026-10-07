@@ -1313,7 +1313,7 @@ def admin_members():
                         '<span class="small">Email isn\'t set up, so you\'ll copy their link and send it yourself.</span>')
         issue_box = f"""
   <details class="issue-box" id="issue-box">
-    <summary>+ Give someone a card (free)</summary>
+    <summary>+ Send a card (free)</summary>
     <div class="issue-grid">
       <label>Name<input id="issue-name" maxlength="100"></label>
       <label>Email<input id="issue-email" type="email" maxlength="254"></label>
@@ -1324,7 +1324,7 @@ def admin_members():
       {issue_notify}
       <label class="small"><input type="checkbox" id="issue-ignore"> ignore limits (full tier / email already has a card)</label>
     </div>
-    <button type="button" class="issue-submit" id="issue-btn">Issue card</button>
+    <button type="button" class="issue-submit" id="issue-btn">Send card</button>
     <div class="small" id="issue-msg" style="margin-top:8px;min-height:14px;"></div>
     <div id="issue-link-row" style="display:none;margin-top:6px;">
       <button type="button" class="copy-link-btn" id="issue-copy">Copy their link</button>
@@ -1445,7 +1445,7 @@ def admin_members():
         if (email.indexOf('@') < 1) {{ say('Enter their email address.', false); return; }}
         const tier = f('issue-tier').value;
         if (!confirm(`Give ${{name}} (${{email}}) a free ${{tier}} card?`)) return;
-        btn.disabled = true; linkRow.style.display = 'none'; say('Issuing…', true);
+        btn.disabled = true; linkRow.style.display = 'none'; say('Sending…', true);
         const nb = f('issue-notify');
         fetch('/admin/members/issue', {{
           method: 'POST', headers: {{ 'Content-Type': 'application/json' }},

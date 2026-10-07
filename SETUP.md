@@ -204,8 +204,8 @@ Members page, with a note once a reminder went out.
 
 ### Giving someone a card (no payment)
 
-On **Members**, open **+ Give someone a card (free)**, enter their name and
-email, pick a tier and press **Issue card**. Use it for a friend, a
+On **Members**, open **+ Send a card (free)**, enter their name and
+email, pick a tier and press **Send card**. Use it for a friend, a
 collaborator, a contest winner, or someone who paid you some other way. The
 card is signed and registered like any other and works the same way; the list
 marks it "given free". Leave **Days** blank to use the tier's length. If email

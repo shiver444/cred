@@ -54,7 +54,7 @@ can revoke any of them at any time.
   right tier can download them) and a merch discount, shown per tier.
 - Backup and restore: one downloadable file with your members, signing key,
   settings and content, and a restore that works on a brand-new server.
-- Give a card to anyone for free (a friend, a winner) from the Members page,
+- Send a card to anyone for free (a friend, a winner) from the Members page,
   emailed to them or copied as a link to send yourself.
 - Delete a member and their files when you need to (e.g. a data-removal
   request).
