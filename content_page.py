@@ -29,7 +29,8 @@ def _json_for_script(obj) -> str:
 
 
 def render(accent: str, title: str, content: dict, tiers: list, max_mb: int = 100, used_bytes: int = 0,
-           theme_css: str = "", data_bytes: int = 0, disk_total: int = 0) -> str:
+           theme_css: str = "", data_bytes: int = 0, disk_total: int = 0,
+           theme_js: str = "", body_attrs: str = "") -> str:
     tier_info = [{"name": t.get("name", ""), "sections": list(t.get("sections") or [])}
                  for t in (tiers or [])]
     return (_TEMPLATE
@@ -38,6 +39,8 @@ def render(accent: str, title: str, content: dict, tiers: list, max_mb: int = 10
             .replace("__CONTENT__", _json_for_script(content))
             .replace("__TIERS__", _json_for_script(tier_info))
             .replace("__THEME__", theme_css)
+            .replace("__BODY_ATTRS__", body_attrs)
+            .replace("__THEME_JS__", theme_js)
             .replace("__META__", _json_for_script({"max_mb": int(max_mb), "used_bytes": int(used_bytes),
                                                    "data_bytes": int(data_bytes), "disk_total": int(disk_total)})))
 
@@ -107,7 +110,7 @@ _TEMPLATE = r"""<!DOCTYPE html>
   .upmsg { font-size:11px; margin-top:4px; min-height:14px; color:var(--muted); }
   .upmsg.err { color:var(--bad); }
 __THEME__</style></head>
-<body>
+<body __BODY_ATTRS__>
   <div class="nav"><a href="/admin/dashboard">← Dashboard</a><a href="/admin/members">Members →</a><a href="/admin/logout">Log out</a></div>
   <h1>__TITLE__ — Content</h1>
   <div class="hint">What members see after they verify. Each <b>section</b> has a <b>key</b> (a short lowercase name, like <b>downloads</b>); a tier unlocks the sections whose keys are listed in its "Sections" field on the Dashboard. Changes only take effect when you press <b>Save content</b>.</div>
@@ -382,5 +385,6 @@ __THEME__</style></head>
   render();
 })();
 </script>
+__THEME_JS__
 </body></html>
 """

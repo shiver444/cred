@@ -501,6 +501,19 @@ look four different ways. Open the dashboard and find **Dashboard style**
 - **Studio** — warm ivory paper, serif headings and thin lines.
 - **Midnight** — modern dark blue-grey with soft depth.
 
+The styles also differ in how the dashboard is laid out, not just how it
+looks:
+
+- **Spaceship** keeps the single long page you scroll through.
+- **Studio** is also one long page, with a small contents list beside it on a
+  wide screen to jump between sections.
+- **Daylight** and **Midnight** work like an app. On a computer there is a
+  menu down the left (Home, Members, Content, Settings). On a phone the menu
+  sits along the bottom, and Settings is a list of screens (Branding, Widget
+  look, Tiers, Payment, Emails, Dashboard style, Backup) that you open one at
+  a time. When you change something, a **Save changes** bar appears; nothing is
+  saved until you press it.
+
 This only changes your own admin pages. Cards, emails and the member widget
 are not affected (the widget has its own look settings, see above). Your
 accent color is kept in every style; where it would be hard to read as text

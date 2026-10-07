@@ -1287,6 +1287,8 @@ def admin_members():
     accent = esc_html(cfg["accent_color"])
     title  = esc_html(cfg["card_title"])
     theme_css = admin_theme.css(cfg["admin_style"], cfg["accent_color"], "wide")
+    theme_js = admin_theme.shell_js(cfg["admin_style"])
+    body_attrs = admin_theme.body_attrs(cfg["admin_style"], "members", cfg["card_title"])
 
     members_page_warning = ""
     if members_page_unset:
@@ -1335,6 +1337,7 @@ def admin_members():
 
     html = f"""<!DOCTYPE html>
 <html><head><meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Members — Admin</title>
 <style>
   body {{ background:var(--bg); color:var(--fg); font-family:var(--font); padding:32px; }}
@@ -1384,7 +1387,7 @@ def admin_members():
   .nav a {{ color:var(--accent-text); text-decoration:none; margin-right:18px; }}
   .nav a:hover {{ text-decoration:underline; }}
 {theme_css}</style></head>
-<body>
+<body {body_attrs}>
   <div class="nav"><a href="/admin/dashboard">← Dashboard</a><a href="/admin/content">Content →</a><a href="/admin/logout">Log out</a></div>
   <h1>{title} — Members ({len(members)})</h1>
   <div class="count">Newest first. This reads whatever's currently in the live registry.</div>
@@ -1557,6 +1560,7 @@ def admin_members():
       }});
     }});
   </script>
+{theme_js}
 </body></html>"""
     return html
 
@@ -1574,6 +1578,7 @@ def _login_page(error: str = None, next_path: str = "/admin/dashboard") -> str:
     error_html = f'<div class="error">{esc_html(error)}</div>' if error else ""
     return f"""<!DOCTYPE html>
 <html><head><meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Admin Login</title>
 <style>
   body {{ background:var(--bg); color:var(--fg); font-family:var(--font);
@@ -1795,11 +1800,15 @@ def admin_dashboard_save():
         "tiers":          tiers,
     })
 
+    # Come back to the screen the creator was on (app-style layouts show one
+    # settings screen at a time); only known screen names are honoured.
+    sec = (request.form.get("sec") or "").strip()
+    back = ("#/s/" + sec) if sec in admin_theme.SETTINGS_IDS else ""
     note = (" ".join(logo_notes))[:300]
     if note:
         from urllib.parse import quote as _q
-        return redirect("/admin/dashboard?saved=1&logo_note=" + _q(note))
-    return redirect("/admin/dashboard?saved=1")
+        return redirect("/admin/dashboard?saved=1&logo_note=" + _q(note) + back)
+    return redirect("/admin/dashboard?saved=1" + back)
 
 def _setup_checklist_html(cfg: dict, provider: str) -> str:
     """The dashboard's "Setup checklist": what's done and what still needs
@@ -1897,6 +1906,8 @@ def _dashboard_page() -> str:
     accent = esc_html(cfg["accent_color"])
     title  = esc_html(cfg["card_title"])
     theme_css = admin_theme.css(cfg["admin_style"], cfg["accent_color"], "page")
+    theme_js = admin_theme.shell_js(cfg["admin_style"])
+    body_attrs = admin_theme.body_attrs(cfg["admin_style"], "dashboard", cfg["card_title"])
 
     try:
         from member_registry import stats
@@ -2133,6 +2144,7 @@ def _dashboard_page() -> str:
 
     return f"""<!DOCTYPE html>
 <html><head><meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Dashboard — {title}</title>
 <style>
   body {{ background:var(--bg); color:var(--fg); font-family:var(--font); padding:32px; max-width:900px; margin:0 auto; }}
@@ -2218,11 +2230,12 @@ def _dashboard_page() -> str:
   .copy-btn {{ background:var(--accent); color:var(--on-accent); border:none; font-family:var(--font);
            font-size:11px; letter-spacing:1.5px; text-transform:uppercase; padding:8px 16px; cursor:pointer; }}
 {theme_css}</style></head>
-<body>
+<body {body_attrs}>
   <div class="nav"><a href="/admin/members">Members →</a><a href="/admin/content">Content →</a><a href="/admin/logout">Log out</a></div>
   <h1>{title} — Dashboard</h1>
   {saved_banner}
 
+  <section class="dsec" id="sec-home" data-title="Home">
   <div class="stats">
     <div><b>{s['total']}</b>total</div>
     <div><b>{s['active']}</b>active</div>
@@ -2236,13 +2249,18 @@ def _dashboard_page() -> str:
   <div class="hint">Paste these two lines into any page of your site, wherever you want the member widget to appear. That's all it takes — the widget finds this server by itself. (The address below is filled in from the page you're on right now, so open this dashboard at your real public address before copying.)</div>
   <pre class="embed-code" id="embed-code"></pre>
   <button type="button" class="copy-btn" id="embed-copy">Copy</button>
+  </section>
 
   <form method="POST" action="/admin/dashboard" enctype="multipart/form-data">
 
+    <section class="dsec" id="sec-style" data-title="Dashboard style">
     <h2>Dashboard style</h2>
     <div class="hint" style="margin-bottom:10px;">How these admin pages look. Only you see this: your members' cards, emails and the widget are not affected. The style changes when you press <b>Save changes</b> at the bottom.</div>
     <div class="style-cards">{style_cards}</div>
 
+    </section>
+
+    <section class="dsec" id="sec-branding" data-title="Branding &amp; cards">
     <h2>Branding</h2>
     <label>Creator name</label>
     <input name="creator_name" value="{esc_html(cfg['creator_name'])}">
@@ -2272,6 +2290,9 @@ def _dashboard_page() -> str:
     <input name="api_base" value="{esc_html(cfg['api_base'])}">
 
 
+    </section>
+
+    <section class="dsec" id="sec-widget" data-title="Widget look">
     <h2>Widget look</h2>
     <div class="hint" style="margin-bottom:8px;">How the member widget looks on your site. The default, <b>Match my page</b>, reads the colors and font of the page it sits on, so it fits a dark page, a light page or anything in between. The two previews below show it on a dark and on a light page and follow what you change here, even before you save. The accent color is set under Branding above.</div>
     <div class="wl-grid">
@@ -2322,6 +2343,9 @@ def _dashboard_page() -> str:
     </div>
     <div class="hint">The previews are your real widget, loaded from this server. Pages with a photo or a gradient behind the widget work too: it works out whether that area is dark or light.</div>
 
+    </section>
+
+    <section class="dsec" id="sec-tiers" data-title="Tiers &amp; pricing">
     <h2>Tiers &amp; pricing</h2>
     {tier_sections_hint}
     <div class="hint" style="margin-bottom:8px;">Each tier is a pass type. "More ▾" opens that tier's limits (a maximum number of members, and how many cards one email address can get) and its own card design (title, accent color, logo, barcode), so a specific tier like a Daily Pass can look different without affecting the others. Anything left blank in the design part just uses the branding above.</div>
@@ -2331,6 +2355,9 @@ def _dashboard_page() -> str:
     </table>
     <button type="button" class="add-tier" id="add-tier">+ Add tier</button>
 
+    </section>
+
+    <section class="dsec" id="sec-payment" data-title="Payment">
     <h2>Payment</h2>
     <label>Payment provider (how a paid tier actually gets fulfilled)</label>
     <select name="payment_provider">
@@ -2358,6 +2385,9 @@ def _dashboard_page() -> str:
     <label style="margin-top:20px;">Pending manual payment requests</label>
     {pending_requests_html}
 
+    </section>
+
+    <section class="dsec" id="sec-emails" data-title="Emails">
     <h2>Welcome email</h2>
     <div class="hint" style="margin-bottom:8px;">The email a member gets with their card and access link. You can change the subject, the welcome text and add a sign-off; the card, bundle and link are always included. You can use <b>{{name}}</b>, <b>{{tier}}</b>, <b>{{creator}}</b>, <b>{{brand}}</b> and <b>{{expires}}</b> and they're filled in for each member. Leave the subject or welcome text blank to use the standard wording.</div>
     <label>Subject</label>
@@ -2394,10 +2424,14 @@ def _dashboard_page() -> str:
     <div class="hint" id="reminder-status" style="margin-top:8px;min-height:14px;"></div>
     <iframe id="reminder-preview-frame" sandbox="" style="display:none;width:100%;height:520px;border:1px solid var(--line);margin-top:10px;background:var(--frame-bg);"></iframe>
 
+    </section>
+
     <h2></h2>
     <button type="submit" class="save-btn">Save changes</button>
   </form>
+  <section class="dsec" id="sec-backup" data-title="Backup &amp; restore">
   {backup_html}
+  </section>
 
   <template id="tier-row-template">
     <tr class="tier-row">
@@ -2765,6 +2799,7 @@ def _dashboard_page() -> str:
       btn.addEventListener('click', () => decidePaymentRequest(btn.dataset.id, 'reject', btn));
     }});
   </script>
+{theme_js}
 </body></html>"""
 
 
@@ -2927,7 +2962,9 @@ def admin_content():
         content_page.render(cfg["accent_color"], cfg["card_title"], content_store.load(), cfg.get("tiers") or [],
                             max_mb=MAX_UPLOAD_MB, used_bytes=content_store.used_bytes(),
                             data_bytes=_storage_numbers()[0], disk_total=_storage_numbers()[1],
-                            theme_css=admin_theme.css(cfg["admin_style"], cfg["accent_color"], "page")),
+                            theme_css=admin_theme.css(cfg["admin_style"], cfg["accent_color"], "page"),
+                            theme_js=admin_theme.shell_js(cfg["admin_style"]),
+                            body_attrs=admin_theme.body_attrs(cfg["admin_style"], "content", cfg["card_title"])),
         mimetype="text/html")
     resp.headers["Cache-Control"] = "no-store"
     return resp

@@ -28,6 +28,38 @@ LABELS = {
     "midnight":  ("Midnight",  "Modern dark blue-grey with readable lettering and soft depth."),
 }
 
+# Layout is part of the style: how the pages are arranged, not just colored.
+#   long  one long page, as it always was (Spaceship)
+#   toc   the same long page, with a small contents list beside it (Studio)
+#   app   screens: a sidebar on a computer, a tab bar and a Settings list on a
+#         phone, one settings screen at a time, a save bar (Daylight, Midnight)
+LAYOUTS = {"spaceship": "long", "studio": "toc", "daylight": "app", "midnight": "app"}
+
+# The dashboard's settings screens, in the order they are listed: (id, title, one line).
+# Each id matches a <section id="sec-<id>"> on the dashboard page.
+SETTINGS_SCREENS = [
+    ("branding", "Branding & cards", "Name, accent color, logo and card style"),
+    ("widget",   "Widget look",      "Colors, lettering and wording of the member widget"),
+    ("tiers",    "Tiers & pricing",  "Passes, prices, limits and card designs"),
+    ("payment",  "Payment",          "How paid tiers are fulfilled"),
+    ("emails",   "Emails",           "Welcome email and expiry reminder"),
+    ("style",    "Dashboard style",  "How these admin pages look"),
+    ("backup",   "Backup & restore", "Download or restore your data"),
+]
+SETTINGS_IDS = tuple(s[0] for s in SETTINGS_SCREENS)
+
+
+def layout(style):
+    return LAYOUTS[clean_style(style)]
+
+
+def body_attrs(style, page, brand=""):
+    """Attributes for the <body> tag: tells the shell script which layout and
+    page this is. `brand` is shown in the sidebar."""
+    from html import escape
+    return 'data-layout="%s" data-page="%s" data-brand="%s"' % (layout(style), escape(page, quote=True), escape(str(brand or ""), quote=True))
+
+
 _SANS  = "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif"
 _SERIF = "'Iowan Old Style', 'Palatino Linotype', Palatino, Georgia, 'Times New Roman', serif"
 _MONO  = "'Courier New', monospace"
@@ -184,13 +216,230 @@ h2 { font-weight:500; font-size:21px !important; }
 """
 
 
+
+_ICONS = {
+    "home": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11.5 12 4l9 7.5"/><path d="M5.5 10v9.5h13V10"/><path d="M10 19.5v-5h4v5"/></svg>',
+    "members": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.6-3.6 3.2-5.5 6.5-5.5s5.9 1.9 6.5 5.5"/><path d="M16 4.7a3.5 3.5 0 0 1 0 6.6"/><path d="M18 14.8c2 .6 3.2 2.3 3.5 5.2"/></svg>',
+    "content": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 7.5a2 2 0 0 1 2-2h4l2 2.5h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z"/></svg>',
+    "settings": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>',
+}
+
+_TOC_CSS = """
+.toc { display:none; }
+@media (min-width:1300px) {
+  .toc { display:block; position:fixed; top:96px; left:calc(50% + 478px); width:168px; font-family:var(--font); font-size:12.5px; }
+  .toc a { display:block; padding:5px 0 5px 12px; color:var(--muted); text-decoration:none; border-left:2px solid var(--line); line-height:1.4; }
+  .toc a:hover { color:var(--fg); }
+  .toc a.on { color:var(--accent-text); border-left-color:var(--accent-text); font-weight:600; }
+}
+"""
+
+_APP_CSS = """
+:root { --side-w:248px; }
+body[data-layout=app].app-ready { max-width:none !important; margin:0 !important; padding:0 !important; border:0 !important; border-radius:0 !important;
+  box-shadow:none !important; background:var(--page) !important; min-height:100vh; }
+.app-ready .nav { display:none !important; }
+.app-ready .dsec { display:none; }
+.app-ready .dsec.on { display:block; background:var(--bg); border:1px solid var(--line); border-radius:var(--radius-lg); padding:6px 30px 30px; box-shadow:var(--shadow); }
+.app-ready .dsec > h2:first-child, .app-ready .dsec > .backup-box > h2:first-child { display:none; }
+.app-ready .dsec.on > :first-child { margin-top:22px; }
+.app-ready .backup-box { border:0 !important; background:none !important; padding:0 !important; margin:0 !important; }
+.app-ready .save-btn, .app-ready h2:empty { display:none; }
+.app-ready h1.orig-title { display:none; }
+.app-main { box-sizing:border-box; margin-left:var(--side-w); padding:36px 44px 90px; max-width:calc(var(--side-w) + 960px); }
+.app-main.plain { max-width:none; }
+.app-main.plain > .app-card { overflow-x:auto; background:var(--bg); border:1px solid var(--line); border-radius:var(--radius-lg); padding:26px 30px 34px; box-shadow:var(--shadow); }
+.app-main.plain > .app-card > h1 { margin-top:0; }
+.app-title { font-family:var(--head); font-size:30px !important; font-weight:700; margin:0 0 20px !important; letter-spacing:-.01em; color:var(--fg); }
+.app-back { display:none; align-items:center; gap:2px; margin:0 0 6px -6px; padding:6px 8px; color:var(--accent-text); text-decoration:none; font-size:16px; font-weight:500; }
+.app-back svg { width:20px; height:20px; }
+.app-side { position:fixed; top:0; bottom:0; left:0; width:var(--side-w); box-sizing:border-box; padding:22px 14px 18px; background:var(--bg);
+  border-right:1px solid var(--line); overflow:auto; display:flex; flex-direction:column; gap:2px; z-index:20; font-family:var(--font); }
+.app-brand { font-family:var(--head); font-weight:700; font-size:17px; padding:4px 12px 20px; color:var(--fg); line-height:1.25; word-break:break-word; }
+.app-side a { display:flex; align-items:center; gap:11px; padding:9px 12px; border-radius:var(--radius); color:var(--soft); text-decoration:none; font-size:14px; }
+.app-side a svg { width:19px; height:19px; flex:0 0 19px; }
+.app-side a:hover { background:var(--hover); color:var(--fg); }
+.app-side a.on { background:color-mix(in srgb, var(--accent-text) 13%, transparent); color:var(--accent-text); font-weight:600; }
+.app-side .app-grp { font-size:11px; font-weight:600; color:var(--muted); padding:18px 12px 6px; text-transform:uppercase; letter-spacing:.07em; }
+.app-side a.sub { padding-left:42px; font-size:13.5px; }
+.app-side .sp { flex:1; }
+.app-tabs { display:none; position:fixed; left:0; right:0; bottom:0; z-index:40; background:color-mix(in srgb, var(--bg) 94%, transparent);
+  -webkit-backdrop-filter:blur(14px); backdrop-filter:blur(14px); border-top:1px solid var(--line); padding:6px 6px calc(6px + env(safe-area-inset-bottom)); font-family:var(--font); }
+.app-tabs a { flex:1; display:flex; flex-direction:column; align-items:center; gap:3px; font-size:11px; color:var(--muted); text-decoration:none; padding:6px 0; border-radius:12px; }
+.app-tabs a svg { width:25px; height:25px; }
+.app-tabs a.on { color:var(--accent-text); font-weight:600; }
+.app-list { display:none; }
+.app-list .grp { background:var(--bg); border:1px solid var(--line); border-radius:var(--radius-lg); overflow:hidden; margin:0 0 18px; box-shadow:var(--shadow); }
+.app-list a { display:flex; align-items:center; gap:12px; padding:14px 16px; border-bottom:1px solid var(--line); color:var(--fg); text-decoration:none; }
+.app-list a:last-child { border-bottom:0; }
+.app-list a:active { background:var(--hover); }
+.app-list .t { display:block; font-size:15px; font-weight:600; }
+.app-list .s { display:block; font-size:12.5px; color:var(--muted); margin-top:2px; line-height:1.4; }
+.app-list a::after { content:"\\203A"; margin-left:auto; color:var(--muted); font-size:24px; line-height:1; }
+.app-savebar { display:none; position:fixed; left:var(--side-w); right:0; bottom:0; z-index:50; align-items:center; justify-content:space-between; gap:14px;
+  padding:12px 28px; background:var(--bg); border-top:1px solid var(--line); box-shadow:0 -10px 30px rgba(0,0,0,.10); font-family:var(--font); font-size:14px; color:var(--soft); }
+.app-savebar.show { display:flex; }
+.app-savebar button { background:var(--accent); color:var(--on-accent); border:0; border-radius:var(--radius); padding:10px 22px; font-size:14px; font-weight:600; cursor:pointer; font-family:var(--font); }
+@media (max-width:899px) {
+  :root { --side-w:0px; }
+  .app-side { display:none; }
+  .app-tabs { display:flex; }
+  .app-main { padding:18px 14px calc(110px + env(safe-area-inset-bottom)); max-width:none; }
+  .app-title { font-size:30px !important; margin-bottom:14px !important; }
+  .view-s .app-back { display:inline-flex; }
+  .view-list .app-list { display:block; }
+  .app-ready .dsec.on { padding:2px 16px 22px; box-shadow:none; }
+  .app-main.plain > .app-card { padding:18px 16px 26px; box-shadow:none; }
+  .app-savebar { left:0; right:0; bottom:calc(66px + env(safe-area-inset-bottom)); padding:10px 14px; }
+}
+"""
+
+# The script that builds the shell (sidebar, tab bar, Settings list, save bar,
+# contents list). It only rearranges the page that is already there: every
+# form field stays in the one form, so saving works exactly as before.
+_SHELL_JS = r"""
+(function () {
+  var body = document.body;
+  var layout = body.getAttribute('data-layout') || 'long', page = body.getAttribute('data-page') || '';
+  if (layout !== 'app' && layout !== 'toc') return;
+  var SETTINGS = __SETTINGS__, ICONS = __ICONS__;
+  function el(tag, props, kids) {
+    var n = document.createElement(tag);
+    Object.keys(props || {}).forEach(function (k) {
+      if (k === 'text') n.textContent = props[k]; else if (k === 'html') n.innerHTML = props[k];
+      else if (k === 'class') n.className = props[k]; else n.setAttribute(k, props[k]);
+    });
+    (kids || []).forEach(function (c) { if (c) n.appendChild(c); });
+    return n;
+  }
+  var secs = [].slice.call(document.querySelectorAll('.dsec'));
+  function secOf(id) { return document.getElementById('sec-' + id); }
+
+  if (layout === 'toc') {
+    if (!secs.length) return;
+    var toc = el('nav', { class: 'toc', 'aria-label': 'Sections' });
+    secs.forEach(function (s) { toc.appendChild(el('a', { href: '#' + s.id, text: s.getAttribute('data-title') || s.id })); });
+    body.appendChild(toc);
+    var links = [].slice.call(toc.querySelectorAll('a'));
+    function spy() {
+      var cur = 0;
+      secs.forEach(function (s, i) { if (s.getBoundingClientRect().top < 140) cur = i; });
+      links.forEach(function (a, i) { a.classList.toggle('on', i === cur); });
+    }
+    window.addEventListener('scroll', spy, { passive: true }); spy();
+    return;
+  }
+
+  // ── app layout ──
+  var brand = body.getAttribute('data-brand') || '';
+  var kids = [].slice.call(body.childNodes).filter(function (n) {
+    return !(n.nodeType === 1 && /^(SCRIPT|TEMPLATE|STYLE|NOSCRIPT)$/.test(n.tagName)) && !(n.nodeType === 3 && !n.textContent.trim());
+  });
+  var main = el('main', { class: 'app-main' + (secs.length ? '' : ' plain') });
+  var holder = secs.length ? main : el('div', { class: 'app-card' });
+  if (!secs.length) main.appendChild(holder);
+  body.insertBefore(main, body.firstChild);
+  kids.forEach(function (n) { holder.appendChild(n); });
+  var origH1 = holder.querySelector('h1');
+  if (secs.length && origH1) origH1.className += ' orig-title';
+
+  function a(href, icon, label, cls) { return el('a', { href: href, class: cls || '', html: (icon ? ICONS[icon] : '') + '<span></span>' }, []); }
+  function link(href, icon, label, cls) { var n = a(href, icon, label, cls); n.querySelector('span').textContent = label; return n; }
+  var side = el('aside', { class: 'app-side' });
+  side.appendChild(el('div', { class: 'app-brand', text: brand }));
+  var sideItems = {};
+  sideItems.home = link('/admin/dashboard#/home', 'home', 'Home'); side.appendChild(sideItems.home);
+  sideItems.members = link('/admin/members', 'members', 'Members'); side.appendChild(sideItems.members);
+  sideItems.content = link('/admin/content', 'content', 'Content'); side.appendChild(sideItems.content);
+  side.appendChild(el('div', { class: 'app-grp', text: 'Settings' }));
+  SETTINGS.forEach(function (s) { sideItems[s[0]] = link('/admin/dashboard#/s/' + s[0], null, s[1], 'sub'); side.appendChild(sideItems[s[0]]); });
+  side.appendChild(el('div', { class: 'sp' }));
+  side.appendChild(link('/admin/logout', null, 'Log out'));
+  body.appendChild(side);
+
+  var tabs = el('nav', { class: 'app-tabs', 'aria-label': 'Main' });
+  var tabItems = {};
+  [['home', 'home', 'Home', '/admin/dashboard#/home'], ['members', 'members', 'Members', '/admin/members'],
+   ['content', 'content', 'Content', '/admin/content'], ['settings', 'settings', 'Settings', '/admin/dashboard#/settings']].forEach(function (t) {
+    tabItems[t[0]] = link(t[3], t[1], t[2]); tabs.appendChild(tabItems[t[0]]);
+  });
+  body.appendChild(tabs);
+
+  if (page === 'members') { sideItems.members.className += ' on'; tabItems.members.className += ' on'; }
+  if (page === 'content') { sideItems.content.className += ' on'; tabItems.content.className += ' on'; }
+  body.className += ' app-ready';
+  if (page !== 'dashboard' || !secs.length) return;
+
+  // dashboard: one screen at a time
+  var title = el('h1', { class: 'app-title' });
+  var back = el('a', { class: 'app-back', href: '/admin/dashboard#/settings', html: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg><span>Settings</span>' });
+  var list = el('div', { class: 'app-list' });
+  var grp = el('div', { class: 'grp' });
+  SETTINGS.forEach(function (s) { grp.appendChild(el('a', { href: '#/s/' + s[0] }, [el('span', {}, [el('span', { class: 't', text: s[1] }), el('span', { class: 's', text: s[2] })])])); });
+  list.appendChild(grp);
+  var first = main.firstChild;
+  // the "Saved." banners stay on top, then back link, title, list
+  var banners = [].slice.call(main.querySelectorAll(':scope > .banner'));
+  var anchor = banners.length ? banners[banners.length - 1].nextSibling : main.firstChild;
+  main.insertBefore(back, anchor); main.insertBefore(title, anchor); main.insertBefore(list, anchor);
+
+  var form = document.querySelector('form[action="/admin/dashboard"]');
+  var secField = null;
+  if (form) { secField = el('input', { type: 'hidden', name: 'sec', value: '' }); form.appendChild(secField); }
+  var bar = el('div', { class: 'app-savebar' }, [el('span', { text: 'You have unsaved changes.' }), el('button', { type: 'button', text: 'Save changes' })]);
+  body.appendChild(bar);
+  var dirty = false, view = 'home', firstRoute = true;
+  bar.querySelector('button').addEventListener('click', function () { if (form.requestSubmit) form.requestSubmit(); else form.submit(); });
+  if (form) {
+    var mark = function () { dirty = true; paint(); };
+    form.addEventListener('input', mark); form.addEventListener('change', mark);
+    // a field the browser refuses to submit (e.g. a number out of range) may sit on a screen that is hidden: go there
+    form.addEventListener('invalid', function (e) { var s = e.target.closest && e.target.closest('.dsec'); if (s && !s.classList.contains('on')) location.hash = '#/s/' + s.id.replace(/^sec-/, ''); }, true);
+    form.addEventListener('submit', function () { dirty = false; });
+  }
+  var isWide = function () { return window.matchMedia('(min-width: 900px)').matches; };
+  function paint() { bar.classList.toggle('show', dirty && view === 's'); }
+  function titleOf(id) { var s = SETTINGS.filter(function (x) { return x[0] === id; })[0]; return s ? s[1] : id; }
+  function route() {
+    var h = location.hash || '';
+    if (h === '#backup') h = '#/s/backup';
+    var m = h.match(/^#\/s\/([a-z0-9-]+)$/), id = m && secOf(m[1]) ? m[1] : null, v = 'home';
+    if (id) v = 's';
+    else if (h === '#/settings') { if (isWide()) { v = 's'; id = SETTINGS[0][0]; } else v = 'list'; }
+    view = v;
+    secs.forEach(function (s) { s.classList.toggle('on', (v === 'home' && s.id === 'sec-home') || (v === 's' && s.id === 'sec-' + id)); });
+    body.classList.toggle('view-home', v === 'home'); body.classList.toggle('view-list', v === 'list'); body.classList.toggle('view-s', v === 's');
+    title.textContent = v === 'home' ? 'Home' : v === 'list' ? 'Settings' : titleOf(id);
+    Object.keys(sideItems).forEach(function (k) { sideItems[k].classList.toggle('on', v === 'home' ? k === 'home' : v === 's' ? k === id : (k === 'branding' && false)); });
+    sideItems.members.classList.remove('on'); sideItems.content.classList.remove('on');
+    tabItems.home.classList.toggle('on', v === 'home'); tabItems.settings.classList.toggle('on', v !== 'home');
+    if (secField) secField.value = v === 's' ? id : '';
+    if (!firstRoute) { banners.forEach(function (b) { b.style.display = 'none'; }); window.scrollTo(0, 0); }
+    firstRoute = false; paint();
+  }
+  window.addEventListener('hashchange', route);
+  window.addEventListener('resize', function () { if (location.hash === '#/settings') route(); });
+  route();
+})();
+"""
+
+
+def shell_js(style):
+    """The <script> that builds the layout (empty for the plain long layout)."""
+    if layout(style) == "long":
+        return ""
+    import json
+    js = _SHELL_JS.replace("__SETTINGS__", json.dumps([list(s) for s in SETTINGS_SCREENS])).replace("__ICONS__", json.dumps(_ICONS))
+    return "<script>" + js.replace("</", "<\\/") + "</script>"
+
+
 def css(style, accent, kind="page"):
     """Text for a page's <style> element, to go AFTER the page's own rules.
     kind: "page" (dashboard/content), "wide" (members table) or "login"."""
     style = clean_style(style)
     p = _PALETTES[style]
     accent = _safe_accent(accent)
-    text = accent_text(accent, [p["bg"], p["panel"], p["hover"]], p["min_contrast"])
+    text = accent_text(accent, [p["bg"], p["panel"], p["hover"], p["page"]], p["min_contrast"])
     v = {
         "page": p["page"], "bg": p["bg"], "fg": p["fg"], "soft": p["soft"], "muted": p["muted"],
         "line": p["line"], "line-strong": p["line2"], "dash": p["dash"], "panel": p["panel"], "field": p["field"],
@@ -203,12 +452,14 @@ def css(style, accent, kind="page"):
         "dark" if _lum(_rgb(p["bg"])) < 0.4 else "light")
     if style == "spaceship":
         return out
+    lay = layout(style)
     if kind == "login":
         return out + _MODERN + _MODERN_LOGIN + (_STUDIO_EXTRA if style == "studio" else "")
     extra = ""
     if kind == "wide":
         extra = "body { max-width:1200px; } td, th { padding:11px 12px !important; } th { border-bottom:1px solid var(--line); }\n"
-    return out + _MODERN + _MODERN_PAGE + extra + (_STUDIO_EXTRA if style == "studio" else "")
+    shell = _APP_CSS if lay == "app" else (_TOC_CSS if lay == "toc" else "")
+    return out + _MODERN + _MODERN_PAGE + extra + (_STUDIO_EXTRA if style == "studio" else "") + shell
 
 
 def swatch(style):
