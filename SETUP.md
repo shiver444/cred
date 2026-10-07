@@ -214,6 +214,20 @@ is set up, the card is emailed to them; otherwise (or if you untick it) press
 or an email that already has a working card, is refused) unless you tick
 **ignore limits**. You can Extend or Revoke it like any other member.
 
+### Deleting a member
+
+Each row on **Members** has a **Delete** button. It asks twice (a confirmation,
+then you type `DELETE`) because it can't be undone. It erases the member's
+entry, their card, bundle and certificate files, and finished (approved or
+rejected) payment requests for their email, unless that person still has
+another card. Their ID goes on the revocation list first, so any copy of the
+card they still hold stops working for good. Their tier spot and email are
+free again, so they could sign up as a new member. A payment request still
+waiting for your decision is left alone. **Revoke** is the gentler choice: it
+cuts off access but keeps the record. Backups you downloaded earlier still
+contain the deleted person, so delete those too if you need them gone
+completely.
+
 ### Admin login
 
 Go to `https://<your-domain>/admin/login` and log in with `ADMIN_SECRET`

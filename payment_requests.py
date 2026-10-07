@@ -95,3 +95,16 @@ def mark_decided(request_id: str, status: str) -> bool:
             _save(reqs)
             return True
     return False
+
+
+def forget_decided(same_person) -> int:
+    """Delete finished (approved/rejected) requests whose email `same_person`
+    says belongs to the person being erased. `same_person(email) -> bool`.
+    Pending requests are left alone: they are a live decision the creator
+    still has to make. Returns how many records were removed."""
+    reqs = _load()
+    keep = [r for r in reqs if r.get("status") == "pending" or not same_person(r.get("holder_email"))]
+    removed = len(reqs) - len(keep)
+    if removed:
+        _save(keep)
+    return removed

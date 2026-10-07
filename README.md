@@ -51,6 +51,8 @@ can revoke any of them at any time.
   settings and content, and a restore that works on a brand-new server.
 - Give a card to anyone for free (a friend, a winner) from the Members page,
   emailed to them or copied as a link to send yourself.
+- Delete a member and their files when you need to (e.g. a data-removal
+  request).
 - Renewals: one click on the Members page extends a member (same card, same
   link), and an optional email reminds members shortly before their access
   ends.

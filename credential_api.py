@@ -43,6 +43,7 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import secrets
 import tempfile
 import threading
@@ -879,6 +880,31 @@ def verify():
         return err(f"Verification failed: {str(e)}", 500)
 
 
+def _add_to_revocation_list(credential_id: str):
+    """Put a credential ID on the public revocation list (a no-op if it is
+    already there). Written to a temp file and swapped in, like the settings."""
+    rev_file = DATA_DIR / "revocation_list.json"
+    if rev_file.exists():
+        with open(rev_file) as f:
+            revlist = json.load(f)
+    else:
+        revlist = {"credential_ids": [], "bundle_hashes": [], "updated_at": ""}
+    if credential_id not in revlist["credential_ids"]:
+        revlist["credential_ids"].append(credential_id)
+    revlist["updated_at"] = datetime.now(timezone.utc).isoformat()
+    fd, tmp = tempfile.mkstemp(prefix=".revocation-", suffix=".tmp", dir=str(DATA_DIR))
+    try:
+        with os.fdopen(fd, "w") as f:
+            json.dump(revlist, f, indent=2)
+        os.replace(tmp, rev_file)
+    except BaseException:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
+
+
 # ── POST /revoke ──
 @app.route("/revoke", methods=["POST"])
 def revoke():
@@ -895,24 +921,82 @@ def revoke():
         success = reg_revoke(credential_id)
 
         # Also write to revocation list file
-        rev_file = DATA_DIR / "revocation_list.json"
-        if rev_file.exists():
-            with open(rev_file) as f:
-                revlist = json.load(f)
-        else:
-            revlist = {"credential_ids": [], "bundle_hashes": [], "updated_at": ""}
-
-        if credential_id not in revlist["credential_ids"]:
-            revlist["credential_ids"].append(credential_id)
-        revlist["updated_at"] = datetime.now(timezone.utc).isoformat()
-
-        with open(rev_file, "w") as f:
-            json.dump(revlist, f, indent=2)
+        _add_to_revocation_list(credential_id)
 
         return ok({"revoked": success, "credential_id": credential_id})
 
     except Exception as e:
         return err(f"Revocation failed: {str(e)}", 500)
+
+
+# ── POST /admin/members/delete ──
+# Erases a member: their registry entry, their card, bundle and certificate
+# files, and finished payment-request records for their email. Their ID goes
+# on the revocation list first, so any copy of the card or bundle they still
+# hold is dead for good and the ID can never be used again. Their tier spot
+# and email are free again. (Revoke is the gentler choice: it cuts access but
+# keeps the record.) Downloaded backups still contain them.
+_CID_OK = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+
+@app.route("/admin/members/delete", methods=["POST"])
+def admin_members_delete():
+    if not check_admin(request):
+        return err("Unauthorized", 401)
+    data = request.get_json(silent=True) or {}
+    cid = str(data.get("credential_id") or "").strip()
+    if not _CID_OK.match(cid):
+        return err("credential_id is required")
+    if str(data.get("confirm") or "") != "DELETE":
+        return err("Type DELETE to confirm.")
+
+    from credential_issuer import CREDENTIALS_DIR
+    from credential_bundle import BUNDLES_DIR
+    from card_generator import CARDS_DIR
+    import shutil
+    from payment_requests import forget_decided
+
+    problems = []
+    removed_files = 0
+    with _signup_lock:
+        entry = member_registry.get_by_id(cid)
+        if not entry:
+            return err("No such member.", 404)
+        _add_to_revocation_list(cid)            # first: the card is dead even if a later step fails
+        member_registry.delete(cid)
+
+        targets = [CARDS_DIR / f"card_{cid}.html"]
+        targets += list(BUNDLES_DIR.glob(f"credential_{cid}_*"))
+        bp = entry.get("bundle_path")
+        if bp:
+            for extra in (Path(bp), Path(str(bp) + ".sha256")):
+                if extra not in targets:
+                    targets.append(extra)
+        for t in targets:
+            try:
+                if t.exists() and t.resolve().parent in (CARDS_DIR.resolve(), BUNDLES_DIR.resolve()):
+                    t.unlink()
+                    removed_files += 1
+            except OSError as e:
+                problems.append(f"{t.name}: {e}")
+        cdir = CREDENTIALS_DIR / cid
+        try:
+            if cdir.is_dir() and cdir.resolve().parent == CREDENTIALS_DIR.resolve():
+                removed_files += sum(1 for _ in cdir.rglob("*") if _.is_file())
+                shutil.rmtree(cdir)
+        except OSError as e:
+            problems.append(f"credentials/{cid}: {e}")
+
+        # Forget finished payment requests for this person, but only when
+        # they hold no other card (then those records still belong to it).
+        key = limits.normalize_email(entry.get("holder_email"))
+        requests_removed = 0
+        if key and not any(limits.normalize_email(e.get("holder_email")) == key for e in member_registry.list_all()):
+            try:
+                requests_removed = forget_decided(lambda em: limits.normalize_email(em) == key)
+            except Exception as e:
+                problems.append(f"payment requests: {e}")
+    return ok({"credential_id": cid, "files_removed": removed_files,
+               "requests_removed": requests_removed, "problems": problems})
 
 
 # ── POST /admin/members/issue ──
@@ -1190,6 +1274,7 @@ def admin_members():
           <td>{link_cell}</td>
           <td>{extend_cell}</td>
           <td>{revoke_cell}</td>
+          <td><button class="delete-btn" data-id="{cred_id}" data-name="{name_esc}">Delete</button></td>
         </tr>"""
 
     accent = esc_html(cfg["accent_color"])
@@ -1264,6 +1349,10 @@ def admin_members():
     text-transform:uppercase; padding:5px 10px; cursor:pointer; white-space:nowrap;
   }}
   .small {{ color:#6b6058; font-size:10px; }}
+  .delete-btn {{ background:transparent; border:1px solid #6b6058; color:#a8a094; font-family:'Courier New',monospace; font-size:10px;
+    letter-spacing:1px; text-transform:uppercase; padding:5px 10px; cursor:pointer; }}
+  .delete-btn:hover {{ border-color:#e8232b; color:#e8232b; }}
+  .delete-btn:disabled {{ opacity:0.5; cursor:default; }}
   .extend-box {{ display:flex; gap:6px; align-items:center; flex-wrap:wrap; min-width:190px; }}
   .extend-days {{ width:64px; background:#1a100e; border:1px solid #3a1210; color:#e6dfd2;
                   font-family:'Courier New',monospace; font-size:12px; padding:4px 6px; }}
@@ -1293,11 +1382,12 @@ def admin_members():
   <div class="count">Newest first. This reads whatever's currently in the live registry.</div>
   <div class="count">"IPs" = distinct addresses seen verifying this credential (hover for the list) — 1-2 is normal for one person, a lot more is worth a look and a manual revoke if it's being shared.</div>
   <div class="count">"Extend" adds days to a member's access (renewal): same card and same link, only the end date moves. A card that already ran out restarts from today. The date printed on the member's original card file doesn't change — the live check uses the date kept here.</div>
+  <div class="count">"Delete" erases a member for good: their entry, card and bundle files, and old payment-request records for their email. Their old card and link stop working for ever and their spot and email are free again. To just cut off access and keep the record, use Revoke. Backups you downloaded earlier still contain them.</div>
   <div class="count">"Copy link" copies that member's personal access link — send it to them yourself if no email service is set up, or if their email didn't arrive. Treat it like a password: anyone holding the link has that member's access.</div>
   {members_page_warning}
   {issue_box}
   <table>
-    <tr><th>Name</th><th>Email</th><th>Tier</th><th>Sections</th><th>Issued</th><th>Expires</th><th>Status</th><th>Verified ×</th><th>IPs</th><th>Access link</th><th>Extend by (days)</th><th>Revoke</th></tr>
+    <tr><th>Name</th><th>Email</th><th>Tier</th><th>Sections</th><th>Issued</th><th>Expires</th><th>Status</th><th>Verified ×</th><th>IPs</th><th>Access link</th><th>Extend by (days)</th><th>Revoke</th><th>Delete</th></tr>
     {rows}
   </table>
   <script>
@@ -1371,6 +1461,28 @@ def admin_members():
         else window.prompt('Copy this link:', link);
       }});
     }})();
+
+    document.querySelectorAll('.delete-btn').forEach(btn => {{
+      btn.addEventListener('click', () => {{
+        const name = btn.dataset.name;
+        if (!confirm(`Delete ${{name}} for good? Their record, card and files are erased and this can't be undone.`)) return;
+        const typed = window.prompt('To confirm, type DELETE (in capitals):');
+        if (typed !== 'DELETE') return;
+        btn.disabled = true; btn.textContent = 'Deleting...';
+        fetch('/admin/members/delete', {{
+          method: 'POST', headers: {{ 'Content-Type': 'application/json' }},
+          body: JSON.stringify({{ credential_id: btn.dataset.id, confirm: 'DELETE' }}),
+        }}).then(r => r.json()).then(data => {{
+          if (data.success) {{
+            if (data.problems && data.problems.length) alert('Deleted, but some files could not be removed:\\n' + data.problems.join('\\n'));
+            location.reload();
+          }} else {{
+            alert('Delete failed: ' + (data.error || 'unknown error'));
+            btn.disabled = false; btn.textContent = 'Delete';
+          }}
+        }}).catch(e => {{ alert('Delete failed: ' + e.message); btn.disabled = false; btn.textContent = 'Delete'; }});
+      }});
+    }});
 
     document.querySelectorAll('.extend-btn').forEach(btn => {{
       btn.addEventListener('click', () => {{

@@ -221,6 +221,21 @@ def extend(credential_id: str, days, now=None):
     return None
 
 
+def delete(credential_id: str):
+    """Remove a member's entry for good. Returns the removed entry, or None
+    if there was no such credential. (Files and the revocation list are
+    handled by the caller — see credential_api.admin_members_delete.)"""
+    with _lock:
+        registry = _load()
+        for i, entry in enumerate(registry):
+            if entry["credential_id"] == credential_id:
+                removed = registry.pop(i)
+                _save(registry)
+                print(f"✔ Deleted {credential_id}")
+                return removed
+    return None
+
+
 def claim_reminder(credential_id: str, expires_at: str, now=None) -> bool:
     """
     Ask for the right to send this member's expiry reminder. True means "go
