@@ -77,6 +77,8 @@ import email_sender
 import backup
 import limits
 import logo_utils
+import member_registry
+import reminders
 import security
 
 app = Flask(__name__)
@@ -370,6 +372,12 @@ def load_config() -> dict:
         "email_subject": cfg.get("email_subject", email_sender.DEFAULT_SUBJECT),
         "email_intro":   cfg.get("email_intro", email_sender.DEFAULT_INTRO),
         "email_signoff": cfg.get("email_signoff", ""),
+        # Expiry reminder: how many days before the end date a member is
+        # emailed (0 = off), and its wording. See reminders.py.
+        "reminder_days":    reminders.clean_reminder_days(cfg.get("reminder_days", 0)),
+        "reminder_subject": cfg.get("reminder_subject", email_sender.DEFAULT_REMINDER_SUBJECT),
+        "reminder_text":    cfg.get("reminder_text", email_sender.DEFAULT_REMINDER_TEXT),
+        "reminder_renew_url": cfg.get("reminder_renew_url", ""),
         # Card look: the logo (a data: URI saved from the dashboard — "" for
         # none) and the style, "distressed" or "clean".
         "logo_data_uri": cfg.get("logo_data_uri", "") or "",
@@ -903,6 +911,67 @@ def revoke():
         return err(f"Revocation failed: {str(e)}", 500)
 
 
+# ── POST /admin/members/extend ──
+# Gives a member more time without re-issuing anything: same card, same
+# access link, only the end date moves (see member_registry.extend). The
+# printed date on the member's original card file stays what it was — the
+# live check always uses the server's date, so the card keeps working.
+@app.route("/admin/members/extend", methods=["POST"])
+def admin_members_extend():
+    if not check_admin(request):
+        return err("Unauthorized", 401)
+    data = request.get_json(silent=True) or {}
+    cid = str(data.get("credential_id") or "").strip()
+    if not cid:
+        return err("credential_id is required")
+    days = member_registry.clean_extend_days(data.get("days"))
+    if days is None:
+        return err(f"Days must be a whole number from 1 to {member_registry.MAX_EXTEND_DAYS}.")
+    notify = bool(data.get("notify"))
+    cfg = load_config()
+
+    with _signup_lock:
+        entry = member_registry.get_by_id(cid)
+        if not entry:
+            return err("No such member.", 404)
+        if entry.get("revoked"):
+            return err("This member's access was revoked, so it can't be extended.", 409)
+        was_active = limits.is_active(entry)
+        if not was_active:
+            # An ended card that comes back takes a spot again, so a full tier
+            # has to be checked first.
+            tier_cfg = get_tier(cfg, entry.get("tier"))
+            cap = limits.tier_max(tier_cfg)
+            if cap is not None:
+                from payment_requests import list_all as requests_list
+                if limits.count_taken(member_registry.list_all(), requests_list(), entry.get("tier")) >= cap:
+                    return err(f"{(tier_cfg or {}).get('label') or entry.get('tier')} is full ({cap} members), "
+                               "so this ended card can't be brought back. Raise the limit on the Dashboard first.", 409)
+        try:
+            updated = member_registry.extend(cid, days)
+        except ValueError as e:
+            return err("This member's access was revoked, so it can't be extended." if str(e) == "revoked"
+                       else f"Days must be a whole number from 1 to {member_registry.MAX_EXTEND_DAYS}.", 409)
+        if updated is None:
+            return err("No such member.", 404)
+
+    email_status = "not_requested"
+    if notify:
+        if not email_sender.is_configured():
+            email_status = "not_configured"
+        else:
+            try:
+                sent, _detail = email_sender.send_extended_email(
+                    updated.get("holder_name", ""), updated.get("holder_email", ""), updated.get("tier", ""),
+                    updated["credential_id"], updated.get("bundle_hash", ""), updated["expires_at"], days)
+                email_status = "sent" if sent else "failed"
+            except Exception as e:
+                print(f"❌ Extension email failed: {e}")
+                email_status = "failed"
+    return ok({"credential_id": cid, "expires_at": updated["expires_at"],
+               "was_active": was_active, "days_added": days, "email": email_status})
+
+
 # ── GET /revocation-list ──
 @app.route("/revocation-list", methods=["GET"])
 def revocation_list():
@@ -960,10 +1029,27 @@ def admin_members():
     members_page = (cfg.get("members_page") or "").strip()
     members_page_unset = (not members_page) or ("your-domain.com" in members_page)
 
+    # "Expiring soon" uses the reminder window when reminders are on, else a week.
+    soon_days = cfg.get("reminder_days") or 7
+    email_ready = email_sender.is_configured()
+    now_utc = datetime.now(timezone.utc)
+
     rows = ""
     for m in members:
         revoked = bool(m.get("revoked"))
-        status_label = "REVOKED" if revoked else "active"
+        active_now = limits.is_active(m, now_utc)
+        if revoked:
+            status_label = "REVOKED"
+        elif not active_now:
+            status_label = "EXPIRED"
+        elif reminders.is_expiring_soon(m, soon_days, now_utc):
+            status_label = f"active · ends in {reminders.days_left(m, now_utc)}d"
+        else:
+            status_label = "active"
+        if m.get("reminded_at") and m.get("reminded_for") == m.get("expires_at"):
+            status_label += f'<br><span class="small">reminded {esc_html(m["reminded_at"][:10])}</span>'
+        if m.get("extended_at"):
+            status_label += f'<br><span class="small">extended {esc_html(m["extended_at"][:10])}</span>'
         # Distinct-IP count — a lightweight, opt-in-free signal for spotting
         # a shared/copied credential. A normal member is usually 1-2 (home +
         # phone); many distinct addresses is worth a manual look. Hover the
@@ -983,6 +1069,22 @@ def admin_members():
         email_esc = esc_html(m.get('holder_email', ''))
         tier_esc  = esc_html(m.get('tier', ''))
         sections_esc = esc_html(', '.join(m.get('sections', [])) or '—')
+
+        tier_cfg_m = get_tier(cfg, m.get("tier")) or {}
+        try:
+            default_days = int(tier_cfg_m.get("expiry_days") or 30)
+        except (ValueError, TypeError):
+            default_days = 30
+        default_days = min(max(default_days, 1), member_registry.MAX_EXTEND_DAYS)
+        if revoked:
+            extend_cell = '—'
+        else:
+            notify_box = ('<label class="small"><input type="checkbox" class="extend-notify" checked> email them</label>'
+                          if email_ready else '')
+            extend_cell = (f'<div class="extend-box"><input class="extend-days" type="number" min="1" '
+                           f'max="{member_registry.MAX_EXTEND_DAYS}" value="{default_days}" aria-label="Days to add"> '
+                           f'<button class="extend-btn" data-id="{cred_id}" data-name="{name_esc}">Extend</button>'
+                           f'{notify_box}<span class="small extend-msg"></span></div>')
 
         revoke_cell = '—' if revoked else (
             f'<button class="revoke-btn" data-id="{cred_id}" data-name="{name_esc}">Revoke</button>'
@@ -1009,11 +1111,12 @@ def admin_members():
           <td>{tier_esc}</td>
           <td>{sections_esc}</td>
           <td>{(m.get('issued_at') or '')[:16].replace('T',' ')}</td>
-          <td>{(m.get('expires_at') or '')[:16].replace('T',' ')}</td>
-          <td>{status_label}</td>
+          <td class="exp-cell">{(m.get('expires_at') or '')[:16].replace('T',' ')}</td>
+          <td class="status-cell">{status_label}</td>
           <td>{m.get('verified_count', 0)}</td>
           <td title="{esc_html(ip_title)}">{ip_count}</td>
           <td>{link_cell}</td>
+          <td>{extend_cell}</td>
           <td>{revoke_cell}</td>
         </tr>"""
 
@@ -1052,6 +1155,17 @@ def admin_members():
     font-family:'Courier New',monospace; font-size:10px; letter-spacing:1px;
     text-transform:uppercase; padding:5px 10px; cursor:pointer; white-space:nowrap;
   }}
+  .small {{ color:#6b6058; font-size:10px; }}
+  .extend-box {{ display:flex; gap:6px; align-items:center; flex-wrap:wrap; min-width:190px; }}
+  .extend-days {{ width:64px; background:#1a100e; border:1px solid #3a1210; color:#e6dfd2;
+                  font-family:'Courier New',monospace; font-size:12px; padding:4px 6px; }}
+  .extend-btn {{
+    background:transparent; border:1px solid {accent}; color:{accent};
+    font-family:'Courier New',monospace; font-size:10px; letter-spacing:1px;
+    text-transform:uppercase; padding:5px 10px; cursor:pointer;
+  }}
+  .extend-btn:hover {{ background:{accent}; color:#0a0908; }}
+  .extend-btn:disabled {{ opacity:0.5; cursor:default; }}
   .warn {{ background:#3a2a10; color:#f0c674; font-size:11px; line-height:1.6; padding:10px 14px; margin:14px 0 0; }}
   .warn a {{ color:#f0c674; }}
   .nav {{ margin-bottom:18px; font-size:11px; letter-spacing:1px; }}
@@ -1063,10 +1177,11 @@ def admin_members():
   <h1>{title} — Members ({len(members)})</h1>
   <div class="count">Newest first. This reads whatever's currently in the live registry.</div>
   <div class="count">"IPs" = distinct addresses seen verifying this credential (hover for the list) — 1-2 is normal for one person, a lot more is worth a look and a manual revoke if it's being shared.</div>
+  <div class="count">"Extend" adds days to a member's access (renewal): same card and same link, only the end date moves. A card that already ran out restarts from today. The date printed on the member's original card file doesn't change — the live check uses the date kept here.</div>
   <div class="count">"Copy link" copies that member's personal access link — send it to them yourself if no email service is set up, or if their email didn't arrive. Treat it like a password: anyone holding the link has that member's access.</div>
   {members_page_warning}
   <table>
-    <tr><th>Name</th><th>Email</th><th>Tier</th><th>Sections</th><th>Issued</th><th>Expires</th><th>Status</th><th>Verified ×</th><th>IPs</th><th>Access link</th><th>Revoke</th></tr>
+    <tr><th>Name</th><th>Email</th><th>Tier</th><th>Sections</th><th>Issued</th><th>Expires</th><th>Status</th><th>Verified ×</th><th>IPs</th><th>Access link</th><th>Extend by (days)</th><th>Revoke</th></tr>
     {rows}
   </table>
   <script>
@@ -1092,6 +1207,37 @@ def admin_members():
         }} else {{
           fallback();
         }}
+      }});
+    }});
+
+    document.querySelectorAll('.extend-btn').forEach(btn => {{
+      btn.addEventListener('click', () => {{
+        const box   = btn.closest('.extend-box');
+        const row   = btn.closest('tr');
+        const msg   = box.querySelector('.extend-msg');
+        const days  = parseInt(box.querySelector('.extend-days').value, 10);
+        const notifyBox = box.querySelector('.extend-notify');
+        if (!(days >= 1)) {{ msg.textContent = 'Enter a number of days.'; msg.style.color = '#e8232b'; return; }}
+        if (!confirm(`Add ${{days}} days to ${{btn.dataset.name}}'s access?`)) return;
+        btn.disabled = true;
+        msg.textContent = '';
+        fetch('/admin/members/extend', {{
+          method: 'POST',
+          headers: {{ 'Content-Type': 'application/json' }},
+          body: JSON.stringify({{ credential_id: btn.dataset.id, days: days, notify: !!(notifyBox && notifyBox.checked) }}),
+        }})
+          .then(r => r.json())
+          .then(data => {{
+            btn.disabled = false;
+            if (!data.success) {{ msg.textContent = data.error || 'Failed.'; msg.style.color = '#e8232b'; return; }}
+            row.querySelector('.exp-cell').textContent = data.expires_at.slice(0, 16).replace('T', ' ');
+            row.querySelector('.status-cell').textContent = 'active · extended just now';
+            const mail = {{ sent: ' Email sent.', failed: ' (Email could not be sent.)',
+                           not_configured: ' (Email is not set up, so nobody was emailed.)' }}[data.email] || '';
+            msg.textContent = '+' + data.days_added + ' days.' + mail;
+            msg.style.color = data.email === 'failed' ? '#e8232b' : '#5fd98a';
+          }})
+          .catch(e => {{ btn.disabled = false; msg.textContent = 'Failed: ' + e.message; msg.style.color = '#e8232b'; }});
       }});
     }});
 
@@ -1357,6 +1503,10 @@ def admin_dashboard_save():
         "email_subject":  (request.form.get("email_subject") or "").strip()[:email_sender.MAX_SUBJECT],
         "email_intro":    (request.form.get("email_intro") or "").strip()[:email_sender.MAX_INTRO],
         "email_signoff":  (request.form.get("email_signoff") or "").strip()[:email_sender.MAX_SIGNOFF],
+        "reminder_days":    reminders.clean_reminder_days(request.form.get("reminder_days")),
+        "reminder_subject": (request.form.get("reminder_subject") or "").strip()[:email_sender.MAX_REMINDER_SUBJECT],
+        "reminder_text":    (request.form.get("reminder_text") or "").strip()[:email_sender.MAX_REMINDER_TEXT],
+        "reminder_renew_url": email_sender.safe_renew_url(request.form.get("reminder_renew_url")),
         "tiers":          tiers,
     })
 
@@ -1852,6 +2002,25 @@ def _dashboard_page() -> str:
     <div class="hint">Preview and test use what's typed above, even before you save. A test needs email set up on the server (BREVO_API_KEY and GMAIL_ADDRESS, see SETUP.md).</div>
     <iframe id="email-preview-frame" sandbox="" style="display:none;width:100%;height:620px;border:1px solid #3a1210;margin-top:10px;background:#050403;"></iframe>
 
+    <h2>Expiry reminder</h2>
+    <div class="hint" style="margin-bottom:8px;">Emails a member a few days before their access ends, once per end date. When you extend a member (Members page) the clock restarts for the new date. It only works when email is set up on the server (see SETUP.md). Switching it on also reminds everyone who is <i>already</i> inside the window. You can use <b>{{name}}</b>, <b>{{tier}}</b>, <b>{{creator}}</b>, <b>{{brand}}</b>, <b>{{expires}}</b> and <b>{{days}}</b> (becomes "3 days"). The email always includes the member's access link.</div>
+    <label>Send the reminder this many days before access ends (0 = don't send reminders)</label>
+    <input name="reminder_days" id="reminder-days" type="number" min="0" max="{reminders.MAX_REMINDER_DAYS}" step="1" value="{cfg['reminder_days']}" style="max-width:100px;">
+    <div class="hint" style="margin-top:4px;">A pass that lasts no longer than this many days isn't reminded (it would be reminded the moment it was issued).</div>
+    <label>Subject</label>
+    <input name="reminder_subject" id="reminder-subject" maxlength="150" value="{esc_html(cfg['reminder_subject'])}">
+    <label>Reminder text</label>
+    <textarea name="reminder_text" id="reminder-text" rows="3" maxlength="1000">{esc_html(cfg['reminder_text'])}</textarea>
+    <label>Where to renew (optional web address — adds a "Renew" button, e.g. your payment or contact page)</label>
+    <input name="reminder_renew_url" id="reminder-renew" type="url" maxlength="500" placeholder="https://..." value="{esc_html(cfg['reminder_renew_url'])}">
+    <div style="margin-top:12px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+      <button type="button" class="add-tier" id="reminder-preview-btn" style="margin-top:0;">Preview reminder →</button>
+      <input id="reminder-test-to" type="email" placeholder="send a test to this address" style="max-width:260px;">
+      <button type="button" class="add-tier" id="reminder-test-btn" style="margin-top:0;">Send test</button>
+    </div>
+    <div class="hint" id="reminder-status" style="margin-top:8px;min-height:14px;"></div>
+    <iframe id="reminder-preview-frame" sandbox="" style="display:none;width:100%;height:520px;border:1px solid #3a1210;margin-top:10px;background:#050403;"></iframe>
+
     <h2></h2>
     <button type="submit" class="save-btn">Save changes</button>
   </form>
@@ -2111,6 +2280,42 @@ def _dashboard_page() -> str:
       }});
     }})();
 
+    // Expiry reminder: same preview/test routes, kind = "reminder".
+    (function() {{
+      const f = id => document.getElementById(id);
+      const frame = f('reminder-preview-frame'), status = f('reminder-status');
+      const pbtn = f('reminder-preview-btn'), tbtn = f('reminder-test-btn'), to = f('reminder-test-to');
+      function fields() {{
+        return {{ kind: 'reminder', reminder_subject: f('reminder-subject').value,
+                 reminder_text: f('reminder-text').value, reminder_renew_url: f('reminder-renew').value }};
+      }}
+      function say(text, good) {{ status.textContent = text; status.style.color = good ? '#5fd98a' : '#e8232b'; }}
+      function post(url, body) {{
+        return fetch(url, {{ method: 'POST', credentials: 'same-origin',
+                            headers: {{ 'Content-Type': 'application/json' }},
+                            body: JSON.stringify(body) }})
+          .then(r => r.json().then(j => ({{ status: r.status, body: j }})));
+      }}
+      pbtn.addEventListener('click', () => {{
+        pbtn.disabled = true; say('Loading preview…', true);
+        post('/admin/email/preview', fields()).then(res => {{
+          pbtn.disabled = false;
+          if (!res.body.success) {{ say(res.body.error || 'Preview failed.', false); return; }}
+          frame.srcdoc = res.body.html; frame.style.display = '';
+          say('Subject: ' + res.body.subject, true);
+        }}).catch(() => {{ pbtn.disabled = false; say('Could not reach the server.', false); }});
+      }});
+      tbtn.addEventListener('click', () => {{
+        const addr = to.value.trim();
+        if (!addr || addr.indexOf('@') < 1) {{ say('Type the address to send the test to.', false); return; }}
+        tbtn.disabled = true; say('Sending…', true);
+        post('/admin/email/test', Object.assign({{ to: addr }}, fields())).then(res => {{
+          tbtn.disabled = false;
+          say(res.body.message || res.body.error || 'Failed.', !!res.body.success);
+        }}).catch(() => {{ tbtn.disabled = false; say('Could not reach the server.', false); }});
+      }});
+    }})();
+
     function decidePaymentRequest(id, action, btn) {{
       const verb = action === 'approve' ? 'Approve this payment and issue the credential?'
                                          : 'Reject this request? No credential will be issued.';
@@ -2154,6 +2359,13 @@ def _email_overrides(data: dict) -> dict:
         "email_signoff": str(data.get("email_signoff") or "")[:email_sender.MAX_SIGNOFF * 2],
     }
 
+def _reminder_overrides(data: dict) -> dict:
+    return {
+        "reminder_subject": str(data.get("reminder_subject") or "")[:email_sender.MAX_REMINDER_SUBJECT * 2],
+        "reminder_text":    str(data.get("reminder_text") or "")[:email_sender.MAX_REMINDER_TEXT * 2],
+        "reminder_renew_url": str(data.get("reminder_renew_url") or ""),
+    }
+
 def _sample_tier() -> str:
     tiers = load_config().get("tiers") or []
     return (tiers[0].get("name") if tiers else "") or "MEMBER"
@@ -2163,7 +2375,10 @@ def admin_email_preview():
     if not check_admin(request):
         return jsonify({"success": False, "error": "Not logged in."}), 401
     data = request.get_json(silent=True) or {}
-    msg = email_sender.preview_email(_sample_tier(), _email_overrides(data))
+    if data.get("kind") == "reminder":
+        msg = email_sender.preview_reminder(_sample_tier(), _reminder_overrides(data))
+    else:
+        msg = email_sender.preview_email(_sample_tier(), _email_overrides(data))
     return jsonify({"success": True, "subject": msg["subject"], "html": msg["html"]})
 
 @app.route("/admin/email/test", methods=["POST"])
@@ -2174,7 +2389,10 @@ def admin_email_test():
     to = str(data.get("to") or "").strip()
     if len(to) > 254 or "@" not in to[1:] or any(c in to for c in " \r\n<>,;"):
         return jsonify({"success": False, "message": "That doesn't look like an email address."}), 400
-    ok_, message = email_sender.send_test_email(to, _sample_tier(), _email_overrides(data))
+    if data.get("kind") == "reminder":
+        ok_, message = email_sender.send_test_email(to, _sample_tier(), _reminder_overrides(data), kind="reminder")
+    else:
+        ok_, message = email_sender.send_test_email(to, _sample_tier(), _email_overrides(data))
     return jsonify({"success": ok_, "message": message}), (200 if ok_ else 502)
 
 
@@ -2537,6 +2755,48 @@ def member_file(fid):
 def serve_widget():
     from flask import send_file
     return send_file(BASE_DIR / "cp.js", mimetype="application/javascript")
+
+# ── Expiry reminders (rules in reminders.py) ──
+# A small background thread wakes up about once an hour, and emails every
+# member whose access is about to end (once per end date). It does nothing
+# unless reminders are switched on in the dashboard AND email is set up.
+# Set REMINDERS_DISABLED=1 to keep it from starting (used by the tests).
+def _send_reminder(entry: dict, days_left: int) -> bool:
+    return email_sender.send_reminder_email(
+        entry.get("holder_name", ""), entry.get("holder_email", ""), entry.get("tier", ""),
+        entry["credential_id"], entry.get("bundle_hash", ""), entry["expires_at"], days_left)
+
+def run_reminders_now(now=None) -> dict:
+    """One pass of the reminder job; returns {"sent": n, "failed": n}."""
+    window = load_config().get("reminder_days") or 0
+    if not window or not email_sender.is_configured():
+        return {"sent": 0, "failed": 0}
+    return reminders.run_once(window, _send_reminder, now)
+
+def _reminder_loop(first_delay: float, interval: float):
+    time.sleep(first_delay)
+    while True:
+        try:
+            done = run_reminders_now()
+            if done["sent"] or done["failed"]:
+                print(f"ℹ Reminders: {done['sent']} sent, {done['failed']} failed")
+        except Exception as e:   # never let the job die quietly for good
+            print(f"❌ Reminder job error: {e}")
+        time.sleep(interval)
+
+_reminder_thread = None
+
+def start_reminder_thread(first_delay: float = 120, interval: float = reminders.CHECK_EVERY_SECONDS):
+    global _reminder_thread
+    if _reminder_thread and _reminder_thread.is_alive():
+        return _reminder_thread
+    _reminder_thread = threading.Thread(target=_reminder_loop, args=(first_delay, interval),
+                                        name="reminders", daemon=True)
+    _reminder_thread.start()
+    return _reminder_thread
+
+if os.environ.get("REMINDERS_DISABLED", "").strip().lower() not in ("1", "true", "yes"):
+    start_reminder_thread()
 
 # Startup warnings, printed at import time rather than under __main__ so
 # they show up in the logs however the app is started: `python

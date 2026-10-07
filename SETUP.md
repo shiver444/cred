@@ -175,6 +175,33 @@ any address you type, both using whatever is in the boxes right now, even
 before you save. With email not set up, members can still get in: copy their
 link from **Members → Copy link** and send it yourself.
 
+### Renewing a member (Extend) and the expiry reminder
+
+**Extend.** On **Members**, every row that isn't revoked has an **Extend by
+(days)** box, pre-filled with that tier's length, and an **Extend** button.
+Use it when a member pays again: their end date moves forward, and the card
+and personal access link they already have keep working. A card that is still
+running gets the days added to its current end date (renewing early loses
+nothing); a card that already ran out restarts from today. Tick **email them**
+(shown when email is set up) to send a short "your access has been extended"
+note. A revoked member can't be extended, and an ended card in a tier that is
+now full can't be brought back until there's room. The date printed on the
+member's original card file doesn't change; the live check always uses the
+date kept on your server.
+
+**Expiry reminder.** On the Dashboard, **Expiry reminder** emails a member
+a few days before their access ends, once per end date (extending a member
+starts a fresh reminder for the new date). Set "days before" to 0 to keep it
+off (the default). It needs email set up on the server (`BREVO_API_KEY` and
+`GMAIL_ADDRESS`); without it nothing is sent. The subject and text are
+editable (`{name}`, `{tier}`, `{creator}`, `{brand}`, `{expires}` and `{days}`),
+and an optional "where to renew" address adds a **Renew** button. Preview and
+**Send test** work like the welcome email. The server checks about once an
+hour. When you switch reminders on, members already inside the window get
+their reminder at the next check. A pass that lasts no longer than the reminder
+window isn't reminded. Members who are about to end show "ends in Nd" on the
+Members page, with a note once a reminder went out.
+
 ### Admin login
 
 Go to `https://<your-domain>/admin/login` and log in with `ADMIN_SECRET`

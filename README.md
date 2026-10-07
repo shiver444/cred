@@ -49,6 +49,9 @@ can revoke any of them at any time.
   right tier can download them) and a merch discount, shown per tier.
 - Backup and restore: one downloadable file with your members, signing key,
   settings and content, and a restore that works on a brand-new server.
+- Renewals: one click on the Members page extends a member (same card, same
+  link), and an optional email reminds members shortly before their access
+  ends.
 - Limits per tier: cap how many members a tier can have (it shows as
   "Sold out" when full) and allow one card per email address.
 - Built-in protections: admin login lockout, forged-request protection and

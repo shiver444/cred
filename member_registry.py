@@ -6,8 +6,10 @@ Simple, no database needed.
 
 import json
 import os
+import tempfile
+import threading
 from pathlib import Path
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 BASE_DIR = Path(__file__).resolve().parent
 
@@ -19,6 +21,14 @@ DATA_DIR.mkdir(parents=True, exist_ok=True)
 REGISTRY_FILE = DATA_DIR / "member_registry.json"
 
 
+# Every change below is "read the file, change it, write it back". The lock
+# makes those steps one unit inside this process, so e.g. the reminder
+# thread marking a member can't overwrite a signup that landed in between.
+# The app runs as a single worker (railway.json), so one process-wide lock
+# is enough.
+_lock = threading.RLock()
+
+
 def _load() -> list:
     if not REGISTRY_FILE.exists():
         return []
@@ -27,12 +37,30 @@ def _load() -> list:
 
 
 def _save(registry: list):
-    with open(REGISTRY_FILE, "w", encoding="utf-8") as f:
-        json.dump(registry, f, indent=2, default=str)
+    # Written to a temp file first and swapped in, so a crash or a full disk
+    # in the middle of a write can never leave a half-written registry.
+    fd, tmp = tempfile.mkstemp(prefix=".registry-", suffix=".tmp", dir=str(REGISTRY_FILE.parent))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(registry, f, indent=2, default=str)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, REGISTRY_FILE)
+    except BaseException:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
 
 
 def add_credential(entry: dict):
     """Add a newly issued credential to the registry."""
+    with _lock:
+        _add_credential_locked(entry)
+
+
+def _add_credential_locked(entry: dict):
     registry = _load()
     registry.append({
         "credential_id":    entry["credential_id"],
@@ -92,6 +120,11 @@ def mark_verified(credential_id: str, ip: str = None):
     to a bounded log used purely as a sharing signal (see add_credential).
     Not logged on failed attempts; only successful, already-valid checks.
     """
+    with _lock:
+        _mark_verified_locked(credential_id, ip)
+
+
+def _mark_verified_locked(credential_id, ip):
     registry = _load()
     for entry in registry:
         if entry["credential_id"] == credential_id:
@@ -110,6 +143,11 @@ def mark_verified(credential_id: str, ip: str = None):
 
 def revoke(credential_id: str) -> bool:
     """Revoke a credential by ID."""
+    with _lock:
+        return _revoke_locked(credential_id)
+
+
+def _revoke_locked(credential_id: str) -> bool:
     registry = _load()
     for entry in registry:
         if entry["credential_id"] == credential_id:
@@ -118,6 +156,110 @@ def revoke(credential_id: str) -> bool:
             _save(registry)
             print(f"✔ Revoked: {credential_id}")
             return True
+    return False
+
+
+MAX_EXTEND_DAYS = 3650     # ten years; a typo like 36500 is refused, not honoured
+RETRY_REMINDER_HOURS = 6   # after a failed reminder, wait this long before trying again
+
+
+def _parse(ts):
+    try:
+        d = datetime.fromisoformat(str(ts))
+    except (ValueError, TypeError):
+        return None
+    return d if d.tzinfo else d.replace(tzinfo=timezone.utc)
+
+
+def clean_extend_days(value):
+    """A whole number of days from 1 to MAX_EXTEND_DAYS, or None."""
+    try:
+        n = int(str(value).strip())
+    except (ValueError, TypeError):
+        return None
+    return n if 1 <= n <= MAX_EXTEND_DAYS else None
+
+
+def extend(credential_id: str, days, now=None):
+    """
+    Give a member more time, in place: same credential, same access link,
+    same card — only the expiry moves. A card that is still running gets the
+    days added to its current end date (so renewing early loses nothing); a
+    card that already ran out restarts from now. A revoked card can't be
+    extended (that's an explicit decision to cut the person off).
+
+    Returns the updated entry, or None when there is no such credential.
+    Raises ValueError("revoked") / ValueError("days") for the refused cases.
+    """
+    n = clean_extend_days(days)
+    if n is None:
+        raise ValueError("days")
+    now = now or datetime.now(timezone.utc)
+    with _lock:
+        registry = _load()
+        for entry in registry:
+            if entry["credential_id"] != credential_id:
+                continue
+            if entry.get("revoked"):
+                raise ValueError("revoked")
+            old_end = _parse(entry.get("expires_at"))
+            start = old_end if (old_end and old_end > now) else now
+            new_end = start + timedelta(days=n)
+            log = entry.setdefault("extensions", [])
+            log.append({"at": now.isoformat(), "days": n,
+                        "from": entry.get("expires_at"), "to": new_end.isoformat()})
+            if len(log) > 20:
+                entry["extensions"] = log[-20:]
+            entry["expires_at"] = new_end.isoformat()
+            entry["extended_at"] = now.isoformat()
+            # a new end date means a new reminder is owed when it gets close
+            entry.pop("reminded_for", None)
+            entry.pop("reminder_attempt_at", None)
+            _save(registry)
+            print(f"✔ Extended {credential_id} by {n} days → {entry['expires_at']}")
+            return entry
+    return None
+
+
+def claim_reminder(credential_id: str, expires_at: str, now=None) -> bool:
+    """
+    Ask for the right to send this member's expiry reminder. True means "go
+    ahead": no reminder has gone out for this expiry date yet, the expiry
+    date is still the one the caller looked at (it wasn't extended in the
+    meantime) and no attempt was made in the last few hours. The attempt is
+    recorded straight away, so a second caller (or a retry loop) can't send
+    the same email twice. Follow with mark_reminded() once it really went out.
+    """
+    now = now or datetime.now(timezone.utc)
+    with _lock:
+        registry = _load()
+        for entry in registry:
+            if entry["credential_id"] != credential_id:
+                continue
+            if entry.get("revoked") or entry.get("expires_at") != expires_at:
+                return False
+            if entry.get("reminded_for") == expires_at:
+                return False
+            last = _parse(entry.get("reminder_attempt_at"))
+            if last and now - last < timedelta(hours=RETRY_REMINDER_HOURS):
+                return False
+            entry["reminder_attempt_at"] = now.isoformat()
+            _save(registry)
+            return True
+    return False
+
+
+def mark_reminded(credential_id: str, expires_at: str, now=None) -> bool:
+    """Record that the reminder for this expiry date was sent."""
+    now = now or datetime.now(timezone.utc)
+    with _lock:
+        registry = _load()
+        for entry in registry:
+            if entry["credential_id"] == credential_id and entry.get("expires_at") == expires_at:
+                entry["reminded_for"] = expires_at
+                entry["reminded_at"] = now.isoformat()
+                _save(registry)
+                return True
     return False
 
 
