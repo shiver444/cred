@@ -5,11 +5,8 @@ on your website, get a cryptographically signed card and a personal access
 link, and the content you gate behind it opens for them. No platform in the
 middle, no platform cut: your members, your keys, your money.
 
-[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/template/REPLACE-WITH-YOUR-TEMPLATE-CODE)
+[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/deploy/credential-protocol)
 
-<!-- Template owner: after publishing the Railway template, replace the link
-     above with the Deploy button Railway gives you (see "Railway Template -
-     How To Publish.md"). Until then the button goes nowhere. -->
 
 ## Get it running in four steps
 
