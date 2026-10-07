@@ -488,6 +488,25 @@ Branding) is used for buttons and highlights; the widget makes sure text
 stays readable on whatever background it ends up on. Changes apply to the
 page as soon as you save — nothing to edit on your site.
 
+### Dashboard style
+
+The pages only you see (dashboard, Members, Content and the login page) can
+look four different ways. Open the dashboard and find **Dashboard style**
+(above Branding), click a card and press **Save changes**:
+
+- **Spaceship** — near-black with typewriter lettering and small capitals
+  (the original look).
+- **Daylight** — clean and light with friendly lettering and rounded cards.
+  New installs start with this one, because it is the easiest to read.
+- **Studio** — warm ivory paper, serif headings and thin lines.
+- **Midnight** — modern dark blue-grey with soft depth.
+
+This only changes your own admin pages. Cards, emails and the member widget
+are not affected (the widget has its own look settings, see above). Your
+accent color is kept in every style; where it would be hard to read as text
+it is darkened or lightened a little automatically. An existing install that
+never picked a style keeps the Spaceship look until you choose another.
+
 ## 8. Deploy — Railway, connected to GitHub, so pushes auto-deploy
 
 This covers getting from "files on disk" to a real, public dashboard URL

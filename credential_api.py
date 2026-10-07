@@ -82,6 +82,7 @@ import member_registry
 import reminders
 import security
 import widget_look
+import admin_theme
 
 app = Flask(__name__)
 CORS(app)  # allow requests from your own domain
@@ -386,6 +387,9 @@ def load_config() -> dict:
         "card_style":    cfg.get("card_style", "distressed") if cfg.get("card_style") in CARD_STYLES else "distressed",
         # How the member widget looks on the creator's site (widget_look.py).
         **widget_look.from_config(cfg),
+        # How the admin pages look (admin_theme.py). A deployment that never
+        # chose one keeps the original look.
+        "admin_style":   admin_theme.clean_style(cfg.get("admin_style")),
         "tiers":         cfg.get("tiers", []),
     }
 
@@ -1282,6 +1286,7 @@ def admin_members():
 
     accent = esc_html(cfg["accent_color"])
     title  = esc_html(cfg["card_title"])
+    theme_css = admin_theme.css(cfg["admin_style"], cfg["accent_color"], "wide")
 
     members_page_warning = ""
     if members_page_unset:
@@ -1321,7 +1326,7 @@ def admin_members():
     <div class="small" id="issue-msg" style="margin-top:8px;min-height:14px;"></div>
     <div id="issue-link-row" style="display:none;margin-top:6px;">
       <button type="button" class="copy-link-btn" id="issue-copy">Copy their link</button>
-      <a href="/admin/members" class="small" style="color:{accent};margin-left:10px;">Reload the list</a>
+      <a href="/admin/members" class="small" style="color:var(--accent-text);margin-left:10px;">Reload the list</a>
     </div>
     <div class="small" style="margin-top:8px;">No payment is recorded; the card works exactly like a bought one and is marked "given free" in the list. Revoke or Extend it like any other.</div>
   </details>"""
@@ -1332,53 +1337,53 @@ def admin_members():
 <html><head><meta charset="UTF-8">
 <title>Members — Admin</title>
 <style>
-  body {{ background:#0a0908; color:#e6dfd2; font-family:'Courier New',monospace; padding:32px; }}
-  h1 {{ color:{accent}; font-size:16px; letter-spacing:2px; text-transform:uppercase; }}
+  body {{ background:var(--bg); color:var(--fg); font-family:var(--font); padding:32px; }}
+  h1 {{ color:var(--accent-text); font-size:16px; letter-spacing:2px; text-transform:uppercase; }}
   table {{ width:100%; border-collapse:collapse; margin-top:20px; font-size:12px; }}
-  th, td {{ text-align:left; padding:8px 12px; border-bottom:1px solid #3a1210; }}
-  th {{ color:{accent}; text-transform:uppercase; font-size:10px; letter-spacing:1px; }}
-  tr:hover {{ background:#1a100e; }}
-  .count {{ color:#6b6058; font-size:11px; margin-top:6px; }}
+  th, td {{ text-align:left; padding:8px 12px; border-bottom:1px solid var(--line); }}
+  th {{ color:var(--accent-text); text-transform:uppercase; font-size:10px; letter-spacing:1px; }}
+  tr:hover {{ background:var(--field); }}
+  .count {{ color:var(--muted); font-size:11px; margin-top:6px; }}
   .revoke-btn {{
-    background:transparent; border:1px solid {accent}; color:{accent};
-    font-family:'Courier New',monospace; font-size:10px; letter-spacing:1px;
+    background:transparent; border:1px solid var(--accent-text); color:var(--accent-text);
+    font-family:var(--font); font-size:10px; letter-spacing:1px;
     text-transform:uppercase; padding:5px 10px; cursor:pointer;
   }}
-  .revoke-btn:hover {{ background:{accent}; color:#0a0908; }}
+  .revoke-btn:hover {{ background:var(--accent); color:var(--on-accent); }}
   .revoke-btn:disabled {{ opacity:0.5; cursor:default; }}
   .copy-link-btn {{
-    background:{accent}; border:1px solid {accent}; color:#0a0908;
-    font-family:'Courier New',monospace; font-size:10px; letter-spacing:1px;
+    background:var(--accent); border:1px solid var(--accent-text); color:var(--on-accent);
+    font-family:var(--font); font-size:10px; letter-spacing:1px;
     text-transform:uppercase; padding:5px 10px; cursor:pointer; white-space:nowrap;
   }}
-  .small {{ color:#6b6058; font-size:10px; }}
-  .delete-btn {{ background:transparent; border:1px solid #6b6058; color:#a8a094; font-family:'Courier New',monospace; font-size:10px;
+  .small {{ color:var(--muted); font-size:10px; }}
+  .delete-btn {{ background:transparent; border:1px solid var(--muted); color:var(--soft); font-family:var(--font); font-size:10px;
     letter-spacing:1px; text-transform:uppercase; padding:5px 10px; cursor:pointer; }}
-  .delete-btn:hover {{ border-color:#e8232b; color:#e8232b; }}
+  .delete-btn:hover {{ border-color:var(--bad); color:var(--bad); }}
   .delete-btn:disabled {{ opacity:0.5; cursor:default; }}
   .extend-box {{ display:flex; gap:6px; align-items:center; flex-wrap:wrap; min-width:190px; }}
-  .extend-days {{ width:64px; background:#1a100e; border:1px solid #3a1210; color:#e6dfd2;
-                  font-family:'Courier New',monospace; font-size:12px; padding:4px 6px; }}
+  .extend-days {{ width:64px; background:var(--field); border:1px solid var(--line); color:var(--fg);
+                  font-family:var(--font); font-size:12px; padding:4px 6px; }}
   .extend-btn, .issue-submit {{
-    background:transparent; border:1px solid {accent}; color:{accent};
-    font-family:'Courier New',monospace; font-size:10px; letter-spacing:1px;
+    background:transparent; border:1px solid var(--accent-text); color:var(--accent-text);
+    font-family:var(--font); font-size:10px; letter-spacing:1px;
     text-transform:uppercase; padding:5px 10px; cursor:pointer;
   }}
-  .extend-btn:hover, .issue-submit:hover {{ background:{accent}; color:#0a0908; }}
+  .extend-btn:hover, .issue-submit:hover {{ background:var(--accent); color:var(--on-accent); }}
   .extend-btn:disabled, .issue-submit:disabled {{ opacity:0.5; cursor:default; }}
-  .issue-box {{ border:1px solid #3a1210; padding:12px 16px; margin:16px 0 0; max-width:760px; }}
-  .issue-box summary {{ cursor:pointer; color:{accent}; font-size:11px; letter-spacing:1px; text-transform:uppercase; }}
+  .issue-box {{ border:1px solid var(--line); padding:12px 16px; margin:16px 0 0; max-width:760px; }}
+  .issue-box summary {{ cursor:pointer; color:var(--accent-text); font-size:11px; letter-spacing:1px; text-transform:uppercase; }}
   .issue-grid {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:10px; margin:12px 0; }}
-  .issue-grid label {{ display:block; color:#6b6058; font-size:10px; letter-spacing:1px; text-transform:uppercase; }}
-  .issue-grid input, .issue-grid select {{ display:block; width:100%; box-sizing:border-box; margin-top:4px; background:#1a100e; border:1px solid #3a1210;
-    color:#e6dfd2; font-family:'Courier New',monospace; font-size:12px; padding:6px 8px; text-transform:none; letter-spacing:0; }}
+  .issue-grid label {{ display:block; color:var(--muted); font-size:10px; letter-spacing:1px; text-transform:uppercase; }}
+  .issue-grid input, .issue-grid select {{ display:block; width:100%; box-sizing:border-box; margin-top:4px; background:var(--field); border:1px solid var(--line);
+    color:var(--fg); font-family:var(--font); font-size:12px; padding:6px 8px; text-transform:none; letter-spacing:0; }}
   .issue-opts {{ display:flex; gap:18px; flex-wrap:wrap; margin-bottom:12px; }}
-  .warn {{ background:#3a2a10; color:#f0c674; font-size:11px; line-height:1.6; padding:10px 14px; margin:14px 0 0; }}
-  .warn a {{ color:#f0c674; }}
+  .warn {{ background:var(--warn-bg); color:var(--warn); font-size:11px; line-height:1.6; padding:10px 14px; margin:14px 0 0; }}
+  .warn a {{ color:var(--warn); }}
   .nav {{ margin-bottom:18px; font-size:11px; letter-spacing:1px; }}
-  .nav a {{ color:{accent}; text-decoration:none; margin-right:18px; }}
+  .nav a {{ color:var(--accent-text); text-decoration:none; margin-right:18px; }}
   .nav a:hover {{ text-decoration:underline; }}
-</style></head>
+{theme_css}</style></head>
 <body>
   <div class="nav"><a href="/admin/dashboard">← Dashboard</a><a href="/admin/content">Content →</a><a href="/admin/logout">Log out</a></div>
   <h1>{title} — Members ({len(members)})</h1>
@@ -1425,7 +1430,7 @@ def admin_members():
       const f = id => document.getElementById(id);
       const msg = f('issue-msg'), linkRow = f('issue-link-row');
       let link = '';
-      function say(t, good) {{ msg.textContent = t; msg.style.color = good ? '#5fd98a' : '#e8232b'; }}
+      function say(t, good) {{ msg.textContent = t; msg.style.color = good ? 'var(--ok)' : 'var(--bad)'; }}
       function defaultDays() {{
         const o = f('issue-tier').selectedOptions[0];
         f('issue-days').placeholder = o ? o.dataset.days : '';
@@ -1494,7 +1499,7 @@ def admin_members():
         const msg   = box.querySelector('.extend-msg');
         const days  = parseInt(box.querySelector('.extend-days').value, 10);
         const notifyBox = box.querySelector('.extend-notify');
-        if (!(days >= 1)) {{ msg.textContent = 'Enter a number of days.'; msg.style.color = '#e8232b'; return; }}
+        if (!(days >= 1)) {{ msg.textContent = 'Enter a number of days.'; msg.style.color = 'var(--bad)'; return; }}
         if (!confirm(`Add ${{days}} days to ${{btn.dataset.name}}'s access?`)) return;
         btn.disabled = true;
         msg.textContent = '';
@@ -1506,15 +1511,15 @@ def admin_members():
           .then(r => r.json())
           .then(data => {{
             btn.disabled = false;
-            if (!data.success) {{ msg.textContent = data.error || 'Failed.'; msg.style.color = '#e8232b'; return; }}
+            if (!data.success) {{ msg.textContent = data.error || 'Failed.'; msg.style.color = 'var(--bad)'; return; }}
             row.querySelector('.exp-cell').textContent = data.expires_at.slice(0, 16).replace('T', ' ');
             row.querySelector('.status-cell').textContent = 'active · extended just now';
             const mail = {{ sent: ' Email sent.', failed: ' (Email could not be sent.)',
                            not_configured: ' (Email is not set up, so nobody was emailed.)' }}[data.email] || '';
             msg.textContent = '+' + data.days_added + ' days.' + mail;
-            msg.style.color = data.email === 'failed' ? '#e8232b' : '#5fd98a';
+            msg.style.color = data.email === 'failed' ? 'var(--bad)' : 'var(--ok)';
           }})
-          .catch(e => {{ btn.disabled = false; msg.textContent = 'Failed: ' + e.message; msg.style.color = '#e8232b'; }});
+          .catch(e => {{ btn.disabled = false; msg.textContent = 'Failed: ' + e.message; msg.style.color = 'var(--bad)'; }});
       }});
     }});
 
@@ -1565,21 +1570,22 @@ def _login_page(error: str = None, next_path: str = "/admin/dashboard") -> str:
     accent = esc_html(cfg["accent_color"])
     title  = esc_html(cfg["card_title"])
     next_esc = esc_html(next_path)
+    theme_css = admin_theme.css(cfg["admin_style"], cfg["accent_color"], "login")
     error_html = f'<div class="error">{esc_html(error)}</div>' if error else ""
     return f"""<!DOCTYPE html>
 <html><head><meta charset="UTF-8">
 <title>Admin Login</title>
 <style>
-  body {{ background:#0a0908; color:#e6dfd2; font-family:'Courier New',monospace;
+  body {{ background:var(--bg); color:var(--fg); font-family:var(--font);
           display:flex; align-items:center; justify-content:center; min-height:100vh; margin:0; }}
   .box {{ width:100%; max-width:320px; padding:32px; }}
-  h1 {{ color:{accent}; font-size:14px; letter-spacing:2px; text-transform:uppercase; margin-bottom:24px; }}
-  input {{ width:100%; background:#1a100e; border:1px solid #3a1210; color:#e6dfd2;
-           font-family:'Courier New',monospace; font-size:13px; padding:10px 12px; margin-bottom:14px; }}
-  button {{ width:100%; background:{accent}; color:#0a0908; border:none; font-family:'Courier New',monospace;
+  h1 {{ color:var(--accent-text); font-size:14px; letter-spacing:2px; text-transform:uppercase; margin-bottom:24px; }}
+  input {{ width:100%; background:var(--field); border:1px solid var(--line); color:var(--fg);
+           font-family:var(--font); font-size:13px; padding:10px 12px; margin-bottom:14px; }}
+  button {{ width:100%; background:var(--accent); color:var(--on-accent); border:none; font-family:var(--font);
             font-size:12px; letter-spacing:2px; text-transform:uppercase; padding:12px; cursor:pointer; }}
-  .error {{ color:#e8232b; font-size:11px; margin-bottom:14px; }}
-</style></head>
+  .error {{ color:var(--bad); font-size:11px; margin-bottom:14px; }}
+{theme_css}</style></head>
 <body>
   <form class="box" method="POST" action="/admin/login">
     <h1>{title} — Admin</h1>
@@ -1785,6 +1791,7 @@ def admin_dashboard_save():
         "reminder_text":    (request.form.get("reminder_text") or "").strip()[:email_sender.MAX_REMINDER_TEXT],
         "reminder_renew_url": email_sender.safe_renew_url(request.form.get("reminder_renew_url")),
         **widget_look.from_form(request.form),
+        "admin_style":    admin_theme.clean_style(request.form.get("admin_style"), load_config()["admin_style"]),
         "tiers":          tiers,
     })
 
@@ -1889,6 +1896,7 @@ def _dashboard_page() -> str:
     cfg = load_config()
     accent = esc_html(cfg["accent_color"])
     title  = esc_html(cfg["card_title"])
+    theme_css = admin_theme.css(cfg["admin_style"], cfg["accent_color"], "page")
 
     try:
         from member_registry import stats
@@ -1897,11 +1905,11 @@ def _dashboard_page() -> str:
         s = {"total": 0, "active": 0, "revoked": 0, "expired": 0}
 
     if stripe and STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET:
-        payment_status_html = '<b style="color:#5fd98a;">✓ Stripe is configured</b> — paid tiers will route through checkout.<br>'
+        payment_status_html = '<b style="color:var(--ok);">✓ Stripe is configured</b> — paid tiers will route through checkout.<br>'
     elif stripe and STRIPE_SECRET_KEY:
-        payment_status_html = '<b style="color:#e8232b;">⚠ STRIPE_SECRET_KEY is set but STRIPE_WEBHOOK_SECRET is not</b> — checkout will start, but payments will never actually fulfill.<br>'
+        payment_status_html = '<b style="color:var(--bad);">⚠ STRIPE_SECRET_KEY is set but STRIPE_WEBHOOK_SECRET is not</b> — checkout will start, but payments will never actually fulfill.<br>'
     else:
-        payment_status_html = '<b style="color:#a8a094;">✗ Stripe is not configured</b> — switch the provider below to "Manual approval" to sell paid tiers without it.<br>'
+        payment_status_html = '<b style="color:var(--soft);">✗ Stripe is not configured</b> — switch the provider below to "Manual approval" to sell paid tiers without it.<br>'
 
     provider = (cfg.get("payment_provider") or "manual").strip().lower()
     if provider not in ("manual", "stripe"):
@@ -1917,7 +1925,7 @@ def _dashboard_page() -> str:
         '<div class="hint" style="margin-bottom:8px;">"Sections" are the names of the members-only content you set up on the '
         '<a href="/admin/content" style="color:' + accent + ';">Content</a> page. Right now you have: <b>'
         + (esc_html(", ".join(content_keys)) if content_keys else "none yet") + '</b>.</div>'
-        + ('<div class="warn" style="background:#3a2a10;color:#f0c674;font-size:11px;line-height:1.6;padding:10px 14px;margin:8px 0;">'
+        + ('<div class="warn" style="background:var(--warn-bg);color:var(--warn);font-size:11px;line-height:1.6;padding:10px 14px;margin:8px 0;">'
            '⚠ A tier lists section(s) that don\'t exist on the Content page: <b>' + esc_html(", ".join(missing))
            + '</b>. Members of that tier would not get anything for them — create a section with that key, or fix the name.</div>' if missing else "")
     )
@@ -2058,12 +2066,12 @@ def _dashboard_page() -> str:
 
     saved_banner = '<div class="banner">Saved.</div>' if request.args.get("saved") else ""
     if request.args.get("logo_note"):
-        saved_banner += ('<div class="banner" style="background:#3a2a10;color:#f0c674;text-transform:none;">'
+        saved_banner += ('<div class="banner" style="background:var(--warn-bg);color:var(--warn);text-transform:none;">'
                          '⚠ ' + esc_html(request.args.get("logo_note")[:300]) + '</div>')
 
     if request.args.get("backup_note"):
         good = bool(request.args.get("backup_ok"))
-        saved_banner += (f'<div class="banner" style="{"" if good else "background:#3a2a10;color:#f0c674;"}text-transform:none;">'
+        saved_banner += (f'<div class="banner" style="{"" if good else "background:var(--warn-bg);color:var(--warn);"}text-transform:none;">'
                          + ('✓ ' if good else '⚠ ') + esc_html(request.args.get("backup_note")[:400]) + '</div>')
 
     # Backup & restore box (below the main form).
@@ -2077,10 +2085,12 @@ def _dashboard_page() -> str:
     if _last:
         _age = (datetime.now(timezone.utc) - _last).days
         _when = _last.strftime("%Y-%m-%d %H:%M UTC") + (" (today)" if _age == 0 else f" ({_age} day{'s' if _age != 1 else ''} ago)")
-        _last_html = (f'<div class="hint">Last backup downloaded: <b>{esc_html(_when)}</b>'
-                      + (' <span style="color:#f0c674;">— it\'s getting old, download a fresh one.</span>' if _age >= 30 else '') + '</div>')
+        _old = _age >= 30
+        _last_html = (f'<div class="bk-status {"warn" if _old else "ok"}">{"!" if _old else "&#10003;"} '
+                      f'Last backup downloaded: <b>{esc_html(_when)}</b>'
+                      + (" — it's getting old, download a fresh one." if _old else '') + '</div>')
     else:
-        _last_html = '<div class="hint" style="color:#f0c674;">You have not downloaded a backup yet.</div>'
+        _last_html = '<div class="bk-status warn">! You have not downloaded a backup yet.</div>'
     _up_btn = (f'<a class="bk-btn" href="/admin/backup/download?files=1">Download backup with uploaded files ({_hb(_sz["data_bytes"] + _sz["uploads_bytes"])})</a>'
                if _sz["uploads_bytes"] else '')
     backup_html = f"""
@@ -2088,7 +2098,7 @@ def _dashboard_page() -> str:
     <h2>Backup &amp; restore</h2>
     <div class="hint">Your members ({_sz["members"]}), your signing key, settings and content live in one place on this server. If that storage were ever lost, they would be gone, and every card you issued would stop working. A backup is one file you keep somewhere safe.</div>
     {_last_html}
-    <div class="hint" style="margin:8px 0;color:#f0c674;">The backup file contains your private signing key and your members' email addresses. Keep it private, and don't email it or put it anywhere others can open it.</div>
+    <div class="warn">The backup file contains your private signing key and your members' email addresses. Keep it private, and don't email it or put it anywhere others can open it.</div>
     <div style="display:flex;gap:10px;flex-wrap:wrap;margin:10px 0;">
       <a class="bk-btn" href="/admin/backup/download">Download backup ({_hb(_sz["data_bytes"])}: members, key, settings)</a>
       {_up_btn}
@@ -2111,77 +2121,103 @@ def _dashboard_page() -> str:
                          else '<span class="no-logo">none — cards show no logo</span>')
     g_style = cfg.get("card_style", "distressed")
 
+    style_cards = ""
+    for k in admin_theme.STYLES:
+        nm, desc = admin_theme.LABELS[k]
+        sw = admin_theme.swatch(k)
+        chips = "".join(f'<i style="background:{c};"></i>' for c in sw)
+        style_cards += (f'<label class="style-card{" on" if cfg["admin_style"] == k else ""}">'
+                        f'<input type="radio" name="admin_style" value="{k}" {"checked" if cfg["admin_style"] == k else ""}>'
+                        f'<span class="sc-sw">{chips}</span><span class="sc-name">{esc_html(nm)}</span>'
+                        f'<span class="sc-desc">{esc_html(desc)}</span></label>')
+
     return f"""<!DOCTYPE html>
 <html><head><meta charset="UTF-8">
 <title>Dashboard — {title}</title>
 <style>
-  body {{ background:#0a0908; color:#e6dfd2; font-family:'Courier New',monospace; padding:32px; max-width:900px; margin:0 auto; }}
-  h1 {{ color:{accent}; font-size:16px; letter-spacing:2px; text-transform:uppercase; margin-bottom:4px; }}
-  h2 {{ color:{accent}; font-size:12px; letter-spacing:1.5px; text-transform:uppercase; margin:32px 0 12px; border-bottom:1px solid #3a1210; padding-bottom:8px; }}
+  body {{ background:var(--bg); color:var(--fg); font-family:var(--font); padding:32px; max-width:900px; margin:0 auto; }}
+  h1 {{ color:var(--accent-text); font-size:16px; letter-spacing:2px; text-transform:uppercase; margin-bottom:4px; }}
+  h2 {{ color:var(--accent-text); font-size:12px; letter-spacing:1.5px; text-transform:uppercase; margin:32px 0 12px; border-bottom:1px solid var(--line); padding-bottom:8px; }}
   .nav {{ margin-bottom:18px; font-size:11px; letter-spacing:1px; }}
-  .nav a {{ color:{accent}; text-decoration:none; margin-right:18px; }}
+  .nav a {{ color:var(--accent-text); text-decoration:none; margin-right:18px; }}
   .nav a:hover {{ text-decoration:underline; }}
-  .hint {{ color:#6b6058; font-size:11px; line-height:1.6; }}
+  .hint {{ color:var(--muted); font-size:11px; line-height:1.6; }}
   .stats {{ display:flex; gap:24px; margin:16px 0 8px; font-size:11px; }}
-  .stats b {{ color:{accent}; font-size:16px; display:block; }}
-  label {{ display:block; font-size:10px; letter-spacing:1px; color:#a8a094; text-transform:uppercase; margin-bottom:4px; margin-top:14px; }}
-  input {{ width:100%; background:#1a100e; border:1px solid #3a1210; color:#e6dfd2;
-           font-family:'Courier New',monospace; font-size:12px; padding:8px 10px; box-sizing:border-box; }}
+  .stats b {{ color:var(--accent-text); font-size:16px; display:block; }}
+  label {{ display:block; font-size:10px; letter-spacing:1px; color:var(--soft); text-transform:uppercase; margin-bottom:4px; margin-top:14px; }}
+  input {{ width:100%; background:var(--field); border:1px solid var(--line); color:var(--fg);
+           font-family:var(--font); font-size:12px; padding:8px 10px; box-sizing:border-box; }}
   input[type=color] {{ width:60px; padding:2px; height:32px; }}
+  .style-cards {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(190px,1fr)); gap:12px; }}
+  .style-card {{ display:block !important; margin:0 !important; padding:12px 14px; border:1px solid var(--line); background:var(--panel); cursor:pointer;
+                 border-radius:var(--radius); text-transform:none !important; letter-spacing:0 !important; }}
+  .style-card input {{ position:absolute; opacity:0; pointer-events:none; width:1px !important; height:1px; }}
+  .style-card.on {{ border-color:var(--accent-text); box-shadow:0 0 0 1px var(--accent-text); }}
+  .style-card:hover {{ border-color:var(--accent-text); }}
+  .sc-sw {{ display:flex; height:22px; margin-bottom:10px; border:1px solid var(--line); border-radius:var(--radius); overflow:hidden; }}
+  .sc-sw i {{ flex:1; display:block; }}
+  .sc-name {{ display:block; color:var(--fg); font-size:13px !important; font-weight:600; text-transform:none !important; letter-spacing:0 !important; }}
+  .sc-desc {{ display:block; color:var(--muted); font-size:11px !important; line-height:1.5; margin-top:3px; text-transform:none !important; letter-spacing:0 !important; font-weight:400; }}
   .wl-grid {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:10px 18px; }}
   .wl-previews {{ display:flex; gap:16px; flex-wrap:wrap; margin-top:14px; }}
   .wl-previews > div {{ flex:1 1 320px; min-width:0; }}
-  .wl-frame {{ width:100%; height:460px; border:1px solid #3a1210; display:block; }}
-  select, textarea {{ width:100%; background:#1a100e; border:1px solid #3a1210; color:#e6dfd2;
-           font-family:'Courier New',monospace; font-size:12px; padding:8px 10px; box-sizing:border-box; }}
+  .wl-frame {{ width:100%; height:460px; border:1px solid var(--line); display:block; }}
+  select, textarea {{ width:100%; background:var(--field); border:1px solid var(--line); color:var(--fg);
+           font-family:var(--font); font-size:12px; padding:8px 10px; box-sizing:border-box; }}
   textarea {{ resize:vertical; }}
   .approve-req-btn, .reject-req-btn {{
-    background:transparent; border:1px solid {accent}; color:{accent};
-    font-family:'Courier New',monospace; font-size:10px; letter-spacing:1px;
+    background:transparent; border:1px solid var(--accent-text); color:var(--accent-text);
+    font-family:var(--font); font-size:10px; letter-spacing:1px;
     text-transform:uppercase; padding:5px 10px; cursor:pointer; margin-right:6px;
   }}
-  .approve-req-btn:hover {{ background:{accent}; color:#0a0908; }}
-  .reject-req-btn {{ border-color:#5a4a42; color:#a8a094; }}
-  .reject-req-btn:hover {{ background:#3a1210; color:#e6dfd2; }}
+  .approve-req-btn:hover {{ background:var(--accent); color:var(--on-accent); }}
+  .reject-req-btn {{ border-color:var(--line-strong); color:var(--soft); }}
+  .reject-req-btn:hover {{ background:var(--line); color:var(--fg); }}
   .approve-req-btn:disabled, .reject-req-btn:disabled {{ opacity:0.5; cursor:default; }}
   table {{ width:100%; border-collapse:collapse; margin-top:8px; }}
-  th {{ text-align:left; font-size:9px; letter-spacing:1px; color:#6b6058; text-transform:uppercase; padding:4px 6px; }}
+  th {{ text-align:left; font-size:9px; letter-spacing:1px; color:var(--muted); text-transform:uppercase; padding:4px 6px; }}
   td {{ padding:4px 6px; }}
-  .remove-tier {{ background:transparent; border:1px solid #3a1210; color:#a8a094; cursor:pointer; width:28px; height:28px; }}
-  .add-tier, .save-btn {{ background:{accent}; color:#0a0908; border:none; font-family:'Courier New',monospace;
+  .remove-tier {{ background:transparent; border:1px solid var(--line); color:var(--soft); cursor:pointer; width:28px; height:28px; }}
+  .add-tier, .save-btn {{ background:var(--accent); color:var(--on-accent); border:none; font-family:var(--font);
            font-size:11px; letter-spacing:1.5px; text-transform:uppercase; padding:10px 18px; cursor:pointer; margin-top:12px; }}
-  .add-tier {{ background:transparent; border:1px solid {accent}; color:{accent}; }}
-  .bk-btn {{ display:inline-block; background:transparent; border:1px solid {accent}; color:{accent}; font-family:'Courier New',monospace;
+  .add-tier {{ background:transparent; border:1px solid var(--accent-text); color:var(--accent-text); }}
+  .bk-btn {{ display:inline-block; background:transparent; border:1px solid var(--accent-text); color:var(--accent-text); font-family:var(--font);
              font-size:11px; letter-spacing:1px; text-transform:uppercase; padding:10px 14px; cursor:pointer; text-decoration:none; }}
-  .bk-btn:hover {{ background:{accent}22; }}
-  .bk-restore summary {{ cursor:pointer; color:#a8a094; font-size:11px; letter-spacing:1px; text-transform:uppercase; margin:6px 0; }}
-  .placeholder {{ color:#6b6058; font-size:11px; line-height:1.7; border-left:2px solid #3a1210; padding:10px 14px; }}
-  .banner {{ background:#13371f; color:#5fd98a; font-size:11px; padding:10px 14px; margin-bottom:16px; letter-spacing:1px; text-transform:uppercase; }}
-  .design-toggle {{ background:transparent; border:1px solid #3a1210; color:#a8a094; font-family:'Courier New',monospace;
+  .bk-btn:hover {{ background:color-mix(in srgb, var(--accent-text) 14%, transparent); }}
+  .backup-box {{ border:1px solid var(--line); background:var(--panel); padding:2px 22px 20px; margin:44px 0 8px; border-radius:var(--radius-lg, 0); }}
+  .backup-box h2 {{ margin-top:22px; }}
+  .bk-status {{ display:inline-block; font-size:11px; padding:6px 12px; margin:8px 0 4px; border:1px solid var(--line); border-radius:var(--radius, 0); }}
+  .bk-status.ok {{ color:var(--ok); background:var(--ok-bg); border-color:transparent; }}
+  .bk-status.warn {{ color:var(--warn); background:var(--warn-bg); border-color:transparent; }}
+  .backup-box .warn {{ background:var(--warn-bg); color:var(--warn); font-size:11px; line-height:1.6; padding:10px 14px; margin:12px 0; border-radius:var(--radius, 0); }}
+  .bk-restore summary {{ cursor:pointer; color:var(--soft); font-size:11px; letter-spacing:1px; text-transform:uppercase; margin:6px 0; }}
+  .placeholder {{ color:var(--muted); font-size:11px; line-height:1.7; border-left:2px solid var(--line); padding:10px 14px; }}
+  .banner {{ background:var(--ok-bg); color:var(--ok); font-size:11px; padding:10px 14px; margin-bottom:16px; letter-spacing:1px; text-transform:uppercase; }}
+  .design-toggle {{ background:transparent; border:1px solid var(--line); color:var(--soft); font-family:var(--font);
            font-size:10px; padding:6px 10px; cursor:pointer; white-space:nowrap; }}
-  .design-panel {{ background:#13100f; border:1px solid #3a1210; padding:16px; margin:6px 0; display:flex; flex-wrap:wrap; gap:16px; align-items:flex-start; }}
+  .design-panel {{ background:var(--panel); border:1px solid var(--line); padding:16px; margin:6px 0; display:flex; flex-wrap:wrap; gap:16px; align-items:flex-start; }}
   .design-field {{ flex:1 1 180px; min-width:160px; }}
   .design-field label {{ margin-top:0; }}
-  .design-field select {{ width:100%; background:#1a100e; border:1px solid #3a1210; color:#e6dfd2;
-           font-family:'Courier New',monospace; font-size:12px; padding:8px 10px; }}
+  .design-field select {{ width:100%; background:var(--field); border:1px solid var(--line); color:var(--fg);
+           font-family:var(--font); font-size:12px; padding:8px 10px; }}
   .logo-row {{ display:flex; align-items:center; gap:8px; flex-wrap:wrap; }}
   .logo-thumb {{ height:32px; max-width:80px; object-fit:contain; background:#000; }}
-  .no-logo {{ color:#6b6058; font-size:10px; }}
-  .remove-logo {{ background:transparent; border:1px solid #3a1210; color:#a8a094; font-family:'Courier New',monospace;
+  .no-logo {{ color:var(--muted); font-size:10px; }}
+  .remove-logo {{ background:transparent; border:1px solid var(--line); color:var(--soft); font-family:var(--font);
            font-size:9px; padding:4px 8px; cursor:pointer; }}
-  .preview-btn {{ background:transparent; border:1px solid {accent}; color:{accent}; font-family:'Courier New',monospace;
+  .preview-btn {{ background:transparent; border:1px solid var(--accent-text); color:var(--accent-text); font-family:var(--font);
            font-size:10px; letter-spacing:1px; padding:8px 14px; cursor:pointer; flex:1 1 100%; }}
-  .preview-frame {{ width:100%; height:480px; border:1px solid #3a1210; margin-top:10px; flex:1 1 100%; background:#050403; }}
-  .checklist {{ border:1px solid #3a1210; background:#13100f; padding:12px 16px; margin:18px 0 0; }}
-  .checklist summary {{ cursor:pointer; color:{accent}; font-size:12px; letter-spacing:1.5px; text-transform:uppercase; }}
+  .preview-frame {{ width:100%; height:480px; border:1px solid var(--line); margin-top:10px; flex:1 1 100%; background:var(--frame-bg); }}
+  .checklist {{ border:1px solid var(--line); background:var(--panel); padding:12px 16px; margin:18px 0 0; }}
+  .checklist summary {{ cursor:pointer; color:var(--accent-text); font-size:12px; letter-spacing:1.5px; text-transform:uppercase; }}
   .chk-row {{ display:flex; gap:12px; align-items:flex-start; margin-top:12px; font-size:12px; }}
-  .chk-ok {{ color:#5fd98a; font-size:14px; width:16px; flex:0 0 16px; }}
-  .chk-todo {{ color:#f0c674; font-size:14px; width:16px; flex:0 0 16px; }}
-  .embed-code {{ background:#13100f; border:1px solid #3a1210; color:#e6dfd2; font-family:'Courier New',monospace;
+  .chk-ok {{ color:var(--ok); font-size:14px; width:16px; flex:0 0 16px; }}
+  .chk-todo {{ color:var(--warn); font-size:14px; width:16px; flex:0 0 16px; }}
+  .embed-code {{ background:var(--panel); border:1px solid var(--line); color:var(--fg); font-family:var(--font);
            font-size:12px; line-height:1.7; padding:12px 14px; margin:8px 0; white-space:pre-wrap; word-break:break-all; }}
-  .copy-btn {{ background:{accent}; color:#0a0908; border:none; font-family:'Courier New',monospace;
+  .copy-btn {{ background:var(--accent); color:var(--on-accent); border:none; font-family:var(--font);
            font-size:11px; letter-spacing:1.5px; text-transform:uppercase; padding:8px 16px; cursor:pointer; }}
-</style></head>
+{theme_css}</style></head>
 <body>
   <div class="nav"><a href="/admin/members">Members →</a><a href="/admin/content">Content →</a><a href="/admin/logout">Log out</a></div>
   <h1>{title} — Dashboard</h1>
@@ -2202,6 +2238,10 @@ def _dashboard_page() -> str:
   <button type="button" class="copy-btn" id="embed-copy">Copy</button>
 
   <form method="POST" action="/admin/dashboard" enctype="multipart/form-data">
+
+    <h2>Dashboard style</h2>
+    <div class="hint" style="margin-bottom:10px;">How these admin pages look. Only you see this: your members' cards, emails and the widget are not affected. The style changes when you press <b>Save changes</b> at the bottom.</div>
+    <div class="style-cards">{style_cards}</div>
 
     <h2>Branding</h2>
     <label>Creator name</label>
@@ -2247,7 +2287,7 @@ def _dashboard_page() -> str:
       <div>
         <label>Lettering</label>
         <select name="widget_font" id="wl-font">
-          <option value="page" {"selected" if cfg['widget_font'] == "page" else ""}>My page's own font (recommended)</option>
+          <option value="page" {"selected" if cfg['widget_font'] == "page" else ""}>My page's font (recommended)</option>
           <option value="keycard" {"selected" if cfg['widget_font'] == "keycard" else ""}>Keycard lettering (like the cards)</option>
         </select>
       </div>
@@ -2333,7 +2373,7 @@ def _dashboard_page() -> str:
     </div>
     <div class="hint" id="email-status" style="margin-top:8px;min-height:14px;"></div>
     <div class="hint">Preview and test use what's typed above, even before you save. A test needs email set up on the server (BREVO_API_KEY and GMAIL_ADDRESS, see SETUP.md).</div>
-    <iframe id="email-preview-frame" sandbox="" style="display:none;width:100%;height:620px;border:1px solid #3a1210;margin-top:10px;background:#050403;"></iframe>
+    <iframe id="email-preview-frame" sandbox="" style="display:none;width:100%;height:620px;border:1px solid var(--line);margin-top:10px;background:var(--frame-bg);"></iframe>
 
     <h2>Expiry reminder</h2>
     <div class="hint" style="margin-bottom:8px;">Emails a member a few days before their access ends, once per end date. When you extend a member (Members page) the clock restarts for the new date. It only works when email is set up on the server (see SETUP.md). Switching it on also reminds everyone who is <i>already</i> inside the window. You can use <b>{{name}}</b>, <b>{{tier}}</b>, <b>{{creator}}</b>, <b>{{brand}}</b>, <b>{{expires}}</b> and <b>{{days}}</b> (becomes "3 days"). The email always includes the member's access link.</div>
@@ -2352,7 +2392,7 @@ def _dashboard_page() -> str:
       <button type="button" class="add-tier" id="reminder-test-btn" style="margin-top:0;">Send test</button>
     </div>
     <div class="hint" id="reminder-status" style="margin-top:8px;min-height:14px;"></div>
-    <iframe id="reminder-preview-frame" sandbox="" style="display:none;width:100%;height:520px;border:1px solid #3a1210;margin-top:10px;background:#050403;"></iframe>
+    <iframe id="reminder-preview-frame" sandbox="" style="display:none;width:100%;height:520px;border:1px solid var(--line);margin-top:10px;background:var(--frame-bg);"></iframe>
 
     <h2></h2>
     <button type="submit" class="save-btn">Save changes</button>
@@ -2585,7 +2625,7 @@ def _dashboard_page() -> str:
       }}
       function say(text, good) {{
         status.textContent = text;
-        status.style.color = good ? '#5fd98a' : '#e8232b';
+        status.style.color = good ? 'var(--ok)' : 'var(--bad)';
       }}
       function post(url, body) {{
         return fetch(url, {{ method: 'POST', credentials: 'same-origin',
@@ -2622,7 +2662,7 @@ def _dashboard_page() -> str:
         return {{ kind: 'reminder', reminder_subject: f('reminder-subject').value,
                  reminder_text: f('reminder-text').value, reminder_renew_url: f('reminder-renew').value }};
       }}
-      function say(text, good) {{ status.textContent = text; status.style.color = good ? '#5fd98a' : '#e8232b'; }}
+      function say(text, good) {{ status.textContent = text; status.style.color = good ? 'var(--ok)' : 'var(--bad)'; }}
       function post(url, body) {{
         return fetch(url, {{ method: 'POST', credentials: 'same-origin',
                             headers: {{ 'Content-Type': 'application/json' }},
@@ -2691,6 +2731,11 @@ def _dashboard_page() -> str:
       }});
       refresh();
     }})();
+
+    // Dashboard style picker: highlight the chosen card.
+    document.querySelectorAll('.style-card input').forEach(r => r.addEventListener('change', () => {{
+      document.querySelectorAll('.style-card').forEach(c => c.classList.toggle('on', c.querySelector('input').checked));
+    }}));
 
     function decidePaymentRequest(id, action, btn) {{
       const verb = action === 'approve' ? 'Approve this payment and issue the credential?'
@@ -2857,6 +2902,21 @@ def admin_dashboard_preview_card():
 # The Content manager: what members see after they verify (see
 # content_store.py / content_page.py). Saves to DATA_DIR/content.json, so it
 # survives redeploys like the rest of the settings.
+def _storage_numbers():
+    """(bytes used by members, key and settings, size of the storage the data
+    lives on). The total comes from the disk itself (the Railway Volume when
+    attached); 0 when it can't be read."""
+    try:
+        data = backup.sizes(DATA_DIR)["data_bytes"]
+    except Exception:
+        data = 0
+    try:
+        import shutil
+        total = shutil.disk_usage(str(DATA_DIR)).total
+    except Exception:
+        total = 0
+    return data, total
+
 @app.route("/admin/content", methods=["GET"])
 def admin_content():
     redirect_resp = require_admin_page("/admin/content")
@@ -2865,7 +2925,9 @@ def admin_content():
     cfg = load_config()
     resp = app.response_class(
         content_page.render(cfg["accent_color"], cfg["card_title"], content_store.load(), cfg.get("tiers") or [],
-                            max_mb=MAX_UPLOAD_MB, used_bytes=content_store.used_bytes()),
+                            max_mb=MAX_UPLOAD_MB, used_bytes=content_store.used_bytes(),
+                            data_bytes=_storage_numbers()[0], disk_total=_storage_numbers()[1],
+                            theme_css=admin_theme.css(cfg["admin_style"], cfg["accent_color"], "page")),
         mimetype="text/html")
     resp.headers["Cache-Control"] = "no-store"
     return resp

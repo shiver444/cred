@@ -28,7 +28,8 @@ def _json_for_script(obj) -> str:
             .replace(" ", "\\u2029"))
 
 
-def render(accent: str, title: str, content: dict, tiers: list, max_mb: int = 100, used_bytes: int = 0) -> str:
+def render(accent: str, title: str, content: dict, tiers: list, max_mb: int = 100, used_bytes: int = 0,
+           theme_css: str = "", data_bytes: int = 0, disk_total: int = 0) -> str:
     tier_info = [{"name": t.get("name", ""), "sections": list(t.get("sections") or [])}
                  for t in (tiers or [])]
     return (_TEMPLATE
@@ -36,7 +37,9 @@ def render(accent: str, title: str, content: dict, tiers: list, max_mb: int = 10
             .replace("__TITLE__", esc_html(title))
             .replace("__CONTENT__", _json_for_script(content))
             .replace("__TIERS__", _json_for_script(tier_info))
-            .replace("__META__", _json_for_script({"max_mb": int(max_mb), "used_bytes": int(used_bytes)})))
+            .replace("__THEME__", theme_css)
+            .replace("__META__", _json_for_script({"max_mb": int(max_mb), "used_bytes": int(used_bytes),
+                                                   "data_bytes": int(data_bytes), "disk_total": int(disk_total)})))
 
 
 _TEMPLATE = r"""<!DOCTYPE html>
@@ -44,58 +47,72 @@ _TEMPLATE = r"""<!DOCTYPE html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Content — Admin</title>
 <style>
-  :root { --accent: __ACCENT__; }
-  body { background:#0a0908; color:#e6dfd2; font-family:'Courier New',monospace; padding:32px; max-width:900px; margin:0 auto; }
-  h1 { color:var(--accent); font-size:16px; letter-spacing:2px; text-transform:uppercase; margin-bottom:4px; }
+  
+  body { background:var(--bg); color:var(--fg); font-family:var(--font); padding:32px; max-width:900px; margin:0 auto; }
+  h1 { color:var(--accent-text); font-size:16px; letter-spacing:2px; text-transform:uppercase; margin-bottom:4px; }
   .nav { margin-bottom:18px; font-size:11px; letter-spacing:1px; }
-  .nav a { color:var(--accent); text-decoration:none; margin-right:18px; }
+  .nav a { color:var(--accent-text); text-decoration:none; margin-right:18px; }
   .nav a:hover { text-decoration:underline; }
-  .hint { color:#6b6058; font-size:11px; line-height:1.6; margin:6px 0; }
-  .hint b { color:#a8a094; }
-  label { display:block; font-size:10px; letter-spacing:1px; color:#a8a094; text-transform:uppercase; margin:10px 0 4px; }
-  input, select, textarea { width:100%; background:#1a100e; border:1px solid #3a1210; color:#e6dfd2;
-           font-family:'Courier New',monospace; font-size:12px; padding:8px 10px; box-sizing:border-box; }
-  input.bad { border-color:#e8232b; }
-  button { font-family:'Courier New',monospace; cursor:pointer; }
-  .btn { background:var(--accent); color:#0a0908; border:none; font-size:11px; letter-spacing:1.5px;
+  .hint { color:var(--muted); font-size:11px; line-height:1.6; margin:6px 0; }
+  .hint b { color:var(--soft); }
+  label { display:block; font-size:10px; letter-spacing:1px; color:var(--soft); text-transform:uppercase; margin:10px 0 4px; }
+  input, select, textarea { width:100%; background:var(--field); border:1px solid var(--line); color:var(--fg);
+           font-family:var(--font); font-size:12px; padding:8px 10px; box-sizing:border-box; }
+  input.bad { border-color:var(--bad); }
+  button { font-family:var(--font); cursor:pointer; }
+  .btn { background:var(--accent); color:var(--on-accent); border:none; font-size:11px; letter-spacing:1.5px;
          text-transform:uppercase; padding:10px 18px; }
-  .btn.ghost { background:transparent; border:1px solid var(--accent); color:var(--accent); }
+  .btn.ghost { background:transparent; border:1px solid var(--accent-text); color:var(--accent-text); }
   .btn:disabled { opacity:.5; cursor:default; }
-  .mini { background:transparent; border:1px solid #3a1210; color:#a8a094; font-size:11px; width:28px; height:28px; padding:0; }
-  .mini:hover { border-color:var(--accent); color:var(--accent); }
-  .sec { border:1px solid #3a1210; background:#13100f; padding:14px 16px; margin:16px 0; }
+  .mini { background:transparent; border:1px solid var(--line); color:var(--soft); font-size:11px; width:28px; height:28px; padding:0; }
+  .mini:hover { border-color:var(--accent-text); color:var(--accent-text); }
+  .sec { border:1px solid var(--line); background:var(--panel); padding:14px 16px; margin:16px 0; }
   .sec-head { display:flex; gap:10px; align-items:flex-end; flex-wrap:wrap; }
   .sec-head > div { flex:1 1 160px; }
   .sec-head .tools { flex:0 0 auto; display:flex; gap:4px; }
-  .badge { display:inline-block; border:1px solid #3a1210; color:var(--accent); font-size:10px; letter-spacing:1px;
+  .badge { display:inline-block; border:1px solid var(--line); color:var(--accent-text); font-size:10px; letter-spacing:1px;
            text-transform:uppercase; padding:2px 8px; margin-left:8px; }
-  .item { display:flex; gap:8px; align-items:flex-start; margin-top:10px; padding-top:10px; border-top:1px dashed #2a1a18; }
+  .item { display:flex; gap:8px; align-items:flex-start; margin-top:10px; padding-top:10px; border-top:1px dashed var(--dash); }
   .item .fields { flex:1 1 auto; display:flex; gap:8px; flex-wrap:wrap; }
   .item .fields > div { flex:1 1 200px; }
   .item .fields > div.wide { flex:1 1 100%; }
   .item .fields label { margin-top:0; }
   .bar { display:flex; gap:12px; align-items:center; flex-wrap:wrap; margin:18px 0; }
   .msg { font-size:11px; letter-spacing:1px; text-transform:uppercase; }
-  .msg.ok { color:#5fd98a; } .msg.err { color:#e8232b; }
-  .warn { background:#3a2a10; color:#f0c674; font-size:11px; line-height:1.6; padding:10px 14px; margin:10px 0; }
+  .msg.ok { color:var(--ok); } .msg.err { color:var(--bad); }
+  .warn { background:var(--warn-bg); color:var(--warn); font-size:11px; line-height:1.6; padding:10px 14px; margin:10px 0; }
   .warn ul { margin:4px 0 0 18px; padding:0; }
-  .tiers { border:1px solid #3a1210; padding:12px 16px; margin:16px 0; font-size:12px; line-height:1.8; }
-  .ok-k { color:#5fd98a; } .no-k { color:#e8232b; }
-  .empty { color:#6b6058; font-size:11px; padding:8px 0; }
-  .chip { display:flex; align-items:center; gap:8px; flex-wrap:wrap; background:#1a100e; border:1px solid #3a1210; padding:7px 10px; font-size:12px; }
+  .tiers { border:1px solid var(--line); padding:12px 16px; margin:16px 0; font-size:12px; line-height:1.8; }
+  .ok-k { color:var(--ok); } .no-k { color:var(--bad); }
+  .empty { color:var(--muted); font-size:11px; padding:8px 0; }
+  .chip { display:flex; align-items:center; gap:8px; flex-wrap:wrap; background:var(--field); border:1px solid var(--line); padding:7px 10px; font-size:12px; }
   .chip .nm { word-break:break-all; }
-  .chip .sz { color:#6b6058; }
-  .small { background:transparent; border:1px solid #3a1210; color:#a8a094; font-size:10px; letter-spacing:1px; text-transform:uppercase; padding:5px 9px; }
-  .small:hover { border-color:var(--accent); color:var(--accent); }
-  .upmsg { font-size:11px; margin-top:4px; min-height:14px; color:#6b6058; }
-  .upmsg.err { color:#e8232b; }
-</style></head>
+  .chip .sz { color:var(--muted); }
+  .small { background:transparent; border:1px solid var(--line); color:var(--soft); font-size:10px; letter-spacing:1px; text-transform:uppercase; padding:5px 9px; }
+  .small:hover { border-color:var(--accent-text); color:var(--accent-text); }
+  .stor { }
+  #storage-info { border:1px solid var(--line); background:var(--panel); padding:14px 16px; margin:14px 0; border-radius:var(--radius, 0); }
+  .stor-head { display:flex; justify-content:space-between; gap:10px; align-items:baseline; flex-wrap:wrap; font-size:12px; color:var(--fg); }
+  .stor-head span { color:var(--muted); font-size:11px; }
+  .stor-bar { display:flex; height:12px; margin:10px 0 8px; background:var(--dash); border-radius:var(--radius, 0); overflow:hidden; }
+  .stor-bar i { display:block; height:100%; }
+  .stor-bar i.u { background:var(--accent); }
+  .stor-bar i.d { background:var(--soft); opacity:.75; }
+  .stor-bar.full i.u { background:var(--warn); }
+  .stor-legend { display:flex; gap:16px; flex-wrap:wrap; font-size:11px; color:var(--muted); }
+  .lg::before { content:""; display:inline-block; width:9px; height:9px; margin-right:6px; vertical-align:-1px; border-radius:50%; background:var(--dash); border:1px solid var(--line-strong); }
+  .lg.u::before { background:var(--accent); border-color:var(--accent); }
+  .lg.d::before { background:var(--soft); border-color:var(--soft); opacity:.75; }
+  .stor-note { font-size:11px; color:var(--muted); margin-top:8px; }
+  .upmsg { font-size:11px; margin-top:4px; min-height:14px; color:var(--muted); }
+  .upmsg.err { color:var(--bad); }
+__THEME__</style></head>
 <body>
   <div class="nav"><a href="/admin/dashboard">← Dashboard</a><a href="/admin/members">Members →</a><a href="/admin/logout">Log out</a></div>
   <h1>__TITLE__ — Content</h1>
   <div class="hint">What members see after they verify. Each <b>section</b> has a <b>key</b> (a short lowercase name, like <b>downloads</b>); a tier unlocks the sections whose keys are listed in its "Sections" field on the Dashboard. Changes only take effect when you press <b>Save content</b>.</div>
   <div class="hint">Members' content is only sent to someone holding a valid, unrevoked, unexpired credential for a tier that includes the section. An item can be a <b>link</b> or an <b>uploaded file</b>. Uploaded files live on this server and can only be downloaded by a verified member of a tier that includes the section (the download link a member gets stops working after 15 minutes, and revoking a member cuts them off). A plain <b>link</b> you add can still be opened by anyone who is given it, so for truly private files, upload them here or use a link that is private on its own side.</div>
-  <div class="hint" id="storage-info"></div>
+  <div id="storage-info"></div>
 
   <div class="tiers" id="tier-check"></div>
 
@@ -166,9 +183,33 @@ _TEMPLATE = r"""<!DOCTYPE html>
     if (n >= 1024) return Math.round(n / 1024) + ' KB';
     return n + ' B';
   }
+  // The storage panel: a bar for how much of this server's storage is used
+  // (uploaded files + members/key/settings), with the free space, and the
+  // per-file limit underneath. Without a known total it shows sizes only.
   function renderStorage() {
-    document.getElementById('storage-info').textContent =
-      'Uploaded files take ' + fmtSize(meta.used_bytes) + ' of this server\'s storage so far. One file can be up to ' + meta.max_mb + ' MB.';
+    var box = document.getElementById('storage-info');
+    var up = Math.max(0, +meta.used_bytes || 0), dat = Math.max(0, +meta.data_bytes || 0), total = Math.max(0, +meta.disk_total || 0);
+    var used = up + dat, free = total ? Math.max(0, total - used) : 0;
+    while (box.firstChild) box.removeChild(box.firstChild);
+    box.appendChild(el('div', { class: 'stor-head' }, [
+      el('b', { text: 'Storage' }),
+      el('span', { text: total ? fmtSize(used) + ' of ' + fmtSize(total) + ' used' : fmtSize(used) + ' used' })
+    ]));
+    if (total) {
+      var pu = up ? Math.max(0.8, up * 100 / total) : 0, pd = dat ? Math.max(0.8, dat * 100 / total) : 0;
+      var bar = el('div', { class: 'stor-bar', role: 'img', 'aria-label': Math.round(used * 100 / total) + ' percent used' }, [
+        pu ? el('i', { class: 'u', style: 'width:' + pu.toFixed(2) + '%' }) : null,
+        pd ? el('i', { class: 'd', style: 'width:' + pd.toFixed(2) + '%' }) : null
+      ]);
+      if (used * 100 / total >= 85) bar.className += ' full';
+      box.appendChild(bar);
+    }
+    box.appendChild(el('div', { class: 'stor-legend' }, [
+      el('span', { class: 'lg u', text: 'Uploaded files ' + fmtSize(up) }),
+      el('span', { class: 'lg d', text: 'Members, key and settings ' + fmtSize(dat) }),
+      total ? el('span', { class: 'lg f', text: 'Free ' + fmtSize(free) }) : null
+    ]));
+    box.appendChild(el('div', { class: 'stor-note', text: 'One file can be up to ' + meta.max_mb + ' MB. Files and members all live on this server\'s storage.' }));
   }
   // Upload one file; reports progress; calls done(file meta or null, error text).
   function uploadFile(file, onProgress, done) {

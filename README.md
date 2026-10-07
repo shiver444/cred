@@ -41,7 +41,8 @@ can revoke any of them at any time.
 - A signup and access widget that works on any site (two lines of HTML) and
   adapts to your page's colors and font by itself; you can also set its colors,
   corners and wording in the dashboard.
-- An admin dashboard: branding, tiers and pricing, per-tier card designs,
+- An admin dashboard (four looks to choose from: Daylight, Studio, Midnight or the
+  original Spaceship): branding, tiers and pricing, per-tier card designs,
   payment settings, a member list with one-click revoke, and a "copy link"
   button that gives you any member's personal access link.
 - Cards and credentials signed with ECDSA, with a private key generated for

@@ -3,6 +3,7 @@
   "card_title": "YOUR BRAND HERE",
   "card_subtitle": "Member Card",
   "accent_color": "#00e87a",
+  "admin_style": "daylight",
   "members_page": "https://your-domain.com/members.html",
   "api_base": "YOUR_RAILWAY_URL",
   "currency": "usd",
@@ -21,7 +22,10 @@
       "label": "Full Access",
       "price": 5,
       "expiry_days": 31,
-      "sections": ["downloads", "chat"]
+      "sections": [
+        "downloads",
+        "chat"
+      ]
     }
   ]
 }
