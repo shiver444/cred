@@ -128,6 +128,7 @@ host is usually the better choice.
 | `STRIPE_SECRET_KEY` | Only if `payment_provider` is `"stripe"` | Your Stripe secret key (`sk_test_...` or `sk_live_...`). Not needed at all with the default `"manual"` provider — see step 6. |
 | `STRIPE_WEBHOOK_SECRET` | Only if `payment_provider` is `"stripe"` | The signing secret for your Stripe webhook endpoint (`whsec_...`). Without it, `/webhook/stripe` refuses everything — there is no default/fallback secret, same philosophy as `ADMIN_SECRET`. |
 | `MAX_UPLOAD_MB` | No | Largest single file you can upload on the Content page, in megabytes. Defaults to 100. Keep it well below your Volume's size. |
+| `SIGNUP_LIMIT_PER_HOUR` | No | Most sign-ups (all visitors together) the server will accept per hour. Defaults to 300. Raise it for a big launch. |
 | `PORT` | No | Defaults to 5001. |
 | `FLASK_DEBUG` | No — leave unset in production | Set to `1` for local testing to get Flask's debugger/auto-reload back. Off by default on purpose — leaving it on in a public deployment can expose that interactive debugger to anyone who triggers an unhandled error. Never set this on Railway. |
 
@@ -148,9 +149,30 @@ link from **Members → Copy link** and send it yourself.
 Go to `https://<your-domain>/admin/login` and log in with `ADMIN_SECRET`
 as the password. From there: **Dashboard** (branding, tiers, pricing —
 see step 3) and **Members** (view/revoke issued credentials). There's no
-`?secret=` URL anymore — that's gone in favor of a real session cookie.
-Scripts/curl can still authenticate to `/revoke` with the old
+`?secret=` link to bookmark — the browser uses a real session cookie.
+Scripts/curl can still authenticate to `/revoke` with the
 `X-Admin-Secret` header if you need to automate revocation.
+
+**Built-in protections** (nothing to set up):
+
+- **Login lockout.** After 5 wrong passwords in a row the visitor is locked
+  out for 15 minutes — even the right password is refused during that time.
+  Wrong `X-Admin-Secret` guesses count the same way. If you lock *yourself*
+  out, wait 15 minutes, or restart the service in Railway (that clears it).
+  There is also a site-wide backstop for guessing spread over many addresses.
+- **Forged-request protection.** Every admin action made from your browser
+  carries a hidden token that only the admin pages know, so another website
+  can't make your logged-in browser change settings, revoke members or upload
+  files. (Scripts using the `X-Admin-Secret` header don't need it.) If you
+  ever see "Security check failed. Reload the page", just reload and retry —
+  it happens after a redeploy or if the page was open for a very long time.
+- **Rate limits on public endpoints.** Each visitor can sign up about 10
+  times per 10 minutes, and make 120 verify/content requests per minute (60
+  file downloads per minute). On top of that, all sign-ups together are
+  capped at `SIGNUP_LIMIT_PER_HOUR` (default 300) so nobody can fill your
+  disk with cards or burn your email quota. Raise it before a big launch.
+- The login cookie is marked secure on Railway, admin pages can't be shown
+  inside another site's frame, and admin pages are never cached.
 
 ## 6. Taking payment for paid tiers
 
@@ -405,9 +427,10 @@ original build for why that trade-off was made.
 Every built-in payment provider is one-time payment only — no
 subscriptions/auto-renewal (see step 6). The "manual" provider also has no
 automatic payment confirmation by design — approving is a human decision,
-on purpose. No CSRF protection or login rate-limiting on the admin login
-either (it's a single-password, single-admin tool at this stage) — fine
-for a small/direct-support deployment, worth hardening before this is ever
+on purpose. The admin is a single-password, single-admin tool (no
+accounts, no two-factor) — fine for a small/direct-support deployment, and
+protected by the login lockout, forged-request token and rate limits
+described under "Admin login" — but worth more before this is ever
 multi-tenant or exposed more broadly.
 
 ## Your card's look

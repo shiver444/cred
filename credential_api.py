@@ -72,6 +72,7 @@ import content_store
 import content_page
 import email_sender
 import logo_utils
+import security
 
 app = Flask(__name__)
 CORS(app)  # allow requests from your own domain
@@ -104,6 +105,11 @@ app.secret_key = _session_secret
 app.config["SESSION_COOKIE_HTTPONLY"] = True
 app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
 app.config["PERMANENT_SESSION_LIFETIME"] = timedelta(hours=12)
+# On Railway the site is always https, so the login cookie is marked
+# "secure" (never sent over plain http). Locally (http) it stays off.
+if (os.environ.get("RAILWAY_ENVIRONMENT") or os.environ.get("RAILWAY_PUBLIC_DOMAIN")
+        or os.environ.get("SESSION_COOKIE_SECURE") == "1"):
+    app.config["SESSION_COOKIE_SECURE"] = True
 
 # Uploaded members-only files (Content page). One file may be this big;
 # the Railway Volume's own size is the real ceiling, so set MAX_UPLOAD_MB
@@ -133,6 +139,86 @@ def _too_big(_e):
     msg = (f"That file is too big (the limit is {MAX_UPLOAD_MB} MB)." if request.path == "/admin/content/upload"
            else "That request is too large.")
     return jsonify({"success": False, "error": msg}), 413
+
+# ── Rate limits (see security.py) ──
+# Wrong admin passwords lock the guesser out; the public endpoints (signup,
+# verify, member content/files) are capped per visitor so one script cannot
+# flood the server, fill the disk with cards, or send endless emails.
+try:
+    SIGNUP_LIMIT_PER_HOUR = max(1, int(os.environ.get("SIGNUP_LIMIT_PER_HOUR", "300")))
+except ValueError:
+    SIGNUP_LIMIT_PER_HOUR = 300
+
+_login_guard = security.LoginGuard()
+_rate = security.SlidingLimiter()
+
+# (path or prefix ending in "/", bucket name, hits allowed per visitor, window in seconds)
+_PUBLIC_RULES = [
+    ("/issue",          "signup", 10,  600),
+    ("/checkout",       "signup", 10,  600),
+    ("/verify",         "check",  120, 60),
+    ("/member-content", "check",  120, 60),
+    ("/member-file/",   "file",   60,  60),
+]
+
+def _too_many(wait: int, msg: str = "Too many requests. Please wait a little and try again."):
+    resp = jsonify({"success": False, "valid": False, "error": msg})
+    resp.status_code = 429
+    resp.headers["Retry-After"] = str(max(1, int(wait)))
+    return resp
+
+@app.before_request
+def _rate_limit_public():
+    if request.method not in ("POST", "GET"):
+        return None
+    path = request.path
+    for prefix, bucket, limit, window in _PUBLIC_RULES:
+        if path == prefix or (prefix.endswith("/") and path.startswith(prefix)):
+            allowed, wait = _rate.hit((bucket, get_client_ip()), limit, window)
+            if not allowed:
+                return _too_many(wait)
+            if bucket == "signup":
+                allowed, wait = _rate.hit(("signup-all",), SIGNUP_LIMIT_PER_HOUR, 3600)
+                if not allowed:
+                    return _too_many(wait, "We're getting a lot of sign-ups right now. Please try again in a little while.")
+            break
+    return None
+
+@app.before_request
+def _csrf_protect():
+    """Every state-changing admin request made from a logged-in browser must
+    carry the page's CSRF token (added automatically by security.inject_csrf).
+    Scripts that authenticate with the admin secret are not cookie-driven, so
+    they are exempt."""
+    if request.method in ("GET", "HEAD", "OPTIONS"):
+        return None
+    path = request.path
+    if not (path.startswith("/admin/") or path == "/revoke") or path == "/admin/login":
+        return None
+    if not is_admin_session():
+        return None            # the route's own auth check will refuse it
+    if ADMIN_SECRET and (security.same_secret(request.headers.get("X-Admin-Secret"), ADMIN_SECRET)
+                         or security.same_secret(request.args.get("secret"), ADMIN_SECRET)):
+        return None
+    supplied = request.headers.get("X-CSRF-Token") or request.form.get("csrf_token")
+    if not security.csrf_ok(session, supplied):
+        return jsonify({"success": False, "valid": False,
+                        "error": "Security check failed. Reload the page and try again."}), 403
+    return None
+
+@app.after_request
+def _security_headers(resp):
+    resp.headers.setdefault("X-Content-Type-Options", "nosniff")
+    resp.headers.setdefault("Referrer-Policy", "no-referrer")
+    path = request.path
+    if path.startswith("/admin/") or path == "/revoke":
+        resp.headers["X-Frame-Options"] = "DENY"
+        resp.headers["Content-Security-Policy"] = "frame-ancestors 'none'"
+        resp.headers.setdefault("Cache-Control", "no-store")
+        if (request.method == "GET" and resp.status_code == 200 and resp.mimetype == "text/html"
+                and is_admin_session() and not resp.direct_passthrough):
+            resp.set_data(security.inject_csrf(resp.get_data(as_text=True), security.csrf_token(session)))
+    return resp
 
 # Stripe — payments are entirely opt-in. With these unset, /checkout still
 # works for free (price 0) tiers; any tier with a price simply returns a
@@ -188,6 +274,18 @@ def get_client_ip():
         return fwd.split(",")[0].strip()
     return request.remote_addr
 
+def _login_key() -> str:
+    """Who to blame for wrong admin passwords. Uses the LAST X-Forwarded-For
+    entry (the one Railway's proxy added), because the first entry is
+    whatever the client chose to send. The site-wide backstop in
+    security.LoginGuard covers the case where the proxy chain hides it."""
+    fwd = request.headers.get("X-Forwarded-For", "")
+    if fwd:
+        last = fwd.split(",")[-1].strip()
+        if last:
+            return last
+    return request.remote_addr or "unknown"
+
 def is_admin_session() -> bool:
     return bool(session.get("admin_authed"))
 
@@ -202,7 +300,15 @@ def check_admin(req) -> bool:
     if not ADMIN_SECRET:
         return False
     secret = req.headers.get("X-Admin-Secret") or req.args.get("secret", "")
-    return secret == ADMIN_SECRET
+    if not secret:
+        return False
+    key = _login_key()
+    if _login_guard.seconds_locked(key):
+        return False
+    if security.same_secret(secret, ADMIN_SECRET):
+        return True
+    _login_guard.fail(key)
+    return False
 
 def require_admin_page(next_path: str):
     """For admin PAGES (not API calls): redirect to the login page instead
@@ -1003,12 +1109,23 @@ def admin_login():
     if not ADMIN_SECRET:
         return _login_page(error="ADMIN_SECRET is not set on this deployment — no login is possible yet. See SETUP.md.", next_path=next_path)
 
+    key = _login_key()
+    wait = _login_guard.seconds_locked(key)
+    if wait:
+        mins = max(1, (wait + 59) // 60)
+        return _login_page(error=f"Too many wrong passwords. Try again in about {mins} minute{'s' if mins != 1 else ''}.",
+                           next_path=next_path), 429
+
     password = request.form.get("password", "")
-    if password != ADMIN_SECRET:
+    if not security.same_secret(password, ADMIN_SECRET):
+        _login_guard.fail(key)
         return _login_page(error="Wrong password.", next_path=next_path)
 
+    _login_guard.success(key)
+    session.clear()
     session.permanent = True
     session["admin_authed"] = True
+    session["csrf"] = secrets.token_urlsafe(32)
     return redirect(next_path)
 
 @app.route("/admin/logout", methods=["GET"])

@@ -715,7 +715,7 @@
   // is the verify response plus the access code (`_h`) the content request
   // needs. Records from before content was protected have no code: they're
   // dropped, and the member signs in again from their link or card.
-  const sessionKey = 'crith_member_' + name
+  const sessionKey = 'cp_member_' + name
   const stored = sessionStorage.getItem(sessionKey)
   if (stored && !urlId) {
     try {
