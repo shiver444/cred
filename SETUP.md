@@ -71,6 +71,36 @@ be reset every time you deployed. Two things follow from this:
 This also holds the per-tier card designs and their uploaded logos. Your
 members-only content (step 4) is stored the same way.
 
+### Limits per tier: spots and one card per email
+
+Each tier row has a **More ▾** button. Its first section is **limits**:
+
+- **Max members** — leave blank for no limit. With a number, the tier shows
+  as "Sold out" in the signup widget once it's full, and anyone who still
+  tries gets a "sold out" message. Spots in use = members whose card is still
+  active (not revoked, not expired) **plus** paid requests waiting for your
+  approval, so you can't oversell while requests sit in the queue. When a card
+  expires or you revoke it, that spot opens again. The dashboard shows
+  "Right now: 12 of 50 spots in use."
+- **Show visitors how many spots are left** — "12 left" in the widget, or hide
+  the number and only show "Sold out" when it's full.
+- **Cards per email address** — *One working card at a time* (the default):
+  an email can't sign up again for a tier while it still has a working card
+  or a request waiting. *Only one ever* is right for a free trial: an email
+  can't get a second card for that tier even after the first expires or is
+  revoked. *No limit* turns the check off. This applies per tier, so someone
+  on Member can still sign up for VIP.
+
+The email check ignores capital letters, a "+tag" (`pat+1@x.com` counts as
+`pat@x.com`) and, for Gmail, dots. It stops casual repeat sign-ups, not a
+determined person with many different addresses.
+
+Good to know: with Stripe, a tier's limit is checked when someone starts to
+pay. Someone who has already paid is always given their card, so a rush of
+simultaneous payments can overshoot the limit by a few. A member who wants to
+renew while their card is still working is blocked by the default one-card
+rule until it expires. Choose *No limit* on that tier if you'd rather allow it.
+
 ## 4. Add your members-only content
 
 Log in to the dashboard and open **Content** (top of the page). Here you
@@ -440,14 +470,14 @@ Everything about how the member card looks is set in the dashboard under
 
 - **Card logo:** upload a PNG, JPG, GIF or WEBP. It's shrunk automatically
   to a sensible size (long side 600 px) and shown on every card. A tier can
-  have its own logo under **Design ▾**, which wins over this one. Remove
+  have its own logo under **More ▾**, which wins over this one. Remove
   the logo and cards simply have none.
 - **Card style:** *Distressed* (the worn keycard look, with film grain and
   scratches) or *Clean* (the same card, smooth and unworn). A tier can pick
-  its own under **Design ▾**.
+  its own under **More ▾**.
 - **Card label:** the small line under the title, e.g. "Member Keycard".
   A tier can override it too.
-- **Preview the card →** (under Branding, and inside each tier's Design
+- **Preview the card →** (under Branding, and inside each tier's More ▾ → Design
   panel) shows the result using what's currently on screen, before you save.
 
 Only cards issued after a change use the new look; cards members already

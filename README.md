@@ -21,8 +21,8 @@ middle, no platform cut: your members, your keys, your money.
    to `https://your-domain/admin/login`. Log in with the password you chose.
 3. **Fill in your info.** The dashboard has a setup checklist at the top:
    your name and brand, your tiers and prices, how members pay you, and the
-   members-only content (links, downloads, a discount code) on the Content
-   page. Only verified members can see that content.
+   members-only content (links, uploaded files, a discount code) on the
+   Content page. Only verified members can see that content.
 4. **Add two lines to your website.** The dashboard's "Embed on your
    website" box shows them with your real address filled in, ready to copy:
 
@@ -45,6 +45,12 @@ can revoke any of them at any time.
 - Paid tiers without needing a payment processor: members request a paid
   tier, you confirm you were paid however you like, and approve it with one
   click. Stripe is built in as an optional automatic alternative.
+- Members-only content: links, files you upload (only verified members of the
+  right tier can download them) and a merch discount, shown per tier.
+- Limits per tier: cap how many members a tier can have (it shows as
+  "Sold out" when full) and allow one card per email address.
+- Built-in protections: admin login lockout, forged-request protection and
+  rate limits on public pages.
 - Email delivery (optional): connect Brevo and members get their card and
   link by email. Without it, copy each member's link from the dashboard and
   send it yourself.

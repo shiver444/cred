@@ -96,7 +96,9 @@
   const accent  = config.accent_color || '#00e87a'
   const name    = config.creator_name || 'Creator'
   const tiers   = (config.tiers && config.tiers.length) ? config.tiers : [{ name: 'MEMBER', label: 'Free', price: 0 }]
-  let selectedTier = tiers[0]
+  // A tier with a member limit that is full comes with sold_out: true; start on
+  // the first one that still has room.
+  let selectedTier = tiers.find(t => !t.sold_out) || tiers[0]
 
   // ── Load matching fonts ──
   // Same family pairing as the physical/PDF keycard (card_generator.py):
@@ -500,6 +502,9 @@
       color: var(--ca-ash);
     }
     .ca-tier-option:hover { border-color: ${accent}88; }
+    .ca-tier-option.sold-out { opacity: 0.45; cursor: not-allowed; }
+    .ca-tier-option.sold-out:hover { border-color: var(--ca-line); }
+    .ca-tier-option.sold-out .ca-tier-name { text-decoration: line-through; }
     .ca-tier-option.selected {
       border-color: ${accent};
       color: ${accent};
@@ -659,13 +664,15 @@
   function renderTierPicker() {
     const el = document.getElementById('ca-tier-picker')
     el.innerHTML = tiers.map((t, i) => `
-      <div class="ca-tier-option${t === selectedTier ? ' selected' : ''}" data-i="${i}">
+      <div class="ca-tier-option${t === selectedTier ? ' selected' : ''}${t.sold_out ? ' sold-out' : ''}" data-i="${i}">
         <span class="ca-tier-name">${esc(t.name)}${t.label ? ' — ' + esc(t.label) : ''}</span>
-        <span class="ca-tier-price">${t.price ? '$' + esc(t.price) + '/mo' : 'Free'}</span>
+        <span class="ca-tier-price">${t.sold_out ? 'Sold out' : (t.price ? '$' + esc(t.price) + '/mo' : 'Free') + (typeof t.spots_left === 'number' ? ' · ' + esc(Math.max(0, Math.floor(t.spots_left))) + ' left' : '')}</span>
       </div>`).join('')
     el.querySelectorAll('.ca-tier-option').forEach(opt => {
       opt.onclick = () => {
-        selectedTier = tiers[Number(opt.dataset.i)]
+        const t = tiers[Number(opt.dataset.i)]
+        if (t.sold_out) return          // full: can't be picked
+        selectedTier = t
         renderTierPicker()
       }
     })
@@ -1167,6 +1174,7 @@
     errEl.style.display = 'none'
     okEl.style.display  = 'none'
 
+    if (selectedTier.sold_out) { errEl.textContent = 'Sorry, that tier is sold out.'; errEl.style.display = 'block'; return }
     if (!nameVal)  { errEl.textContent = 'Enter your name.';  errEl.style.display = 'block'; return }
     if (!emailVal || !emailVal.includes('@')) {
       errEl.textContent = 'Enter a valid email.'

@@ -44,6 +44,7 @@ import hmac
 import json
 import os
 import secrets
+import threading
 import time
 
 # On Railway, a service with a Volume attached automatically gets
@@ -71,6 +72,7 @@ import config_store
 import content_store
 import content_page
 import email_sender
+import limits
 import logo_utils
 import security
 
@@ -402,8 +404,36 @@ def resolve_tier_design(cfg: dict, tier_name: str) -> dict:
     }
 
 
+# ── Signup limits (see limits.py) ──
+# Checking "is there room / has this email already got one" and then actually
+# issuing must happen as one step, or two people could grab the last spot at
+# the same moment. This lock makes the check and the registry write one unit.
+_signup_lock = threading.RLock()
+
+class SignupBlocked(Exception):
+    """A signup refused by a tier limit (sold out, or email already used)."""
+    def __init__(self, reason: str, message: str):
+        super().__init__(message)
+        self.reason = reason
+        self.message = message
+
+def _signup_check(cfg: dict, tier_cfg: dict, tier: str, email: str):
+    """None if allowed, else (reason, message). Call with _signup_lock held
+    when the answer is about to be acted on."""
+    if not tier_cfg:
+        return None   # an unlisted/demo tier name has no limits to apply
+    from member_registry import list_all as registry_list
+    from payment_requests import list_all as requests_list
+    return limits.check_signup(tier_cfg, tier, email, registry_list(), requests_list(),
+                               creator=cfg.get("creator_name") or "the creator")
+
+def _blocked_response(reason: str, message: str):
+    resp = jsonify({"success": False, "valid": False, "error": message, "reason": reason})
+    resp.status_code = 409
+    return resp
+
 def _issue_and_fulfill(name: str, email: str, tier: str, days: int, sections: list,
-                        cfg: dict = None, payment_meta: dict = None) -> dict:
+                        cfg: dict = None, payment_meta: dict = None, check=None) -> dict:
     """
     The actual issue → bundle → card → registry → email pipeline, shared
     by the free path in /issue, /checkout's free-tier shortcut, and the
@@ -421,47 +451,56 @@ def _issue_and_fulfill(name: str, email: str, tier: str, days: int, sections: li
     cfg = cfg or load_config()
     design = resolve_tier_design(cfg, tier)
 
-    # 1 — Issue
-    result = issue_credential(
-        name        = name,
-        email       = email,
-        tier        = tier,
-        expiry_days = days,
-        sections    = sections,
-    )
+    # Steps 1–4 run under the signup lock so a limit check (`check`, when the
+    # caller gives one) and the registry write can't be interleaved with
+    # another signup. The email (slow, network) goes out after the lock.
+    with _signup_lock:
+        if check:
+            blocked = check()
+            if blocked:
+                raise SignupBlocked(*blocked)
 
-    # 2 — Bundle
-    bundle = bundle_credential(result)
+        # 1 — Issue
+        result = issue_credential(
+            name        = name,
+            email       = email,
+            tier        = tier,
+            expiry_days = days,
+            sections    = sections,
+        )
 
-    # 3 — Card (tier's own design overrides the global look, if set)
-    card_path = generate_card(
-        credential_id = result["credential_id"],
-        holder_name   = name,
-        tier          = tier,
-        issued_at     = result["entry"]["issued_at"],
-        expires_at    = result["entry"]["expires_at"],
-        bundle_hash   = bundle["bundle_hash"],
-        signature_hex = result["entry"]["signature_hex"],
-        sections      = result["entry"]["sections"],
-        card_title    = design["card_title"],
-        card_subtitle = f"{tier} Card",
-        access_url    = cfg["members_page"],
-        creator_name  = cfg["creator_name"],
-        accent_color  = design["accent_color"],
-        show_barcode  = design["show_barcode"],
-        logo_data_uri = design["logo_data_uri"],
-        card_label    = design["card_label"],
-        card_style    = design["card_style"],
-    )
+        # 2 — Bundle
+        bundle = bundle_credential(result)
 
-    # 4 — Registry (payment_meta, if given, is recorded on the entry —
-    # see member_registry.add_credential's "payment" field)
-    add_credential({
-        **result["entry"],
-        "bundle_hash": bundle["bundle_hash"],
-        "bundle_path": bundle["bundle_path"],
-        "payment":     payment_meta,
-    })
+        # 3 — Card (tier's own design overrides the global look, if set)
+        card_path = generate_card(
+            credential_id = result["credential_id"],
+            holder_name   = name,
+            tier          = tier,
+            issued_at     = result["entry"]["issued_at"],
+            expires_at    = result["entry"]["expires_at"],
+            bundle_hash   = bundle["bundle_hash"],
+            signature_hex = result["entry"]["signature_hex"],
+            sections      = result["entry"]["sections"],
+            card_title    = design["card_title"],
+            card_subtitle = f"{tier} Card",
+            access_url    = cfg["members_page"],
+            creator_name  = cfg["creator_name"],
+            accent_color  = design["accent_color"],
+            show_barcode  = design["show_barcode"],
+            logo_data_uri = design["logo_data_uri"],
+            card_label    = design["card_label"],
+            card_style    = design["card_style"],
+        )
+
+        # 4 — Registry (payment_meta, if given, is recorded on the entry —
+        # see member_registry.add_credential's "payment" field)
+        add_credential({
+            **result["entry"],
+            "bundle_hash": bundle["bundle_hash"],
+            "bundle_path": bundle["bundle_path"],
+            "payment":     payment_meta,
+        })
 
     # 5 — Email
     email_ok = send_credential_email(
@@ -525,8 +564,11 @@ def issue():
             sections = ["downloads", "chat"]
 
     try:
-        result = _issue_and_fulfill(name, email, tier, days, sections, cfg=cfg)
+        result = _issue_and_fulfill(name, email, tier, days, sections, cfg=cfg,
+                                    check=lambda: _signup_check(cfg, tier_cfg, tier, email))
         return ok(result)
+    except SignupBlocked as b:
+        return _blocked_response(b.reason, b.message)
     except Exception as e:
         import traceback
         print(traceback.format_exc())
@@ -579,8 +621,11 @@ def checkout():
 
     if price <= 0:
         try:
-            result = _issue_and_fulfill(name, email, tier, days, sections, cfg=cfg)
+            result = _issue_and_fulfill(name, email, tier, days, sections, cfg=cfg,
+                                        check=lambda: _signup_check(cfg, tier_cfg, tier, email))
             return ok(result)
+        except SignupBlocked as b:
+            return _blocked_response(b.reason, b.message)
         except Exception as e:
             import traceback
             print(traceback.format_exc())
@@ -594,6 +639,14 @@ def checkout():
             return err("Stripe is not configured on this deployment yet. See SETUP.md.", 500)
 
         members_page = cfg["members_page"] or "https://example.com/members.html"
+
+        # Refuse before taking anyone to a payment page. (Payments already in
+        # flight are always honored by the webhook, so a rush can overshoot
+        # a limit slightly rather than charge someone and give them nothing.)
+        with _signup_lock:
+            blocked = _signup_check(cfg, tier_cfg, tier, email)
+        if blocked:
+            return _blocked_response(*blocked)
 
         try:
             checkout_session = stripe.checkout.Session.create(
@@ -623,7 +676,11 @@ def checkout():
     # always works, in any country, with zero setup. Nothing is issued
     # yet; see /admin/payment-requests/<id>/approve below.
     from payment_requests import create_request as create_payment_request
-    req = create_payment_request(name, email, tier, price, currency)
+    with _signup_lock:
+        blocked = _signup_check(cfg, tier_cfg, tier, email)
+        if blocked:
+            return _blocked_response(*blocked)
+        req = create_payment_request(name, email, tier, price, currency)
     instructions = cfg.get("manual_payment_instructions") or (
         "Contact the creator to arrange payment. Your access will be "
         "issued once payment is confirmed."
@@ -1168,6 +1225,9 @@ def admin_dashboard_save():
     tier_prices   = request.form.getlist("tier_price")
     tier_expiries = request.form.getlist("tier_expiry_days")
     tier_sections = request.form.getlist("tier_sections")
+    tier_max_members = request.form.getlist("tier_max_members")
+    tier_show_spots  = request.form.getlist("tier_show_spots")
+    tier_per_email   = request.form.getlist("tier_per_email")
 
     # Per-tier design overrides. Logos are matched POSITIONALLY against
     # whatever was already saved at that row index — fine as long as tiers
@@ -1229,12 +1289,23 @@ def admin_dashboard_save():
                 design["logo_data_uri"] = old_logo
         # else: cleared, or no previous logo — leave unset (inherits global)
 
+        # Limits: only stored when they differ from the defaults, so a tier
+        # with no limits looks exactly like it always did in config.json.
+        max_members = limits.clean_max_members(tier_max_members[i] if i < len(tier_max_members) else "")
+        show_spots  = (tier_show_spots[i] if i < len(tier_show_spots) else "show") != "hide"
+        per_email   = (tier_per_email[i] if i < len(tier_per_email) else limits.DEFAULT_PER_EMAIL)
+        if per_email not in limits.PER_EMAIL_MODES:
+            per_email = limits.DEFAULT_PER_EMAIL
+
         tiers.append({
             "name":        name.upper(),
             "label":       (tier_labels[i] if i < len(tier_labels) else "").strip(),
             "price":       price,
             "expiry_days": expiry_days,
             "sections":    sections,
+            **({"max_members": max_members} if max_members else {}),
+            **({"show_spots_left": False} if not show_spots else {}),
+            **({"per_email": per_email} if per_email != limits.DEFAULT_PER_EMAIL else {}),
             **({"design": design} if design else {}),
         })
 
@@ -1431,6 +1502,45 @@ def _dashboard_page() -> str:
     else:
         pending_requests_html = '<div class="hint">No pending manual payment requests right now.</div>'
 
+    try:
+        from member_registry import list_all as _registry_list
+        from payment_requests import list_all as _requests_list
+        _registry, _requests = _registry_list(), _requests_list()
+    except Exception:
+        _registry, _requests = [], []
+
+    def _limits_panel(t: dict) -> str:
+        cap = limits.tier_max(t)
+        taken = limits.count_taken(_registry, _requests, t.get("name", "")) if cap else 0
+        usage = (f'Right now: {taken} of {cap} spots in use'
+                 f'{" — SOLD OUT" if taken >= cap else ""}.') if cap else "No limit set."
+        mode = limits.per_email_mode(t)
+        show = t.get("show_spots_left", True) is not False
+        def sel(cond): return "selected" if cond else ""
+        return f"""
+            <div class="design-panel limits-panel">
+              <div class="design-field">
+                <label>Max members (blank = no limit)</label>
+                <input name="tier_max_members" type="number" min="1" step="1" value="{esc_html(str(cap) if cap else '')}" placeholder="no limit">
+                <div class="hint" style="margin-top:4px;">{esc_html(usage)}</div>
+              </div>
+              <div class="design-field">
+                <label>Show visitors how many spots are left?</label>
+                <select name="tier_show_spots">
+                  <option value="show" {sel(show)}>Yes, e.g. "12 left"</option>
+                  <option value="hide" {sel(not show)}>No, only show "Sold out" when full</option>
+                </select>
+              </div>
+              <div class="design-field">
+                <label>Cards per email address</label>
+                <select name="tier_per_email">
+                  <option value="one_active" {sel(mode == "one_active")}>One working card at a time</option>
+                  <option value="one_ever" {sel(mode == "one_ever")}>Only one ever (good for a free trial)</option>
+                  <option value="unlimited" {sel(mode == "unlimited")}>No limit</option>
+                </select>
+              </div>
+            </div>"""
+
     tier_rows = ""
     for t in cfg["tiers"]:
         design = t.get("design") or {}
@@ -1447,11 +1557,12 @@ def _dashboard_page() -> str:
           <td><input name="tier_price" type="number" step="0.01" value="{esc_html(str(t.get('price',0)))}"></td>
           <td><input name="tier_expiry_days" type="number" value="{esc_html(str(t.get('expiry_days',31)))}"></td>
           <td><input name="tier_sections" value="{esc_html(', '.join(t.get('sections',[])))}" placeholder="downloads, chat"></td>
-          <td><button type="button" class="design-toggle">Design ▾</button></td>
+          <td><button type="button" class="design-toggle">More ▾</button></td>
           <td><button type="button" class="remove-tier">×</button></td>
         </tr>
         <tr class="design-row" style="display:none">
           <td colspan="7">
+            {_limits_panel(t)}
             <div class="design-panel">
               <div class="design-field">
                 <label>Card title override</label>
@@ -1619,7 +1730,7 @@ def _dashboard_page() -> str:
 
     <h2>Tiers &amp; pricing</h2>
     {tier_sections_hint}
-    <div class="hint" style="margin-bottom:8px;">Each tier is a pass type. "Design ▾" lets a specific tier (e.g. a Daily Pass) look different from the rest — title, accent color, logo, barcode — without affecting the others. Anything left blank there just uses the branding above.</div>
+    <div class="hint" style="margin-bottom:8px;">Each tier is a pass type. "More ▾" opens that tier's limits (a maximum number of members, and how many cards one email address can get) and its own card design (title, accent color, logo, barcode), so a specific tier like a Daily Pass can look different without affecting the others. Anything left blank in the design part just uses the branding above.</div>
     <table>
       <tr><th>Name</th><th>Label</th><th>Price</th><th>Expiry (days)</th><th>Sections (comma-separated)</th><th></th><th></th></tr>
       <tbody id="tier-body">{tier_rows}</tbody>
@@ -1681,11 +1792,32 @@ def _dashboard_page() -> str:
       <td><input name="tier_price" type="number" step="0.01" value="0"></td>
       <td><input name="tier_expiry_days" type="number" value="31"></td>
       <td><input name="tier_sections" value="" placeholder="downloads, chat"></td>
-      <td><button type="button" class="design-toggle">Design ▾</button></td>
+      <td><button type="button" class="design-toggle">More ▾</button></td>
       <td><button type="button" class="remove-tier">×</button></td>
     </tr>
     <tr class="design-row" style="display:none">
       <td colspan="7">
+        <div class="design-panel limits-panel">
+          <div class="design-field">
+            <label>Max members (blank = no limit)</label>
+            <input name="tier_max_members" type="number" min="1" step="1" value="" placeholder="no limit">
+          </div>
+          <div class="design-field">
+            <label>Show visitors how many spots are left?</label>
+            <select name="tier_show_spots">
+              <option value="show" selected>Yes, e.g. "12 left"</option>
+              <option value="hide">No, only show "Sold out" when full</option>
+            </select>
+          </div>
+          <div class="design-field">
+            <label>Cards per email address</label>
+            <select name="tier_per_email">
+              <option value="one_active" selected>One working card at a time</option>
+              <option value="one_ever">Only one ever (good for a free trial)</option>
+              <option value="unlimited">No limit</option>
+            </select>
+          </div>
+        </div>
         <div class="design-panel">
           <div class="design-field">
             <label>Card title override</label>
@@ -2107,8 +2239,18 @@ def get_config():
     # payment instructions, email wording or any per-tier design.
     public = {k: cfg[k] for k in ("creator_name", "card_title", "card_subtitle", "accent_color",
                                   "currency", "payment_provider", "members_page", "api_base") if k in cfg}
+    tiers = [t for t in (cfg.get("tiers") or []) if isinstance(t, dict)]
     public["tiers"] = [{k: t[k] for k in ("name", "label", "price", "expiry_days", "sections") if k in t}
-                       for t in (cfg.get("tiers") or []) if isinstance(t, dict)]
+                       for t in tiers]
+    # Tiers with a member limit also say whether they are full (and, unless
+    # the creator hides it, how many spots are left). Only read the member
+    # list when at least one tier has a limit.
+    if any(limits.tier_max(t) for t in tiers):
+        from member_registry import list_all as registry_list
+        from payment_requests import list_all as requests_list
+        registry, requests = registry_list(), requests_list()
+        for pub, t in zip(public["tiers"], tiers):
+            pub.update(limits.public_state(t, registry, requests))
     return jsonify(public)
 
 @app.route("/content", methods=["GET"])
