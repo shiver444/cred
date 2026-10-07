@@ -67,6 +67,7 @@ import credential_issuer  # noqa: F401
 import config_store
 import content_store
 import content_page
+import email_sender
 
 app = Flask(__name__)
 CORS(app)  # allow requests from your own domain
@@ -206,6 +207,11 @@ def load_config() -> dict:
         # add another one without touching this fallback logic.
         "payment_provider": cfg.get("payment_provider", "manual"),
         "manual_payment_instructions": cfg.get("manual_payment_instructions", ""),
+        # Wording of the welcome email (edited under "Welcome email" in the
+        # dashboard). Blank subject/intro mean "use the built-in text".
+        "email_subject": cfg.get("email_subject", email_sender.DEFAULT_SUBJECT),
+        "email_intro":   cfg.get("email_intro", email_sender.DEFAULT_INTRO),
+        "email_signoff": cfg.get("email_signoff", ""),
         "tiers":         cfg.get("tiers", []),
     }
 
@@ -1074,6 +1080,9 @@ def admin_dashboard_save():
                             if (request.form.get("payment_provider") or "").strip().lower() in ("manual", "stripe")
                             else "manual",
         "manual_payment_instructions": (request.form.get("manual_payment_instructions") or "").strip(),
+        "email_subject":  (request.form.get("email_subject") or "").strip()[:email_sender.MAX_SUBJECT],
+        "email_intro":    (request.form.get("email_intro") or "").strip()[:email_sender.MAX_INTRO],
+        "email_signoff":  (request.form.get("email_signoff") or "").strip()[:email_sender.MAX_SIGNOFF],
         "tiers":          tiers,
     })
 
@@ -1415,6 +1424,23 @@ def _dashboard_page() -> str:
     <label style="margin-top:20px;">Pending manual payment requests</label>
     {pending_requests_html}
 
+    <h2>Welcome email</h2>
+    <div class="hint" style="margin-bottom:8px;">The email a member gets with their card and access link. You can change the subject, the welcome text and add a sign-off; the card, bundle and link are always included. You can use <b>{{name}}</b>, <b>{{tier}}</b>, <b>{{creator}}</b>, <b>{{brand}}</b> and <b>{{expires}}</b> and they're filled in for each member. Leave the subject or welcome text blank to use the standard wording.</div>
+    <label>Subject</label>
+    <input name="email_subject" id="email-subject" maxlength="150" value="{esc_html(cfg['email_subject'])}">
+    <label>Welcome text</label>
+    <textarea name="email_intro" id="email-intro" rows="3" maxlength="1000">{esc_html(cfg['email_intro'])}</textarea>
+    <label>Sign-off (optional — a personal note at the end, e.g. "See you inside. — {{creator}}")</label>
+    <textarea name="email_signoff" id="email-signoff" rows="2" maxlength="600">{esc_html(cfg['email_signoff'])}</textarea>
+    <div style="margin-top:12px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+      <button type="button" class="add-tier" id="email-preview-btn" style="margin-top:0;">Preview email →</button>
+      <input id="email-test-to" type="email" placeholder="send a test to this address" style="max-width:260px;">
+      <button type="button" class="add-tier" id="email-test-btn" style="margin-top:0;">Send test</button>
+    </div>
+    <div class="hint" id="email-status" style="margin-top:8px;min-height:14px;"></div>
+    <div class="hint">Preview and test use what's typed above, even before you save. A test needs email set up on the server (BREVO_API_KEY and GMAIL_ADDRESS, see SETUP.md).</div>
+    <iframe id="email-preview-frame" sandbox="" style="display:none;width:100%;height:620px;border:1px solid #3a1210;margin-top:10px;background:#050403;"></iframe>
+
     <h2></h2>
     <button type="submit" class="save-btn">Save changes</button>
   </form>
@@ -1557,6 +1583,50 @@ def _dashboard_page() -> str:
       }}
     }});
 
+    // Welcome email: preview and test-send use whatever is typed in the
+    // three fields right now (saved or not).
+    (function() {{
+      const subj = document.getElementById('email-subject');
+      const intro = document.getElementById('email-intro');
+      const sign = document.getElementById('email-signoff');
+      const frame = document.getElementById('email-preview-frame');
+      const status = document.getElementById('email-status');
+      const pbtn = document.getElementById('email-preview-btn');
+      const tbtn = document.getElementById('email-test-btn');
+      const to = document.getElementById('email-test-to');
+      function fields() {{
+        return {{ email_subject: subj.value, email_intro: intro.value, email_signoff: sign.value }};
+      }}
+      function say(text, good) {{
+        status.textContent = text;
+        status.style.color = good ? '#5fd98a' : '#e8232b';
+      }}
+      function post(url, body) {{
+        return fetch(url, {{ method: 'POST', credentials: 'same-origin',
+                            headers: {{ 'Content-Type': 'application/json' }},
+                            body: JSON.stringify(body) }})
+          .then(r => r.json().then(j => ({{ status: r.status, body: j }})));
+      }}
+      pbtn.addEventListener('click', () => {{
+        pbtn.disabled = true; say('Loading preview…', true);
+        post('/admin/email/preview', fields()).then(res => {{
+          pbtn.disabled = false;
+          if (!res.body.success) {{ say(res.body.error || 'Preview failed.', false); return; }}
+          frame.srcdoc = res.body.html; frame.style.display = '';
+          say('Subject: ' + res.body.subject, true);
+        }}).catch(() => {{ pbtn.disabled = false; say('Could not reach the server.', false); }});
+      }});
+      tbtn.addEventListener('click', () => {{
+        const addr = to.value.trim();
+        if (!addr || addr.indexOf('@') < 1) {{ say('Type the address to send the test to.', false); return; }}
+        tbtn.disabled = true; say('Sending…', true);
+        post('/admin/email/test', Object.assign({{ to: addr }}, fields())).then(res => {{
+          tbtn.disabled = false;
+          say(res.body.message || res.body.error || 'Failed.', !!res.body.success);
+        }}).catch(() => {{ tbtn.disabled = false; say('Could not reach the server.', false); }});
+      }});
+    }})();
+
     function decidePaymentRequest(id, action, btn) {{
       const verb = action === 'approve' ? 'Approve this payment and issue the credential?'
                                          : 'Reject this request? No credential will be issued.';
@@ -1586,6 +1656,42 @@ def _dashboard_page() -> str:
     }});
   </script>
 </body></html>"""
+
+
+# ── POST /admin/email/preview, /admin/email/test ──
+# The dashboard's "Welcome email" section. Both take the three wording
+# fields as currently typed (saved or not). Preview renders the email for a
+# made-up member and sends nothing; test sends that same sample to one
+# address (no attachments). Neither touches the registry.
+def _email_overrides(data: dict) -> dict:
+    return {
+        "email_subject": str(data.get("email_subject") or "")[:email_sender.MAX_SUBJECT * 2],
+        "email_intro":   str(data.get("email_intro") or "")[:email_sender.MAX_INTRO * 2],
+        "email_signoff": str(data.get("email_signoff") or "")[:email_sender.MAX_SIGNOFF * 2],
+    }
+
+def _sample_tier() -> str:
+    tiers = load_config().get("tiers") or []
+    return (tiers[0].get("name") if tiers else "") or "MEMBER"
+
+@app.route("/admin/email/preview", methods=["POST"])
+def admin_email_preview():
+    if not check_admin(request):
+        return jsonify({"success": False, "error": "Not logged in."}), 401
+    data = request.get_json(silent=True) or {}
+    msg = email_sender.preview_email(_sample_tier(), _email_overrides(data))
+    return jsonify({"success": True, "subject": msg["subject"], "html": msg["html"]})
+
+@app.route("/admin/email/test", methods=["POST"])
+def admin_email_test():
+    if not check_admin(request):
+        return jsonify({"success": False, "error": "Not logged in."}), 401
+    data = request.get_json(silent=True) or {}
+    to = str(data.get("to") or "").strip()
+    if len(to) > 254 or "@" not in to[1:] or any(c in to for c in " \r\n<>,;"):
+        return jsonify({"success": False, "message": "That doesn't look like an email address."}), 400
+    ok_, message = email_sender.send_test_email(to, _sample_tier(), _email_overrides(data))
+    return jsonify({"success": ok_, "message": message}), (200 if ok_ else 502)
 
 
 # ── POST /admin/dashboard/preview-card ──

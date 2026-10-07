@@ -115,6 +115,18 @@ Uploading files straight to this server is a planned addition.
 | `PORT` | No | Defaults to 5001. |
 | `FLASK_DEBUG` | No — leave unset in production | Set to `1` for local testing to get Flask's debugger/auto-reload back. Off by default on purpose — leaving it on in a public deployment can expose that interactive debugger to anyone who triggers an unhandled error. Never set this on Railway. |
 
+### The welcome email
+
+Once `BREVO_API_KEY` and `GMAIL_ADDRESS` are set, every new member is emailed
+their card, bundle and personal access link. You can change the wording in
+the dashboard under **Welcome email**: the subject, the welcome text, and an
+optional sign-off. `{name}`, `{tier}`, `{creator}`, `{brand}` and `{expires}`
+are filled in for each member. **Preview email** shows exactly what a member
+would get (using a made-up member) and **Send test** emails that sample to
+any address you type, both using whatever is in the boxes right now, even
+before you save. With email not set up, members can still get in: copy their
+link from **Members → Copy link** and send it yourself.
+
 ### Admin login
 
 Go to `https://<your-domain>/admin/login` and log in with `ADMIN_SECRET`
