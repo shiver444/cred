@@ -460,6 +460,34 @@ Notes:
 - To try it before touching your real site, save the two lines in a plain
   file called `test.html` and open it in your browser.
 
+### How the widget looks (Widget look)
+
+Out of the box the widget copies the page it sits on: it reads the page's
+background color, text color and font and builds its boxes, borders and
+sign-up pop-up from them, so it fits a dark page, a light page, a colorful
+page or one with a photo behind it. If your site switches between dark and
+light, the widget follows.
+
+To change that, open the dashboard and find **Widget look** (below
+Branding). You can set:
+
+- **Colors** — *Match my page* (default), *Always dark*, *Always light*, or
+  *My own colors* (a background color and a text color you pick).
+- **Lettering** — your page's own font (default), or the keycard lettering
+  used on the cards (Bebas Neue and JetBrains Mono, loaded from Google Fonts
+  only when you pick this).
+- **Corners** — square or rounded.
+- **Wording** — the banner, the card drop box (title and small line) and the
+  sign-up pop-up (title, text and button). Leave a box empty to keep the
+  standard wording. Text is shown exactly as typed; HTML in it is not
+  interpreted.
+
+Two live previews (one on a dark page, one on a light page) show your real
+widget and follow every change before you save. The **accent color** (under
+Branding) is used for buttons and highlights; the widget makes sure text
+stays readable on whatever background it ends up on. Changes apply to the
+page as soon as you save — nothing to edit on your site.
+
 ## 8. Deploy — Railway, connected to GitHub, so pushes auto-deploy
 
 This covers getting from "files on disk" to a real, public dashboard URL

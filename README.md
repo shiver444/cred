@@ -13,6 +13,11 @@ middle, no platform cut: your members, your keys, your money.
 1. **Click Deploy on Railway** (above). Railway asks you to choose an admin
    password (`ADMIN_SECRET`) and then builds your own private copy. Storage
    for your members and signing key is set up for you.
+
+   Note: Railway's Free plan is too small for this (it has no usage credit
+   and only a tiny volume). Plan on a paid Railway plan; at the time of
+   writing the Hobby plan is about $5 a month and includes enough for a small
+   membership site. Check railway.com/pricing for current prices.
 2. **Open your dashboard.** In Railway, open the new service, generate a
    public domain under Settings → Networking if there isn't one yet, and go
    to `https://your-domain/admin/login`. Log in with the password you chose.
@@ -33,7 +38,9 @@ can revoke any of them at any time.
 
 ## What you get
 
-- A signup and access widget that works on any site (two lines of HTML).
+- A signup and access widget that works on any site (two lines of HTML) and
+  adapts to your page's colors and font by itself; you can also set its colors,
+  corners and wording in the dashboard.
 - An admin dashboard: branding, tiers and pricing, per-tier card designs,
   payment settings, a member list with one-click revoke, and a "copy link"
   button that gives you any member's personal access link.

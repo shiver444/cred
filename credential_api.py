@@ -81,6 +81,7 @@ import logo_utils
 import member_registry
 import reminders
 import security
+import widget_look
 
 app = Flask(__name__)
 CORS(app)  # allow requests from your own domain
@@ -383,6 +384,8 @@ def load_config() -> dict:
         # none) and the style, "distressed" or "clean".
         "logo_data_uri": cfg.get("logo_data_uri", "") or "",
         "card_style":    cfg.get("card_style", "distressed") if cfg.get("card_style") in CARD_STYLES else "distressed",
+        # How the member widget looks on the creator's site (widget_look.py).
+        **widget_look.from_config(cfg),
         "tiers":         cfg.get("tiers", []),
     }
 
@@ -1781,6 +1784,7 @@ def admin_dashboard_save():
         "reminder_subject": (request.form.get("reminder_subject") or "").strip()[:email_sender.MAX_REMINDER_SUBJECT],
         "reminder_text":    (request.form.get("reminder_text") or "").strip()[:email_sender.MAX_REMINDER_TEXT],
         "reminder_renew_url": email_sender.safe_renew_url(request.form.get("reminder_renew_url")),
+        **widget_look.from_form(request.form),
         "tiers":          tiers,
     })
 
@@ -2124,6 +2128,10 @@ def _dashboard_page() -> str:
   input {{ width:100%; background:#1a100e; border:1px solid #3a1210; color:#e6dfd2;
            font-family:'Courier New',monospace; font-size:12px; padding:8px 10px; box-sizing:border-box; }}
   input[type=color] {{ width:60px; padding:2px; height:32px; }}
+  .wl-grid {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:10px 18px; }}
+  .wl-previews {{ display:flex; gap:16px; flex-wrap:wrap; margin-top:14px; }}
+  .wl-previews > div {{ flex:1 1 320px; min-width:0; }}
+  .wl-frame {{ width:100%; height:460px; border:1px solid #3a1210; display:block; }}
   select, textarea {{ width:100%; background:#1a100e; border:1px solid #3a1210; color:#e6dfd2;
            font-family:'Courier New',monospace; font-size:12px; padding:8px 10px; box-sizing:border-box; }}
   textarea {{ resize:vertical; }}
@@ -2222,6 +2230,57 @@ def _dashboard_page() -> str:
     <input name="members_page" value="{esc_html(cfg['members_page'])}">
     <label>API base URL (informational — where this API is deployed)</label>
     <input name="api_base" value="{esc_html(cfg['api_base'])}">
+
+
+    <h2>Widget look</h2>
+    <div class="hint" style="margin-bottom:8px;">How the member widget looks on your site. The default, <b>Match my page</b>, reads the colors and font of the page it sits on, so it fits a dark page, a light page or anything in between. The two previews below show it on a dark and on a light page and follow what you change here, even before you save. The accent color is set under Branding above.</div>
+    <div class="wl-grid">
+      <div>
+        <label>Colors</label>
+        <select name="widget_theme" id="wl-theme">
+          <option value="match" {"selected" if cfg['widget_theme'] == "match" else ""}>Match my page (recommended)</option>
+          <option value="dark" {"selected" if cfg['widget_theme'] == "dark" else ""}>Always dark</option>
+          <option value="light" {"selected" if cfg['widget_theme'] == "light" else ""}>Always light</option>
+          <option value="custom" {"selected" if cfg['widget_theme'] == "custom" else ""}>My own colors</option>
+        </select>
+      </div>
+      <div>
+        <label>Lettering</label>
+        <select name="widget_font" id="wl-font">
+          <option value="page" {"selected" if cfg['widget_font'] == "page" else ""}>My page's own font (recommended)</option>
+          <option value="keycard" {"selected" if cfg['widget_font'] == "keycard" else ""}>Keycard lettering (like the cards)</option>
+        </select>
+      </div>
+      <div>
+        <label>Corners</label>
+        <select name="widget_corners" id="wl-corners">
+          <option value="square" {"selected" if cfg['widget_corners'] == "square" else ""}>Square</option>
+          <option value="rounded" {"selected" if cfg['widget_corners'] == "rounded" else ""}>Rounded</option>
+        </select>
+      </div>
+    </div>
+    <div id="wl-custom" style="display:{"flex" if cfg['widget_theme'] == "custom" else "none"};gap:24px;flex-wrap:wrap;margin-top:6px;">
+      <div><label>Background color</label><input type="color" name="widget_bg" id="wl-bg" value="{esc_html(cfg['widget_bg'])}"></div>
+      <div><label>Text color</label><input type="color" name="widget_text" id="wl-text" value="{esc_html(cfg['widget_text'])}"></div>
+    </div>
+    <label style="margin-top:14px;">Wording (leave a box empty to use the standard wording shown in it)</label>
+    <div class="wl-grid">
+      <div><div class="hint">Banner</div><input name="widget_banner_text" id="wl-banner" maxlength="80" value="{esc_html(cfg['widget_banner_text'])}" placeholder="{esc_html(widget_look.TEXTS['widget_banner_text'][1])}"></div>
+      <div><div class="hint">Card drop box: title</div><input name="widget_drop_title" id="wl-drop-title" maxlength="60" value="{esc_html(cfg['widget_drop_title'])}" placeholder="{esc_html(widget_look.TEXTS['widget_drop_title'][1])}"></div>
+      <div><div class="hint">Card drop box: small line</div><input name="widget_drop_sub" id="wl-drop-sub" maxlength="100" value="{esc_html(cfg['widget_drop_sub'])}" placeholder="{esc_html(widget_look.TEXTS['widget_drop_sub'][1])}"></div>
+      <div><div class="hint">Sign-up pop-up: title</div><input name="widget_signup_title" id="wl-signup-title" maxlength="60" value="{esc_html(cfg['widget_signup_title'])}" placeholder="{esc_html(widget_look.TEXTS['widget_signup_title'][1])}"></div>
+      <div><div class="hint">Sign-up pop-up: button</div><input name="widget_button_text" id="wl-button" maxlength="40" value="{esc_html(cfg['widget_button_text'])}" placeholder="{esc_html(widget_look.TEXTS['widget_button_text'][1])}"></div>
+    </div>
+    <div class="hint" style="margin-top:8px;">Sign-up pop-up: text under the title</div>
+    <textarea name="widget_signup_sub" id="wl-signup-sub" rows="2" maxlength="200" placeholder="{esc_html(widget_look.TEXTS['widget_signup_sub'][1])}">{esc_html(cfg['widget_signup_sub'])}</textarea>
+    <div style="margin-top:12px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+      <button type="button" class="add-tier" id="wl-popup-btn" style="margin-top:0;">Show the sign-up pop-up in the previews</button>
+    </div>
+    <div class="wl-previews">
+      <div><div class="hint">On a dark page</div><iframe class="wl-frame" id="wl-frame-dark" sandbox="allow-scripts"></iframe></div>
+      <div><div class="hint">On a light page</div><iframe class="wl-frame" id="wl-frame-light" sandbox="allow-scripts"></iframe></div>
+    </div>
+    <div class="hint">The previews are your real widget, loaded from this server. Pages with a photo or a gradient behind the widget work too: it works out whether that area is dark or light.</div>
 
     <h2>Tiers &amp; pricing</h2>
     {tier_sections_hint}
@@ -2590,6 +2649,49 @@ def _dashboard_page() -> str:
       }});
     }})();
 
+    // Widget look: two live previews (dark page / light page). Each is the
+    // real /cp.js running in a sandboxed frame with the unsaved form values
+    // handed to it, so what you see is what a visitor will get once saved.
+    (function() {{
+      const f = id => document.getElementById(id);
+      const dark = f('wl-frame-dark'), light = f('wl-frame-light');
+      const form = f('wl-theme').form;
+      function values() {{
+        const v = {{ accent_color: form.elements['accent_color'].value }};
+        ['widget_theme', 'widget_font', 'widget_corners', 'widget_bg', 'widget_text',
+         'widget_banner_text', 'widget_drop_title', 'widget_drop_sub',
+         'widget_signup_title', 'widget_signup_sub', 'widget_button_text'].forEach(n => {{ v[n] = form.elements[n].value; }});
+        return v;
+      }}
+      function pageDoc(bg, fg, font) {{
+        const S = '<' + '/script>';
+        return '<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head>' +
+          '<body style="margin:0;padding:18px;background:' + bg + ';color:' + fg + ';font-family:' + font + ';">' +
+          '<p style="margin:0 0 14px;font-size:13px;opacity:.7;">Your page &mdash; the widget sits below.</p>' +
+          '<div id="credential-widget"></div>' +
+          '<script>window.__cpOverride = ' + JSON.stringify(values()).replace(/</g, '\\\\u003c') + ';' + S +
+          '<script src="' + window.location.origin + '/cp.js">' + S +
+          '<script>window.addEventListener("message", function(e) {{ if (e.data === "wl-popup") {{ var b = document.getElementById("ca-banner"); if (b) b.click(); }} }});' + S +
+          '</body></html>';
+      }}
+      let timer = null;
+      function refresh() {{
+        f('wl-custom').style.display = f('wl-theme').value === 'custom' ? 'flex' : 'none';
+        dark.srcdoc  = pageDoc('#0d0d0f', '#e8e6e3', 'Georgia, serif');
+        light.srcdoc = pageDoc('#f6f3ec', '#26231f', 'Helvetica, Arial, sans-serif');
+      }}
+      function later() {{ clearTimeout(timer); timer = setTimeout(refresh, 450); }}
+      ['wl-theme', 'wl-font', 'wl-corners', 'wl-bg', 'wl-text', 'wl-banner', 'wl-drop-title', 'wl-drop-sub',
+       'wl-signup-title', 'wl-signup-sub', 'wl-button'].forEach(id => {{
+        f(id).addEventListener('input', later); f(id).addEventListener('change', later);
+      }});
+      form.elements['accent_color'].addEventListener('input', later);
+      f('wl-popup-btn').addEventListener('click', () => {{
+        [dark, light].forEach(fr => {{ try {{ fr.contentWindow.postMessage('wl-popup', '*'); }} catch (e) {{}} }});
+      }});
+      refresh();
+    }})();
+
     function decidePaymentRequest(id, action, btn) {{
       const verb = action === 'approve' ? 'Approve this payment and issue the credential?'
                                          : 'Reject this request? No credential will be issued.';
@@ -2879,6 +2981,8 @@ def get_config():
     # payment instructions, email wording or any per-tier design.
     public = {k: cfg[k] for k in ("creator_name", "card_title", "card_subtitle", "accent_color",
                                   "currency", "payment_provider", "members_page", "api_base") if k in cfg}
+    # The widget's look (colors/wording choices) is public by nature too.
+    public.update(widget_look.from_config(cfg))
     tiers = [t for t in (cfg.get("tiers") or []) if isinstance(t, dict)]
     public["tiers"] = [{k: t[k] for k in ("name", "label", "price", "expiry_days", "sections") if k in t}
                        for t in tiers]
