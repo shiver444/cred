@@ -202,6 +202,18 @@ their reminder at the next check. A pass that lasts no longer than the reminder
 window isn't reminded. Members who are about to end show "ends in Nd" on the
 Members page, with a note once a reminder went out.
 
+### Giving someone a card (no payment)
+
+On **Members**, open **+ Give someone a card (free)**, enter their name and
+email, pick a tier and press **Issue card**. Use it for a friend, a
+collaborator, a contest winner, or someone who paid you some other way. The
+card is signed and registered like any other and works the same way; the list
+marks it "given free". Leave **Days** blank to use the tier's length. If email
+is set up, the card is emailed to them; otherwise (or if you untick it) press
+**Copy their link** and send it yourself. The usual limits apply (a full tier,
+or an email that already has a working card, is refused) unless you tick
+**ignore limits**. You can Extend or Revoke it like any other member.
+
 ### Admin login
 
 Go to `https://<your-domain>/admin/login` and log in with `ADMIN_SECRET`

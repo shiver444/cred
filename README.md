@@ -49,6 +49,8 @@ can revoke any of them at any time.
   right tier can download them) and a merch discount, shown per tier.
 - Backup and restore: one downloadable file with your members, signing key,
   settings and content, and a restore that works on a brand-new server.
+- Give a card to anyone for free (a friend, a winner) from the Members page,
+  emailed to them or copied as a link to send yourself.
 - Renewals: one click on the Members page extends a member (same card, same
   link), and an optional email reminds members shortly before their access
   ends.

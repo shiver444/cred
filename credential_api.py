@@ -456,7 +456,8 @@ def _blocked_response(reason: str, message: str):
     return resp
 
 def _issue_and_fulfill(name: str, email: str, tier: str, days: int, sections: list,
-                        cfg: dict = None, payment_meta: dict = None, check=None) -> dict:
+                        cfg: dict = None, payment_meta: dict = None, check=None,
+                        send_email: bool = True) -> dict:
     """
     The actual issue → bundle → card → registry → email pipeline, shared
     by the free path in /issue, /checkout's free-tier shortcut, and the
@@ -525,17 +526,20 @@ def _issue_and_fulfill(name: str, email: str, tier: str, days: int, sections: li
             "payment":     payment_meta,
         })
 
-    # 5 — Email
-    email_ok = send_credential_email(
-        to_name       = name,
-        to_email      = email,
-        tier          = tier,
-        credential_id = result["credential_id"],
-        bundle_hash   = bundle["bundle_hash"],
-        bundle_path   = bundle["bundle_path"],
-        card_path     = card_path,
-        expires_at    = result["entry"]["expires_at"],
-    )
+    # 5 — Email (skipped when the caller doesn't want one, e.g. the creator
+    # issued a card by hand and will pass the link on personally)
+    email_ok = None
+    if send_email:
+        email_ok = send_credential_email(
+            to_name       = name,
+            to_email      = email,
+            tier          = tier,
+            credential_id = result["credential_id"],
+            bundle_hash   = bundle["bundle_hash"],
+            bundle_path   = bundle["bundle_path"],
+            card_path     = card_path,
+            expires_at    = result["entry"]["expires_at"],
+        )
 
     return {
         "credential_id":    result["credential_id"],
@@ -911,6 +915,71 @@ def revoke():
         return err(f"Revocation failed: {str(e)}", 500)
 
 
+# ── POST /admin/members/issue ──
+# The creator hands someone a card directly (a friend, a collaborator, a
+# winner, a refund-and-keep): no checkout, no payment, no sign-up form.
+# Same pipeline as every other card, so it is signed, bundled, registered
+# and works exactly like a bought one. It is marked as "comped" in the
+# registry so it's recognisable later. Tier limits (full tier, one card per
+# email) apply unless the creator ticks "ignore limits".
+@app.route("/admin/members/issue", methods=["POST"])
+def admin_members_issue():
+    if not check_admin(request):
+        return err("Unauthorized", 401)
+    data = request.get_json(silent=True) or {}
+    name  = str(data.get("name") or "").strip()
+    email = str(data.get("email") or "").strip().lower()
+    tier  = str(data.get("tier") or "").strip()
+    if not name or len(name) > 100:
+        return err("Enter the person's name (up to 100 characters).")
+    if (len(email) > 254 or "@" not in email[1:] or email.count("@") != 1 or "." not in email.split("@")[1]
+            or any(c in email for c in " \r\n<>,;")):
+        return err("That doesn't look like an email address.")
+    cfg = load_config()
+    tier_cfg = get_tier(cfg, tier)
+    if not tier_cfg:
+        return err("Choose one of your tiers.")
+    raw_days = data.get("days")
+    if raw_days in (None, ""):
+        days = member_registry.clean_extend_days(tier_cfg.get("expiry_days", 31)) or 31
+    else:
+        days = member_registry.clean_extend_days(raw_days)
+        if days is None:
+            return err(f"Days must be a whole number from 1 to {member_registry.MAX_EXTEND_DAYS}.")
+    notify = bool(data.get("notify"))
+    ignore = bool(data.get("ignore_limits"))
+    send = notify and email_sender.is_configured()
+
+    try:
+        result = _issue_and_fulfill(
+            name, email, tier_cfg["name"], days, tier_cfg.get("sections", []), cfg=cfg,
+            payment_meta={"comped": True},
+            check=None if ignore else (lambda: _signup_check(cfg, tier_cfg, tier_cfg["name"], email)),
+            send_email=send)
+    except SignupBlocked as b:
+        resp = _blocked_response(b.reason, b.message + " Tick \"Ignore limits\" to issue it anyway.")
+        return resp
+    except Exception as e:
+        import traceback
+        print(traceback.format_exc())
+        return err(f"Issuing failed: {str(e)}", 500)
+
+    members_page = (cfg.get("members_page") or "").strip()
+    link = ""
+    if members_page:
+        sep = "&" if "?" in members_page else "?"
+        link = (f"{members_page}{sep}id={_q(result['credential_id'], safe='')}"
+                f"&h={_q(result['bundle_hash'][:32], safe='')}")
+    if not notify:
+        email_status = "not_requested"
+    elif not send:
+        email_status = "not_configured"
+    else:
+        email_status = "sent" if result.get("email_sent") else "failed"
+    return ok({"credential_id": result["credential_id"], "expires_at": result["expires_at"],
+               "tier": tier_cfg["name"], "link": link, "email": email_status})
+
+
 # ── POST /admin/members/extend ──
 # Gives a member more time without re-issuing anything: same card, same
 # access link, only the end date moves (see member_registry.extend). The
@@ -1086,6 +1155,9 @@ def admin_members():
                            f'<button class="extend-btn" data-id="{cred_id}" data-name="{name_esc}">Extend</button>'
                            f'{notify_box}<span class="small extend-msg"></span></div>')
 
+        if isinstance(m.get("payment"), dict) and m["payment"].get("comped"):
+            tier_esc += '<br><span class="small">given free</span>'
+
         revoke_cell = '—' if revoked else (
             f'<button class="revoke-btn" data-id="{cred_id}" data-name="{name_esc}">Revoke</button>'
         )
@@ -1132,6 +1204,42 @@ def admin_members():
             'where you embedded the widget, save, then come back and copy links.</div>'
         )
 
+    tier_opts = ""
+    for t in (cfg.get("tiers") or []):
+        try:
+            td = int(t.get("expiry_days") or 30)
+        except (ValueError, TypeError):
+            td = 30
+        tier_opts += (f'<option value="{esc_html(t.get("name", ""))}" data-days="{td}">'
+                      f'{esc_html(t.get("label") or t.get("name", ""))} ({esc_html(t.get("name", ""))})</option>')
+    if tier_opts:
+        issue_notify = ('<label class="small"><input type="checkbox" id="issue-notify" checked> email them their card</label>'
+                        if email_ready else
+                        '<span class="small">Email isn\'t set up, so you\'ll copy their link and send it yourself.</span>')
+        issue_box = f"""
+  <details class="issue-box" id="issue-box">
+    <summary>+ Give someone a card (free)</summary>
+    <div class="issue-grid">
+      <label>Name<input id="issue-name" maxlength="100"></label>
+      <label>Email<input id="issue-email" type="email" maxlength="254"></label>
+      <label>Tier<select id="issue-tier">{tier_opts}</select></label>
+      <label>Days (blank = the tier's length)<input id="issue-days" type="number" min="1" max="{member_registry.MAX_EXTEND_DAYS}" placeholder=""></label>
+    </div>
+    <div class="issue-opts">
+      {issue_notify}
+      <label class="small"><input type="checkbox" id="issue-ignore"> ignore limits (full tier / email already has a card)</label>
+    </div>
+    <button type="button" class="issue-submit" id="issue-btn">Issue card</button>
+    <div class="small" id="issue-msg" style="margin-top:8px;min-height:14px;"></div>
+    <div id="issue-link-row" style="display:none;margin-top:6px;">
+      <button type="button" class="copy-link-btn" id="issue-copy">Copy their link</button>
+      <a href="/admin/members" class="small" style="color:{accent};margin-left:10px;">Reload the list</a>
+    </div>
+    <div class="small" style="margin-top:8px;">No payment is recorded; the card works exactly like a bought one and is marked "given free" in the list. Revoke or Extend it like any other.</div>
+  </details>"""
+    else:
+        issue_box = ""
+
     html = f"""<!DOCTYPE html>
 <html><head><meta charset="UTF-8">
 <title>Members — Admin</title>
@@ -1159,13 +1267,20 @@ def admin_members():
   .extend-box {{ display:flex; gap:6px; align-items:center; flex-wrap:wrap; min-width:190px; }}
   .extend-days {{ width:64px; background:#1a100e; border:1px solid #3a1210; color:#e6dfd2;
                   font-family:'Courier New',monospace; font-size:12px; padding:4px 6px; }}
-  .extend-btn {{
+  .extend-btn, .issue-submit {{
     background:transparent; border:1px solid {accent}; color:{accent};
     font-family:'Courier New',monospace; font-size:10px; letter-spacing:1px;
     text-transform:uppercase; padding:5px 10px; cursor:pointer;
   }}
-  .extend-btn:hover {{ background:{accent}; color:#0a0908; }}
-  .extend-btn:disabled {{ opacity:0.5; cursor:default; }}
+  .extend-btn:hover, .issue-submit:hover {{ background:{accent}; color:#0a0908; }}
+  .extend-btn:disabled, .issue-submit:disabled {{ opacity:0.5; cursor:default; }}
+  .issue-box {{ border:1px solid #3a1210; padding:12px 16px; margin:16px 0 0; max-width:760px; }}
+  .issue-box summary {{ cursor:pointer; color:{accent}; font-size:11px; letter-spacing:1px; text-transform:uppercase; }}
+  .issue-grid {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:10px; margin:12px 0; }}
+  .issue-grid label {{ display:block; color:#6b6058; font-size:10px; letter-spacing:1px; text-transform:uppercase; }}
+  .issue-grid input, .issue-grid select {{ display:block; width:100%; box-sizing:border-box; margin-top:4px; background:#1a100e; border:1px solid #3a1210;
+    color:#e6dfd2; font-family:'Courier New',monospace; font-size:12px; padding:6px 8px; text-transform:none; letter-spacing:0; }}
+  .issue-opts {{ display:flex; gap:18px; flex-wrap:wrap; margin-bottom:12px; }}
   .warn {{ background:#3a2a10; color:#f0c674; font-size:11px; line-height:1.6; padding:10px 14px; margin:14px 0 0; }}
   .warn a {{ color:#f0c674; }}
   .nav {{ margin-bottom:18px; font-size:11px; letter-spacing:1px; }}
@@ -1180,6 +1295,7 @@ def admin_members():
   <div class="count">"Extend" adds days to a member's access (renewal): same card and same link, only the end date moves. A card that already ran out restarts from today. The date printed on the member's original card file doesn't change — the live check uses the date kept here.</div>
   <div class="count">"Copy link" copies that member's personal access link — send it to them yourself if no email service is set up, or if their email didn't arrive. Treat it like a password: anyone holding the link has that member's access.</div>
   {members_page_warning}
+  {issue_box}
   <table>
     <tr><th>Name</th><th>Email</th><th>Tier</th><th>Sections</th><th>Issued</th><th>Expires</th><th>Status</th><th>Verified ×</th><th>IPs</th><th>Access link</th><th>Extend by (days)</th><th>Revoke</th></tr>
     {rows}
@@ -1209,6 +1325,52 @@ def admin_members():
         }}
       }});
     }});
+
+    (function() {{
+      const btn = document.getElementById('issue-btn');
+      if (!btn) return;
+      const f = id => document.getElementById(id);
+      const msg = f('issue-msg'), linkRow = f('issue-link-row');
+      let link = '';
+      function say(t, good) {{ msg.textContent = t; msg.style.color = good ? '#5fd98a' : '#e8232b'; }}
+      function defaultDays() {{
+        const o = f('issue-tier').selectedOptions[0];
+        f('issue-days').placeholder = o ? o.dataset.days : '';
+      }}
+      f('issue-tier').addEventListener('change', defaultDays); defaultDays();
+      btn.addEventListener('click', () => {{
+        const name = f('issue-name').value.trim(), email = f('issue-email').value.trim();
+        if (!name) {{ say('Enter their name.', false); return; }}
+        if (email.indexOf('@') < 1) {{ say('Enter their email address.', false); return; }}
+        const tier = f('issue-tier').value;
+        if (!confirm(`Give ${{name}} (${{email}}) a free ${{tier}} card?`)) return;
+        btn.disabled = true; linkRow.style.display = 'none'; say('Issuing…', true);
+        const nb = f('issue-notify');
+        fetch('/admin/members/issue', {{
+          method: 'POST', headers: {{ 'Content-Type': 'application/json' }},
+          body: JSON.stringify({{ name: name, email: email, tier: tier, days: f('issue-days').value,
+                                 notify: !!(nb && nb.checked), ignore_limits: f('issue-ignore').checked }}),
+        }}).then(r => r.json()).then(data => {{
+          btn.disabled = false;
+          if (!data.success) {{ say(data.error || 'Failed.', false); return; }}
+          const mail = {{ sent: ' The card was emailed to them.', failed: ' (The email could not be sent. Copy their link and send it yourself.)',
+                         not_configured: ' (Email is not set up. Copy their link and send it yourself.)',
+                         not_requested: ' Copy their link and send it to them.' }}[data.email] || '';
+          say('Card issued, valid until ' + data.expires_at.slice(0, 10) + '.' + mail, data.email !== 'failed');
+          link = data.link || '';
+          linkRow.style.display = '';
+          f('issue-copy').style.display = link ? '' : 'none';
+          if (!link) say(msg.textContent + ' (Set the Members page URL on the Dashboard to get a copyable link.)', true);
+          f('issue-name').value = ''; f('issue-email').value = ''; f('issue-days').value = '';
+        }}).catch(e => {{ btn.disabled = false; say('Failed: ' + e.message, false); }});
+      }});
+      f('issue-copy').addEventListener('click', () => {{
+        const b = f('issue-copy'), orig = 'Copy their link';
+        const done = () => {{ b.textContent = 'Copied \\u2713'; setTimeout(() => {{ b.textContent = orig; }}, 1800); }};
+        if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(link).then(done, () => window.prompt('Copy this link:', link));
+        else window.prompt('Copy this link:', link);
+      }});
+    }})();
 
     document.querySelectorAll('.extend-btn').forEach(btn => {{
       btn.addEventListener('click', () => {{
