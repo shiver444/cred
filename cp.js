@@ -131,7 +131,10 @@
   const tiers   = (config.tiers && config.tiers.length) ? config.tiers : [{ name: 'MEMBER', label: 'Free', price: 0 }]
   // A tier with a member limit that is full comes with sold_out: true; start on
   // the first one that still has room.
+  // An event ticket for an event that is over can't be picked either.
+  tiers.forEach(t => { if (t && t.kind === 'ticket' && t.event && t.event.over) t.sold_out = true })
   let selectedTier = tiers.find(t => !t.sold_out) || tiers[0]
+  const isTicket = t => !!t && t.kind === 'ticket'
 
   // ── Inject base styles ──
   const style = document.createElement('style')
@@ -418,6 +421,11 @@
       transition: all .15s;
     }
     .ca-dl-btn:hover { background: ${accent}; color: var(--ca-on-accent); }
+    .ca-news { margin-top: 16px; padding: 12px 14px; border: 1px solid var(--ca-line); border-left: 3px solid ${accent}; position: relative; }
+    .ca-news-label { font-size: 8px; letter-spacing: 2px; text-transform: uppercase; color: var(--ca-ash); margin-bottom: 6px; }
+    .ca-news-title { font-weight: bold; margin-bottom: 4px; overflow-wrap: anywhere; }
+    .ca-news-text { line-height: 1.6; overflow-wrap: anywhere; }
+    .ca-news-link { display: inline-block; margin-top: 10px; }
     .ca-mycard { margin-top: 16px; position: relative; }
     .ca-mycard-label { font-size: 8px; letter-spacing: 2px; text-transform: uppercase; color: var(--ca-ash); margin-bottom: 8px; }
     .ca-mycard-frame { position: relative; width: 100%; max-width: 340px; overflow: hidden; border-radius: 12px; }
@@ -549,6 +557,7 @@
       background: ${accent}14;
     }
     .ca-tier-name { font-weight: bold; }
+    .ca-tier-ev { display: block; font-weight: normal; opacity: 0.75; font-size: 0.85em; margin-top: 2px; }
     .ca-tier-price { color: inherit; opacity: 0.8; }
     .ca-field {
       width: 100%;
@@ -874,8 +883,8 @@
     const el = document.getElementById('ca-tier-picker')
     el.innerHTML = tiers.map((t, i) => `
       <div class="ca-tier-option${t === selectedTier ? ' selected' : ''}${t.sold_out ? ' sold-out' : ''}" data-i="${i}">
-        <span class="ca-tier-name">${esc(t.name)}${t.label ? ' — ' + esc(t.label) : ''}</span>
-        <span class="ca-tier-price">${t.sold_out ? 'Sold out' : (t.price ? '$' + esc(t.price) + '/mo' : 'Free') + (typeof t.spots_left === 'number' ? ' · ' + esc(Math.max(0, Math.floor(t.spots_left))) + ' left' : '')}</span>
+        <span class="ca-tier-name">${esc(t.name)}${t.label ? ' — ' + esc(t.label) : ''}${isTicket(t) && t.event && (t.event.name || t.event.when) ? '<small class="ca-tier-ev">' + esc([t.event.name, t.event.when].filter(Boolean).join(' \u00b7 ')) + '</small>' : ''}</span>
+        <span class="ca-tier-price">${t.sold_out ? (isTicket(t) && t.event && t.event.over ? 'Event over' : 'Sold out') : (t.price ? '$' + esc(t.price) + (isTicket(t) ? '' : '/mo') : 'Free') + (typeof t.spots_left === 'number' ? ' · ' + esc(Math.max(0, Math.floor(t.spots_left))) + ' left' : '')}</span>
       </div>`).join('')
     el.querySelectorAll('.ca-tier-option').forEach(opt => {
       opt.onclick = () => {
@@ -1195,7 +1204,24 @@
     if (res.status === 403) return null
     const body = await res.json()
     if (!body || !body.success) return null
-    return { sections: body.sections || [], card: body.card || null }
+    return { sections: body.sections || [], card: body.card || null, announcement: body.announcement || null }
+  }
+
+  // The creator's pinned note, at the top of the member's area. Plain text only
+  // (escaped, line breaks kept); the link is used only if it is a web address.
+  function renderNews(n) {
+    const holder = document.getElementById('ca-member-header')
+    if (!holder || !n || !(n.title || n.text)) return
+    const link = typeof n.link === 'string' && /^https?:\/\/[^\s<>"']+$/i.test(n.link) ? n.link : ''
+    const box = document.createElement('div')
+    box.className = 'ca-news'
+    box.innerHTML = `
+      <div class="ca-news-label">Latest from ${esc(name)}${n.posted_at ? ' \u00b7 ' + esc(String(n.posted_at).slice(0, 10)) : ''}</div>
+      ${n.title ? `<div class="ca-news-title">${esc(n.title)}</div>` : ''}
+      ${n.text ? `<div class="ca-news-text">${esc(n.text).replace(/\n/g, '<br>')}</div>` : ''}
+      ${link ? '<a class="ca-dl-btn ca-news-link" target="_blank" rel="noopener noreferrer">Open the link</a>' : ''}`
+    if (link) box.querySelector('a').href = link
+    holder.appendChild(box)
   }
 
   // The member's own card: shown (scaled to fit) with a download button.
@@ -1235,15 +1261,23 @@
       day: '2-digit', month: 'short', year: 'numeric'
     })
 
-    showResult('valid', `✔ Welcome, ${memberName}. ${data.tier} access · valid until ${expiry}`)
+    const ev = (data.kind === 'ticket' && data.event) ? data.event : null
+    showResult('valid', ev
+      ? `✔ Welcome, ${memberName}. Your ticket: ${[ev.name, ev.when].filter(Boolean).join(' · ') || data.tier}`
+      : `✔ Welcome, ${memberName}. ${data.tier} access · valid until ${expiry}`)
 
     document.getElementById('ca-member-header').innerHTML = `
       <div class="ca-member-name">${esc(memberName)}</div>
       <div class="ca-member-tier">${esc(data.tier)}</div>
       <div class="ca-member-hr"></div>
       <div class="ca-member-meta">
-        <div><b>ACCESS CLASS</b> // <span>${esc(data.tier)}</span></div>
-        <div><b>VALID UNTIL</b> // <span>${esc(expiry)}</span></div>
+        ${ev ? `${ev.name ? `<div><b>EVENT</b> // <span>${esc(ev.name)}</span></div>` : ''}
+        ${ev.when ? `<div><b>WHEN</b> // <span>${esc(ev.when)}</span></div>` : ''}
+        ${ev.place ? `<div><b>WHERE</b> // <span>${esc(ev.place)}</span></div>` : ''}
+        ${ev.note ? `<div><b>NOTE</b> // <span>${esc(ev.note)}</span></div>` : ''}
+        <div><b>ADMIT</b> // <span>${esc(data.tier)}</span></div>`
+        : `<div><b>ACCESS CLASS</b> // <span>${esc(data.tier)}</span></div>
+        <div><b>VALID UNTIL</b> // <span>${esc(expiry)}</span></div>`}
       </div>`
 
     const area = document.getElementById('ca-member-area')
@@ -1254,10 +1288,11 @@
 
     let sections = null
     let myCard = null
+    let news = null
     let unreachable = false
     try {
       const got = await loadMemberContent(data)
-      if (got) { sections = got.sections; myCard = got.card }
+      if (got) { sections = got.sections; myCard = got.card; news = got.announcement }
     } catch(e) {
       unreachable = true
     }
@@ -1274,6 +1309,7 @@
       showResult('invalid', '✗ This access is no longer valid. Contact ' + name + ' if you think that\'s a mistake.')
       return
     } else {
+      renderNews(news)
       renderMyCard(myCard)
       buildMemberArea(sections)
     }

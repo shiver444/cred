@@ -71,9 +71,47 @@ be reset every time you deployed. Two things follow from this:
 This also holds your saved card looks and their uploaded pictures. Your
 members-only content (step 4) is stored the same way.
 
+### Card type: Access pass or Event ticket
+
+Every tier has a **Card type**:
+
+- **Access pass** (the default, and what every tier was before): a membership that
+  lasts a number of days and unlocks your members-only content.
+- **Event ticket**: for one event. When you pick it, the **Days** box turns into
+  "Until the event ends" and **More ▾** opens by itself with the event's details:
+  **Event name**, **Starts**, **Ends** (optional), **Place** and a **Note on the
+  ticket** (a seat, "doors 19:00"...). Type the times in your own time zone.
+
+A ticket card shows the event, the time, the place and the note in place of the
+plain "access class" row, says "Event Ticket" under the title and "Admit one" at
+the bottom, and has no barcode strip. Its look (style, colors, background
+picture) is chosen the same way as for any other tier; in the Card looks editor
+use **Show as an event ticket** above the preview to see a look as a ticket.
+
+A ticket works until the event ends (or 12 hours after it starts if you left
+**Ends** empty); after that it shows as expired. Nobody can get a ticket to an
+event that has already ended. Tickets can be free or paid, they go through the same
+sign-up, payment and approval steps as any tier, and the tier's sections still
+unlock content if you want a ticket to include some (a stream link, a download).
+Tickets never get the "your access is ending" reminder, and the event details
+are part of what is signed into the card.
+
+**Check-in (at the door).** On **Members**, the **Check-in (tickets)** link opens a
+page for the door. Press **Scan with the camera** and point it at a ticket's QR
+code, or paste the ticket's link or code. A good ticket is checked off right away
+and the page shows a big green **Let in** with the name and event; a ticket that
+was already used, cancelled or expired shows a red reason. The page counts how many
+tickets of each event are checked in. If you checked someone in by mistake, press
+**Undo**. A ticket that has been used no longer opens its content or its card, and
+the member's own page tells them "This ticket has already been used". On the
+Members screen a ticket shows **Mark as used** / **Undo check-in** buttons too, and
+"Only look, don't mark the ticket as used" on the Check-in page lets you test a
+ticket without using it. (The camera needs a phone or computer browser that allows
+camera use for this site; if it can't, paste the link instead.)
+
 ### Limits per tier: spots and one card per email
 
-Each tier row has a **Limits ▾** button. It opens the **limits**:
+Each tier row has a **More ▾** button. It opens the **limits** (and, for an event ticket, the event details, see below):
 
 - **Max members** — leave blank for no limit. With a number, the tier shows
   as "Sold out" in the signup widget once it's full, and anyone who still
@@ -199,7 +237,10 @@ and personal access link they already have keep working. A card that is still
 running gets the days added to its current end date (renewing early loses
 nothing); a card that already ran out restarts from today. Tick **email them**
 (shown when email is set up) to send a short "your access has been extended"
-note. A revoked member can't be extended, and an ended card in a tier that is
+note. You can change its wording under **Emails → Access extended email**
+(subject and message; `{name}`, `{tier}`, `{creator}`, `{brand}`, `{expires}` and
+`{days}`, which is how many days were added), with Preview and **Send test** like
+the other emails. A revoked member can't be extended, and an ended card in a tier that is
 now full can't be brought back until there's room. The date printed on the
 member's original card file doesn't change; the live check always uses the
 date kept on your server.
@@ -217,13 +258,33 @@ their reminder at the next check. A pass that lasts no longer than the reminder
 window isn't reminded. Members who are about to end show "ends in Nd" on the
 Members page, with a note once a reminder went out.
 
+### Announcements: tell your members about something new
+
+Open **Announce** (in the side bar or bottom bar, or the **Announce →** link at the top of Members and Content). Write a **title** (optional), a **message** and an optional **link**, then choose:
+
+- **Pin it at the top of every member's page.** Members who open their link see it in a
+  "Latest from you" box above their card, with the link as a button. It stays until you
+  pin something else or press **Unpin it**. Only people with a working card ever see it.
+- **Also email it to…** one of: **Everyone with a working card**, one tier (for example
+  "GOLD members"), or the **ticket holders** of one event. The list shows how many people
+  are in each group. Each person gets one email, even if they hold several cards, with
+  their own access link and a line saying why they received it. Needs email set up
+  (`BREVO_API_KEY` and `GMAIL_ADDRESS`, see above); without it you can still pin.
+
+You can do both at once. **Preview the email** shows what members will get, and **Send test**
+sends it to one address first. Press **Post** and confirm. Emails go out one by one in the
+background, so you can leave the page; the **Sent before** list shows how many went out, how
+many failed and the first problem. Only one email send runs at a time, and the last 25
+announcements are kept in that list. Your email service has its own sending limits, so very
+large lists may need to be sent in parts.
+
 ### Giving someone a card (no payment)
 
 On **Members**, open **+ Send a card (free)**, enter their name and
 email, pick a tier and press **Send card**. Use it for a friend, a
 collaborator, a contest winner, or someone who paid you some other way. The
 card is signed and registered like any other and works the same way; the list
-marks it "given free". Leave **Days** blank to use the tier's length. If email
+marks it "given free". Leave **Days** blank to use the tier's length (an event ticket always lasts until its event ends). If email
 is set up, the card is emailed to them; otherwise (or if you untick it) press
 **Copy their link** and send it yourself. The usual limits apply (a full tier,
 or an email that already has a working card, is refused) unless you tick

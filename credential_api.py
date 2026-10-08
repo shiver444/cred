@@ -78,6 +78,8 @@ import content_store
 import content_page
 import email_sender
 import backup
+import announcements
+import card_kinds
 import card_looks
 import public_url
 import limits
@@ -401,6 +403,8 @@ def load_config() -> dict:
         "reminder_subject": cfg.get("reminder_subject", email_sender.DEFAULT_REMINDER_SUBJECT),
         "reminder_text":    cfg.get("reminder_text", email_sender.DEFAULT_REMINDER_TEXT),
         "reminder_renew_url": cfg.get("reminder_renew_url", ""),
+        "extended_subject": cfg.get("extended_subject", email_sender.DEFAULT_EXTENDED_SUBJECT),
+        "extended_text":    cfg.get("extended_text", email_sender.DEFAULT_EXTENDED_TEXT),
         # Card look: the logo (a data: URI saved from the dashboard — "" for
         # none) and the style, "distressed" or "clean".
         "logo_data_uri": cfg.get("logo_data_uri", "") or "",
@@ -517,6 +521,12 @@ def _signup_check(cfg: dict, tier_cfg: dict, tier: str, email: str):
     when the answer is about to be acted on."""
     if not tier_cfg:
         return None   # an unlisted/demo tier name has no limits to apply
+    if card_kinds.is_ticket(tier_cfg):
+        ev = card_kinds.event_of(tier_cfg)
+        if not card_kinds.has_date(ev):
+            return ("event_not_ready", "This ticket isn't ready yet: the event has no date.")
+        if card_kinds.is_over(ev):
+            return ("event_over", "This event has already happened.")
     from member_registry import list_all as registry_list
     from payment_requests import list_all as requests_list
     return limits.check_signup(tier_cfg, tier, email, registry_list(), requests_list(),
@@ -547,6 +557,20 @@ def _issue_and_fulfill(name: str, email: str, tier: str, days: int, sections: li
     cfg = cfg or load_config()
     design = resolve_tier_design(cfg, tier)
 
+    # An event ticket works until its event ends, whatever number of days the
+    # caller passed; its event details are signed into the card and shown on it.
+    tier_cfg_t = get_tier(cfg, tier)
+    kind, event, ends_at = "pass", None, None
+    if card_kinds.is_ticket(tier_cfg_t):
+        ev = card_kinds.event_of(tier_cfg_t)
+        ends_at = card_kinds.ends_utc(ev)
+        if ends_at is None or ends_at <= datetime.now(timezone.utc):
+            if ends_at is None:
+                raise SignupBlocked("event_not_ready", "This ticket isn't ready yet: the event has no date.")
+            raise SignupBlocked("event_over", "This event has already happened.")
+        kind, event = "ticket", card_kinds.card_event(tier_cfg_t)
+        days = max(1, -(-int((ends_at - datetime.now(timezone.utc)).total_seconds()) // 86400))
+
     # Steps 1–4 run under the signup lock so a limit check (`check`, when the
     # caller gives one) and the registry write can't be interleaved with
     # another signup. The email (slow, network) goes out after the lock.
@@ -563,6 +587,8 @@ def _issue_and_fulfill(name: str, email: str, tier: str, days: int, sections: li
             tier        = tier,
             expiry_days = days,
             sections    = sections,
+            metadata    = {"kind": "ticket", "event": event} if kind == "ticket" else None,
+            expires_at_override = ends_at,
         )
 
         # 2 — Bundle
@@ -590,6 +616,8 @@ def _issue_and_fulfill(name: str, email: str, tier: str, days: int, sections: li
             qr_style      = design["qr_style"],
             background_data_uri = design["background_data_uri"],
             background_dim      = design["background_dim"],
+            kind                = kind,
+            event               = event,
         )
 
         # 4 — Registry (payment_meta, if given, is recorded on the entry —
@@ -599,6 +627,8 @@ def _issue_and_fulfill(name: str, email: str, tier: str, days: int, sections: li
             "bundle_hash": bundle["bundle_hash"],
             "bundle_path": bundle["bundle_path"],
             "payment":     payment_meta,
+            "kind":        kind,
+            "event":       event,
         })
 
     # 5 — Email (skipped when the caller doesn't want one, e.g. the creator
@@ -1126,7 +1156,8 @@ def admin_members_issue():
             check=None if ignore else (lambda: _signup_check(cfg, tier_cfg, tier_cfg["name"], email)),
             send_email=send)
     except SignupBlocked as b:
-        resp = _blocked_response(b.reason, b.message + " Tick \"Ignore limits\" to issue it anyway.")
+        resp = _blocked_response(b.reason, b.message if b.reason.startswith("event_")
+                                 else b.message + " Tick \"Ignore limits\" to issue it anyway.")
         return resp
     except Exception as e:
         import traceback
@@ -1210,6 +1241,253 @@ def admin_members_extend():
                "was_active": was_active, "days_added": days, "email": email_status})
 
 
+# ── Event tickets: Check-in ──
+# For the door. /admin/checkin is the page (camera or pasted link); /scan looks
+# a ticket up and, unless told only to look, checks it off at once; /use and
+# /undo are the buttons on the Members screen (and "undo" on the Check-in page).
+def _ticket_info(entry: dict) -> dict:
+    ev = entry.get("event") if isinstance(entry.get("event"), dict) else {}
+    return {"credential_id": entry.get("credential_id"), "name": entry.get("holder_name"),
+            "tier": entry.get("tier"), "event": ev.get("name") or "", "when": ev.get("when") or "",
+            "note": ev.get("note") or ""}
+
+def _checkin_stats() -> list:
+    import checkin_page
+    from member_registry import list_all
+    return checkin_page.stats(list_all())
+
+@app.route("/admin/checkin", methods=["GET"])
+def admin_checkin():
+    redirect_resp = require_admin_page("/admin/checkin")
+    if redirect_resp:
+        return redirect_resp
+    import checkin_page
+    cfg = load_config()
+    html = checkin_page.render(
+        admin_theme.css(cfg["admin_style"], cfg["accent_color"], "wide"),
+        admin_theme.shell_js(cfg["admin_style"]),
+        admin_theme.body_attrs(cfg["admin_style"], "checkin", cfg["card_title"]),
+        cfg["card_title"], _checkin_stats(),
+        any(card_kinds.is_ticket(t) for t in (cfg.get("tiers") or [])))
+    resp = app.response_class(html, mimetype="text/html")
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
+
+@app.route("/admin/checkin/scan", methods=["POST"])
+def admin_checkin_scan():
+    if not check_admin(request):
+        return err("Unauthorized", 401)
+    import checkin_page
+    from member_registry import get_by_id, mark_used
+    data = request.get_json(silent=True) or {}
+    mark = data.get("mark") is not False
+    cid, h = checkin_page.parse_code(data.get("code"))
+    def reply(state, title="", error="", entry=None, marked=False):
+        return jsonify({"success": True, "state": state, "title": title, "error": error, "marked": marked,
+                        "ticket": _ticket_info(entry) if entry else None, "stats": _checkin_stats()})
+    if not cid:
+        return reply("bad", "Not a ticket", "That doesn't look like a ticket link or code.")
+    entry = get_by_id(cid)
+    if not entry:
+        return reply("bad", "Unknown ticket", "No ticket with that code was found.")
+    if h:
+        stored = (entry.get("bundle_hash") or "").lower()
+        n = min(len(h), 32)
+        if len(stored) < 16 or len(h) < 16 or not hmac.compare_digest(stored[:n], h[:n]):
+            return reply("bad", "Not valid", "This code doesn't match the ticket.")
+    if entry.get("kind") != "ticket":
+        return reply("bad", "Not a ticket", "This is an access pass, not an event ticket.", entry)
+    if entry.get("revoked"):
+        return reply("bad", "Cancelled", "This ticket was revoked.", entry)
+    if not limits.is_active(entry):
+        return reply("bad", "Expired", "The event is over, so this ticket no longer works.", entry)
+    if entry.get("used_at"):
+        return reply("bad", "Already used", "Checked in at " + str(entry["used_at"])[:16].replace("T", " ") + " UTC.", entry)
+    if not mark:
+        return reply("valid", entry=entry)
+    mark_used(cid)
+    return reply("ok", entry=entry, marked=True)
+
+def _checkin_toggle(undo: bool):
+    if not check_admin(request):
+        return err("Unauthorized", 401)
+    from member_registry import get_by_id, mark_used, unmark_used
+    data = request.get_json(silent=True) or {}
+    cid = str(data.get("credential_id") or "").strip()
+    entry = get_by_id(cid) if cid else None
+    if not entry:
+        return err("No such ticket.", 404)
+    if entry.get("kind") != "ticket":
+        return err("That card is an access pass, not an event ticket.", 400)
+    if undo:
+        unmark_used(cid)
+    else:
+        if entry.get("revoked") or not limits.is_active(entry):
+            return err("That ticket is revoked or expired.", 400)
+        mark_used(cid)
+    return jsonify({"success": True, "stats": _checkin_stats()})
+
+@app.route("/admin/checkin/use", methods=["POST"])
+def admin_checkin_use():
+    return _checkin_toggle(False)
+
+@app.route("/admin/checkin/undo", methods=["POST"])
+def admin_checkin_undo():
+    return _checkin_toggle(True)
+
+
+# ── Announcements ──
+# One note, pinned at the top of every member's page and/or emailed to a group
+# (see announcements.py). The emails are sent one by one in a background thread,
+# so the page answers at once and shows progress; only one send runs at a time.
+_announce_lock = threading.Lock()
+_announce_run = {"id": None}          # the history entry being sent right now, if any
+ANNOUNCE_PAUSE = 0.15                 # seconds between emails, to stay inside the email service's rate limits
+
+def _announce_state() -> dict:
+    d = announcements.load()
+    from member_registry import list_all
+    running = _announce_run.get("id")
+    hist = []
+    for h in d["history"]:
+        h = dict(h)
+        e = h.get("email")
+        if isinstance(e, dict) and not e.get("done") and h.get("id") != running:
+            h["email"] = {**e, "interrupted": True}      # the server restarted part-way
+        hist.append(h)
+    cfg = load_config()
+    return {"success": True, "current": d["current"], "history": hist,
+            "groups": announcements.groups(list_all(), cfg.get("tiers") or []),
+            "email_ready": email_sender.is_configured(), "running": bool(running)}
+
+def _run_announcement_emails(entry_id: str, recips: list, title: str, text: str, link: str):
+    sent = failed = 0
+    first_error = ""
+    try:
+        for e in recips:
+            try:
+                ok_, detail = email_sender.send_announcement_email(
+                    e.get("holder_name") or "there", e["holder_email"], e.get("tier") or "",
+                    e["credential_id"], e.get("bundle_hash") or "", title, text, link)
+            except Exception as ex:                       # one bad address must not stop the rest
+                ok_, detail = False, str(ex)
+            if ok_:
+                sent += 1
+            else:
+                failed += 1
+                first_error = first_error or str(detail)[:200]
+            if (sent + failed) % 5 == 0:
+                announcements.set_email_status(entry_id, sent=sent, failed=failed, first_error=first_error)
+            time.sleep(ANNOUNCE_PAUSE)
+    finally:
+        announcements.set_email_status(entry_id, sent=sent, failed=failed, first_error=first_error, done=True,
+                                       finished_at=datetime.now(timezone.utc).isoformat())
+        _announce_run["id"] = None
+        _announce_lock.release()
+
+@app.route("/admin/announce", methods=["GET"])
+def admin_announce():
+    redirect_resp = require_admin_page("/admin/announce")
+    if redirect_resp:
+        return redirect_resp
+    import announce_page
+    cfg = load_config()
+    html = announce_page.render(
+        admin_theme.css(cfg["admin_style"], cfg["accent_color"], "wide"),
+        admin_theme.shell_js(cfg["admin_style"]),
+        admin_theme.body_attrs(cfg["admin_style"], "announce", cfg["card_title"]),
+        cfg["card_title"], _announce_state())
+    resp = app.response_class(html, mimetype="text/html")
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
+
+@app.route("/admin/announce/status", methods=["GET"])
+def admin_announce_status():
+    if not check_admin(request):
+        return err("Unauthorized", 401)
+    resp = jsonify(_announce_state())
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
+
+@app.route("/admin/announce/post", methods=["POST"])
+def admin_announce_post():
+    if not check_admin(request):
+        return err("Unauthorized", 401)
+    from member_registry import list_all
+    data = request.get_json(silent=True) or {}
+    title, text = announcements.clean_title(data.get("title")), announcements.clean_text(data.get("text"))
+    link = announcements.clean_link(data.get("link"))
+    if str(data.get("link") or "").strip() and not link:
+        return err("The link has to start with http:// or https://")
+    if not title and not text:
+        return err("Write a title or a message first.")
+    pin, mail = bool(data.get("pin")), bool(data.get("email"))
+    if not pin and not mail:
+        return err("Choose at least one: pin it, or email it.")
+    recips = []
+    if mail:
+        if not email_sender.is_configured():
+            return err("Email isn't set up on this server yet, so it can only be pinned.")
+        recips = announcements.recipients(list_all(), str(data.get("group") or ""))
+        if not recips:
+            return err("Nobody is in that group right now.")
+        if not _announce_lock.acquire(blocking=False):
+            return err("An email send is still running. Wait for it to finish.", 409)
+    group = str(data.get("group") or "")
+    label = next((g["label"] for g in announcements.groups(list_all(), load_config().get("tiers") or []) if g["key"] == group), group)
+    try:
+        entry = announcements.post(title, text, link, pin)
+        if mail:
+            announcements.set_email_status(entry["id"], group=group, group_label=label, total=len(recips),
+                                           sent=0, failed=0, first_error="", done=False,
+                                           started_at=datetime.now(timezone.utc).isoformat())
+            _announce_run["id"] = entry["id"]
+    except Exception:
+        if mail:
+            _announce_lock.release()
+        raise
+    if mail:
+        try:
+            threading.Thread(target=_run_announcement_emails, args=(entry["id"], recips, title, text, link), daemon=True).start()
+        except Exception:
+            _announce_run["id"] = None
+            _announce_lock.release()
+            raise
+    return jsonify({"success": True, "id": entry["id"], "pinned": pin, "total": len(recips)})
+
+@app.route("/admin/announce/unpin", methods=["POST"])
+def admin_announce_unpin():
+    if not check_admin(request):
+        return err("Unauthorized", 401)
+    announcements.unpin()
+    return jsonify({"success": True})
+
+@app.route("/admin/announce/preview", methods=["POST"])
+def admin_announce_preview():
+    if not check_admin(request):
+        return jsonify({"success": False, "error": "Not logged in."}), 401
+    data = request.get_json(silent=True) or {}
+    t, x = announcements.clean_title(data.get("title")), announcements.clean_text(data.get("text"))
+    if not t and not x:
+        return jsonify({"success": False, "error": "Write a title or a message first."}), 400
+    msg = email_sender.preview_announcement(t, x, announcements.clean_link(data.get("link")), _sample_tier())
+    return jsonify({"success": True, "subject": msg["subject"], "html": msg["html"]})
+
+@app.route("/admin/announce/test", methods=["POST"])
+def admin_announce_test():
+    if not check_admin(request):
+        return jsonify({"success": False, "error": "Not logged in."}), 401
+    data = request.get_json(silent=True) or {}
+    to = str(data.get("to") or "").strip()
+    if len(to) > 254 or "@" not in to[1:] or any(c in to for c in " \r\n<>,;"):
+        return jsonify({"success": False, "message": "That doesn't look like an email address."}), 400
+    t, x = announcements.clean_title(data.get("title")), announcements.clean_text(data.get("text"))
+    if not t and not x:
+        return jsonify({"success": False, "message": "Write a title or a message first."}), 400
+    ok_, message = email_sender.send_test_announcement(to, t, x, announcements.clean_link(data.get("link")), _sample_tier())
+    return jsonify({"success": ok_, "message": message}), (200 if ok_ else 502)
+
+
 # ── GET /revocation-list ──
 @app.route("/revocation-list", methods=["GET"])
 def revocation_list():
@@ -1284,6 +1562,10 @@ def admin_members():
             status_label = f"active · ends in {reminders.days_left(m, now_utc)}d"
         else:
             status_label = "active"
+        is_tk = m.get("kind") == "ticket"
+        used_at = m.get("used_at") if is_tk else None
+        if used_at and not revoked:
+            status_label = f'USED<br><span class="small">{esc_html(str(used_at)[:16].replace("T", " "))} UTC</span>'
         if m.get("reminded_at") and m.get("reminded_for") == m.get("expires_at"):
             status_label += f'<br><span class="small">reminded {esc_html(m["reminded_at"][:10])}</span>'
         if m.get("extended_at"):
@@ -1324,12 +1606,24 @@ def admin_members():
                            f'<button class="extend-btn" data-id="{cred_id}" data-name="{name_esc}">Extend</button>'
                            f'{notify_box}<span class="small extend-msg"></span></div>')
 
+        if is_tk:
+            _ev = m.get("event") if isinstance(m.get("event"), dict) else {}
+            tier_esc += ('<br><span class="small">ticket'
+                         + (f' · {esc_html(str(_ev.get("name") or ""))}' if _ev.get("name") else "") + '</span>')
         if isinstance(m.get("payment"), dict) and m["payment"].get("comped"):
             tier_esc += '<br><span class="small">given free</span>'
 
         revoke_cell = '—' if revoked else (
             f'<button class="revoke-btn" data-id="{cred_id}" data-name="{name_esc}">Revoke</button>'
         )
+        if is_tk and not revoked:
+            if used_at:
+                use_btn = f'<button class="use-btn undo" data-id="{cred_id}" data-name="{name_esc}" data-do="undo">Undo check-in</button>'
+            elif active_now:
+                use_btn = f'<button class="use-btn" data-id="{cred_id}" data-name="{name_esc}" data-do="use">Mark as used</button>'
+            else:
+                use_btn = ''
+            revoke_cell = f'<div class="use-box">{use_btn}{revoke_cell}</div>'
 
         # The link carries the member's credential ID and the first 32
         # characters of their bundle hash — exactly what the welcome email
@@ -1386,13 +1680,15 @@ def admin_members():
             'of your site with the widget, save, then come back.</div>'
         )
 
+    checkin_link = '<a href="/admin/checkin">Check-in (tickets) →</a>' if any(card_kinds.is_ticket(t) for t in (cfg.get("tiers") or [])) else ""
     tier_opts = ""
     for t in (cfg.get("tiers") or []):
         try:
             td = int(t.get("expiry_days") or 30)
         except (ValueError, TypeError):
             td = 30
-        tier_opts += (f'<option value="{esc_html(t.get("name", ""))}" data-days="{td}">'
+        tk_attr = ' data-ticket="1"' if card_kinds.is_ticket(t) else ""
+        tier_opts += (f'<option value="{esc_html(t.get("name", ""))}" data-days="{td}"{tk_attr}>'
                       f'{esc_html(t.get("label") or t.get("name", ""))} ({esc_html(t.get("name", ""))})</option>')
     if tier_opts:
         issue_notify = ('<label class="small"><input type="checkbox" id="issue-notify" checked> email them their card</label>'
@@ -1441,6 +1737,11 @@ def admin_members():
   }}
   .revoke-btn:hover {{ background:var(--accent); color:var(--on-accent); }}
   .revoke-btn:disabled {{ opacity:0.5; cursor:default; }}
+  .use-box {{ display:flex; gap:6px; flex-wrap:wrap; align-items:center; }}
+  .use-btn {{ background:var(--accent); border:1px solid var(--accent-text); color:var(--on-accent); font-family:var(--font); font-size:10px;
+    letter-spacing:1px; text-transform:uppercase; padding:5px 10px; cursor:pointer; white-space:nowrap; }}
+  .use-btn.undo {{ background:transparent; color:var(--accent-text); }}
+  .use-btn:disabled {{ opacity:0.5; cursor:default; }}
   .copy-link-btn {{
     background:var(--accent); border:1px solid var(--accent-text); color:var(--on-accent);
     font-family:var(--font); font-size:10px; letter-spacing:1px;
@@ -1475,7 +1776,7 @@ def admin_members():
   .nav a:hover {{ text-decoration:underline; }}
 {theme_css}</style></head>
 <body {body_attrs}>
-  <div class="nav"><a href="/admin/dashboard">← Dashboard</a><a href="/admin/content">Content →</a><a href="/admin/logout">Log out</a></div>
+  <div class="nav"><a href="/admin/dashboard">← Dashboard</a><a href="/admin/content">Content →</a><a href="/admin/announce">Announce →</a>{checkin_link}<a href="/admin/logout">Log out</a></div>
   <h1>{title} — Members ({len(members)})</h1>
   <div class="count">Newest first.</div>
   <details class="mhelp" open><summary>What do these columns and buttons mean?</summary>
@@ -1483,6 +1784,7 @@ def admin_members():
   <div class="count"><b>Extend</b>: adds days to a member's access. Same card, same link; only the end date moves. An expired card restarts from today.</div>
   <div class="count"><b>Delete</b>: removes a member for good. Their card and link stop working. To only cut off access and keep the record, use Revoke.</div>
   <div class="count"><b>Copy link</b>: copies the member's personal link. Send it yourself if email isn't set up. Treat it like a password.</div>
+  <div class="count"><b>Mark as used</b> (event tickets): lets the person in and switches their ticket off, so a copy can't be used twice. At the door the <a href="/admin/checkin" style="color:var(--accent-text);">Check-in</a> page does this for you.</div>
   </details>
   {members_page_warning}
   {issue_box}
@@ -1502,6 +1804,22 @@ def admin_members():
         }});
       }});
     }})();
+
+    // Event tickets: mark as used (let in) / undo a mistaken check-in.
+    document.querySelectorAll('.use-btn').forEach(btn => {{
+      btn.addEventListener('click', () => {{
+        const undo = btn.dataset.do === 'undo';
+        if (!confirm(undo ? `Undo the check-in for ${{btn.dataset.name}}? Their ticket works again.`
+                          : `Mark ${{btn.dataset.name}}'s ticket as used? It stops working after this.`)) return;
+        btn.disabled = true;
+        fetch('/admin/checkin/' + (undo ? 'undo' : 'use'), {{
+          method: 'POST', headers: {{ 'Content-Type': 'application/json' }},
+          body: JSON.stringify({{ credential_id: btn.dataset.id }}),
+        }}).then(r => r.json()).then(d => {{
+          if (d.success) location.reload(); else {{ btn.disabled = false; alert(d.error || 'Failed.'); }}
+        }}).catch(() => {{ btn.disabled = false; alert('Could not reach the server.'); }});
+      }});
+    }});
 
     document.querySelectorAll('.copy-link-btn').forEach(btn => {{
       btn.addEventListener('click', () => {{
@@ -1537,7 +1855,10 @@ def admin_members():
       function say(t, good) {{ msg.textContent = t; msg.style.color = good ? 'var(--ok)' : 'var(--bad)'; }}
       function defaultDays() {{
         const o = f('issue-tier').selectedOptions[0];
-        f('issue-days').placeholder = o ? o.dataset.days : '';
+        const tk = !!(o && o.dataset.ticket);
+        f('issue-days').placeholder = tk ? 'until the event ends' : (o ? o.dataset.days : '');
+        f('issue-days').disabled = tk;
+        if (tk) f('issue-days').value = '';
       }}
       f('issue-tier').addEventListener('change', defaultDays); defaultDays();
       btn.addEventListener('click', () => {{
@@ -1777,6 +2098,14 @@ def admin_dashboard_save():
     tier_expiries = request.form.getlist("tier_expiry_days")
     tier_sections = request.form.getlist("tier_sections")
     tier_max_members = request.form.getlist("tier_max_members")
+    tier_kinds       = request.form.getlist("tier_kind")
+    ev_names         = request.form.getlist("tier_event_name")
+    ev_starts        = request.form.getlist("tier_event_start")
+    ev_ends          = request.form.getlist("tier_event_end")
+    ev_places        = request.form.getlist("tier_event_place")
+    ev_notes         = request.form.getlist("tier_event_note")
+    ev_tzs           = request.form.getlist("tier_event_tz")
+    have_kinds       = "tier_kind" in request.form
     tier_show_spots  = request.form.getlist("tier_show_spots")
     tier_per_email   = request.form.getlist("tier_per_email")
 
@@ -1824,8 +2153,24 @@ def admin_dashboard_save():
         if per_email not in limits.PER_EMAIL_MODES:
             per_email = limits.DEFAULT_PER_EMAIL
 
+        # Card type: an Access pass (the default, stored as nothing) or an Event
+        # ticket with its event details. A save that doesn't send the picker keeps
+        # what was saved for that tier.
+        if have_kinds:
+            kind = card_kinds.clean_kind(tier_kinds[i] if i < len(tier_kinds) else "")
+            event = card_kinds.clean_event(
+                ev_names[i] if i < len(ev_names) else "", ev_starts[i] if i < len(ev_starts) else "",
+                ev_ends[i] if i < len(ev_ends) else "", ev_places[i] if i < len(ev_places) else "",
+                ev_notes[i] if i < len(ev_notes) else "", ev_tzs[i] if i < len(ev_tzs) else 0)
+        else:
+            kind = card_kinds.clean_kind(old_t.get("kind"))
+            event = card_kinds.event_of(old_t)
+        if kind == "ticket" and not event["starts_at"]:
+            logo_notes.append(f"Ticket \u201c{name.upper()}\u201d needs a start date and time before anyone can get it.")
+
         tiers.append({
             "name":        name.upper(),
+            **({"kind": "ticket", "event": event} if kind == "ticket" else {}),
             "label":       (tier_labels[i] if i < len(tier_labels) else "").strip(),
             "price":       price,
             "expiry_days": expiry_days,
@@ -1899,6 +2244,8 @@ def admin_dashboard_save():
         "reminder_subject": (request.form.get("reminder_subject") or "").strip()[:email_sender.MAX_REMINDER_SUBJECT],
         "reminder_text":    (request.form.get("reminder_text") or "").strip()[:email_sender.MAX_REMINDER_TEXT],
         "reminder_renew_url": email_sender.safe_renew_url(request.form.get("reminder_renew_url")),
+        "extended_subject": (request.form.get("extended_subject") or "").strip()[:email_sender.MAX_EXTENDED_SUBJECT],
+        "extended_text":    (request.form.get("extended_text") or "").strip()[:email_sender.MAX_EXTENDED_TEXT],
         **widget_look.from_form(request.form),
         "admin_style":    admin_theme.clean_style(request.form.get("admin_style"), load_config()["admin_style"]),
         "tiers":          tiers,
@@ -2118,22 +2465,60 @@ def _dashboard_page() -> str:
               </div>
             </div>"""
 
+    def _kind_select(kind: str) -> str:
+        return ('<select name="tier_kind">'
+                + "".join(f'<option value="{k}"{" selected" if k == kind else ""}>{card_kinds.KIND_NAMES[k]}</option>'
+                          for k in card_kinds.KINDS)
+                + '</select>')
+
+    def _event_panel(t: dict) -> str:
+        e = card_kinds.event_of(t)
+        return f"""
+            <div class="design-panel event-block">
+              <div class="design-field wide">
+                <label>Event name</label>
+                <input name="tier_event_name" maxlength="{card_kinds.MAX_NAME}" value="{esc_html(e['name'])}" placeholder="Halloween Live Show">
+              </div>
+              <div class="design-field">
+                <label>Starts</label>
+                <input name="tier_event_start" type="datetime-local" value="{esc_html(e['starts_at'])}">
+              </div>
+              <div class="design-field">
+                <label>Ends (optional)</label>
+                <input name="tier_event_end" type="datetime-local" value="{esc_html(e['ends_at'])}">
+              </div>
+              <div class="design-field">
+                <label>Place</label>
+                <input name="tier_event_place" maxlength="{card_kinds.MAX_PLACE}" value="{esc_html(e['place'])}" placeholder="Venue, city or link">
+              </div>
+              <div class="design-field">
+                <label>Note on the ticket (optional)</label>
+                <input name="tier_event_note" maxlength="{card_kinds.MAX_NOTE}" value="{esc_html(e['note'])}" placeholder="Doors 19:00, standing">
+              </div>
+              <input type="hidden" name="tier_event_tz" value="{esc_html(str(e['tz']))}">
+              <div class="hint event-hint">The ticket stops working when the event ends. If you leave <b>Ends</b> empty, it works for {card_kinds.DEFAULT_HOURS} hours after it starts. Times are the ones you type here, in your own time zone.</div>
+            </div>"""
+
     tier_rows = ""
     for t in cfg["tiers"]:
         look_sel = t.get("look") if card_looks.get(cfg["card_looks"], t.get("look")) else ""
+        _tk = card_kinds.clean_kind(t.get("kind"))
+        _tcls = " is-ticket" if _tk == "ticket" else ""
         tier_rows += f"""
-        <tr class="tier-row">
+        <tr class="tier-row{_tcls}">
           <td data-label="Name"><input name="tier_name" value="{esc_html(t.get('name',''))}"></td>
           <td data-label="Label"><input name="tier_label" value="{esc_html(t.get('label',''))}"></td>
           <td data-label="Price"><input name="tier_price" type="number" step="0.01" value="{esc_html(str(t.get('price',0)))}"></td>
-          <td data-label="Days of access"><input name="tier_expiry_days" type="number" value="{esc_html(str(t.get('expiry_days',31)))}"></td>
+          <td data-label="Card type">{_kind_select(_tk)}</td>
+          <td data-label="Days of access" class="c-days"><input name="tier_expiry_days" type="number" value="{esc_html(str(t.get('expiry_days',31)))}"><span class="days-note">Until the event ends</span></td>
           <td data-label="Sections (separated by commas)"><input name="tier_sections" value="{esc_html(', '.join(t.get('sections',[])))}" placeholder="downloads, chat"></td>
           <td data-label="Card look"><select name="tier_look">{looks_page.picker_options(cfg, look_sel)}</select></td>
-          <td><button type="button" class="design-toggle">Limits ▾</button></td>
+          <td><button type="button" class="design-toggle">More ▾</button></td>
           <td><button type="button" class="remove-tier" title="Remove this tier">×</button></td>
         </tr>
-        <tr class="design-row" style="display:none">
-          <td colspan="8">
+        <tr class="design-row{_tcls}" style="display:none">
+          <td colspan="9">
+            {_event_panel(t)}
             {_limits_panel(t)}
           </td>
         </tr>"""
@@ -2281,7 +2666,15 @@ def _dashboard_page() -> str:
            font-size:10px; padding:6px 10px; cursor:pointer; white-space:nowrap; }}
   .design-panel {{ background:var(--panel); border:1px solid var(--line); padding:16px; margin:6px 0; display:flex; flex-wrap:wrap; gap:16px; align-items:flex-start; }}
   .design-field {{ flex:1 1 180px; min-width:160px; }}
+  .design-field.wide {{ flex:1 1 100%; }}
   .design-field label {{ margin-top:0; }}
+  .design-field input {{ width:100%; box-sizing:border-box; }}
+  .event-hint {{ flex:1 1 100%; margin:0; }}
+  /* Card type: a ticket has no "days", and shows its event details */
+  .days-note {{ display:none; color:var(--muted); font-size:11px; }}
+  tr.tier-row.is-ticket .c-days input {{ display:none; }}
+  tr.tier-row.is-ticket .c-days .days-note {{ display:inline; }}
+  tr.design-row:not(.is-ticket) .event-block {{ display:none; }}
   .design-field select {{ width:100%; background:var(--field); border:1px solid var(--line); color:var(--fg);
            font-family:var(--font); font-size:12px; padding:8px 10px; }}
   .logo-row {{ display:flex; align-items:center; gap:8px; flex-wrap:wrap; }}
@@ -2301,6 +2694,11 @@ def _dashboard_page() -> str:
            font-size:12px; line-height:1.7; padding:12px 14px; margin:8px 0; white-space:pre-wrap; word-break:break-all; }}
   .copy-btn {{ background:var(--accent); color:var(--on-accent); border:none; font-family:var(--font);
            font-size:11px; letter-spacing:1.5px; text-transform:uppercase; padding:8px 16px; cursor:pointer; }}
+  /* Tiers on a wide screen: keep the type and look pickers readable, the number boxes small. */
+  @media (min-width:900px) {{
+    #sec-tiers td[data-label="Card type"] select, #sec-tiers td[data-label="Card look"] select {{ min-width:116px; }}
+    #sec-tiers td[data-label="Price"] input, #sec-tiers td.c-days input {{ max-width:84px; }}
+  }}
   /* Tiers on a phone: one card per tier instead of a table you have to scroll sideways. */
   @media (max-width:899px) {{
     #sec-tiers table, #sec-tiers tbody {{ display:block; width:100%; }}
@@ -2309,7 +2707,7 @@ def _dashboard_page() -> str:
       background:var(--panel); border:1px solid var(--line); border-radius:var(--radius-lg, 8px); }}
     #sec-tiers tr.tier-row > td {{ display:block; padding:0; min-width:0; }}
     #sec-tiers tr.tier-row > td[data-label]::before {{ content:attr(data-label); display:block; font-size:12px; color:var(--muted); margin-bottom:4px; letter-spacing:0; text-transform:none; }}
-    #sec-tiers tr.tier-row > td:nth-child(5), #sec-tiers tr.tier-row > td:nth-child(6) {{ grid-column:1 / -1; }}
+    #sec-tiers tr.tier-row > td:nth-child(6), #sec-tiers tr.tier-row > td:nth-child(7) {{ grid-column:1 / -1; }}
     #sec-tiers tr.tier-row select {{ width:100%; box-sizing:border-box; padding:11px 12px; font-size:16px; }}
     #sec-tiers tr.tier-row input {{ width:100%; box-sizing:border-box; padding:11px 12px; font-size:16px; }}
     #sec-tiers .design-toggle, #sec-tiers .remove-tier {{ width:100%; height:auto; box-sizing:border-box; padding:11px 12px; font-size:13px; }}
@@ -2319,13 +2717,14 @@ def _dashboard_page() -> str:
     #sec-tiers tr.design-row > td {{ display:block; padding:0; }}
     #sec-tiers .design-panel {{ padding:14px; gap:14px; }}
     #sec-tiers .design-field {{ flex:1 1 100%; min-width:0; }}
+    #sec-tiers .design-field input[type=datetime-local] {{ min-height:44px; }}
     #sec-tiers .design-field input, #sec-tiers .design-field select {{ width:100%; max-width:100%; box-sizing:border-box; padding:11px 12px; font-size:16px; }}
     #sec-tiers .design-field input[type=file] {{ font-size:13px; padding:8px 0; }}
     #sec-tiers .preview-btn {{ padding:12px 14px; font-size:13px; }}
   }}
 {theme_css}</style></head>
 <body {body_attrs}>
-  <div class="nav"><a href="/admin/members">Members →</a><a href="/admin/content">Content →</a><a href="/admin/logout">Log out</a></div>
+  <div class="nav"><a href="/admin/members">Members →</a><a href="/admin/content">Content →</a><a href="/admin/announce">Announce →</a><a href="/admin/logout">Log out</a></div>
   <h1>{title} — Dashboard</h1>
   {saved_banner}
 
@@ -2461,9 +2860,9 @@ def _dashboard_page() -> str:
     <section class="dsec" id="sec-tiers" data-title="Tiers &amp; pricing">
     <h2>Tiers &amp; pricing</h2>
     {tier_sections_hint}
-    <div class="hint" style="margin-bottom:8px;">Each tier is its own kind of card (for example Monthly, Trial or VIP). Pick a <b>Card look</b> for each one; make and edit looks under <b>Card looks</b>. <b>Limits</b> opens how many members a tier can have and how many cards one email can get.</div>
+    <div class="hint" style="margin-bottom:8px;">Each tier is its own kind of card (for example Monthly, Trial or VIP). Pick a <b>Card look</b> for each one; make and edit looks under <b>Card looks</b>. <b>Card type</b> is <b>Access pass</b> (a membership that lasts a number of days) or <b>Event ticket</b> (for one event: it shows the event on the card, stops working when the event ends, and can be checked in at the door). <b>More</b> opens the event details of a ticket, how many members a tier can have and how many cards one email can get.</div>
     <table>
-      <tr><th>Name</th><th>Label</th><th>Price</th><th>Expiry (days)</th><th>Sections (separated by commas)</th><th>Card look</th><th></th><th></th></tr>
+      <tr><th>Name</th><th>Label</th><th>Price</th><th>Card type</th><th>Expiry (days)</th><th>Sections (separated by commas)</th><th>Card look</th><th></th><th></th></tr>
       <tbody id="tier-body">{tier_rows}</tbody>
     </table>
     <button type="button" class="add-tier" id="add-tier">+ Add tier</button>
@@ -2555,6 +2954,20 @@ def _dashboard_page() -> str:
     <div class="hint" id="reminder-status" style="margin-top:8px;min-height:14px;"></div>
     <iframe id="reminder-preview-frame" sandbox="" style="display:none;width:100%;height:520px;border:1px solid var(--line);margin-top:10px;background:var(--frame-bg);"></iframe>
 
+    <h2>Access extended email</h2>
+    <div class="hint" style="margin-bottom:8px;">What a member gets when you press Extend on the Members page and leave "email them" ticked. You can write <b>{{name}}</b>, <b>{{tier}}</b>, <b>{{creator}}</b>, <b>{{brand}}</b>, <b>{{expires}}</b> and <b>{{days}}</b> (how many days were added). The member's access link is always included. Leave a box empty to use the standard words.</div>
+    <label>Subject</label>
+    <input name="extended_subject" id="extended-subject" maxlength="150" value="{esc_html(cfg['extended_subject'])}">
+    <label>Message</label>
+    <textarea name="extended_text" id="extended-text" rows="3" maxlength="1000">{esc_html(cfg['extended_text'])}</textarea>
+    <div style="margin-top:12px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+      <button type="button" class="add-tier" id="extended-preview-btn" style="margin-top:0;">Preview email →</button>
+      <input id="extended-test-to" type="email" placeholder="send a test to this address" style="max-width:260px;">
+      <button type="button" class="add-tier" id="extended-test-btn" style="margin-top:0;">Send test</button>
+    </div>
+    <div class="hint" id="extended-status" style="margin-top:8px;min-height:14px;"></div>
+    <iframe id="extended-preview-frame" sandbox="" style="display:none;width:100%;height:520px;border:1px solid var(--line);margin-top:10px;background:var(--frame-bg);"></iframe>
+
     </section>
 
     <h2></h2>
@@ -2570,14 +2983,16 @@ def _dashboard_page() -> str:
       <td data-label="Name"><input name="tier_name" value=""></td>
       <td data-label="Label"><input name="tier_label" value=""></td>
       <td data-label="Price"><input name="tier_price" type="number" step="0.01" value="0"></td>
-      <td data-label="Days of access"><input name="tier_expiry_days" type="number" value="31"></td>
+      <td data-label="Card type">{_kind_select("pass")}</td>
+      <td data-label="Days of access" class="c-days"><input name="tier_expiry_days" type="number" value="31"><span class="days-note">Until the event ends</span></td>
       <td data-label="Sections (separated by commas)"><input name="tier_sections" value="" placeholder="downloads, chat"></td>
       <td data-label="Card look"><select name="tier_look">{looks_page.picker_options(cfg, "")}</select></td>
-      <td><button type="button" class="design-toggle">Limits ▾</button></td>
+      <td><button type="button" class="design-toggle">More ▾</button></td>
       <td><button type="button" class="remove-tier" title="Remove this tier">×</button></td>
     </tr>
     <tr class="design-row" style="display:none">
-      <td colspan="8">
+      <td colspan="9">
+        {_event_panel({})}
         <div class="design-panel limits-panel">
           <div class="design-field">
             <label>Max members (blank = no limit)</label>
@@ -2641,6 +3056,36 @@ def _dashboard_page() -> str:
       const rows = tpl.content.cloneNode(true);
       document.getElementById('tier-body').appendChild(rows);
     }});
+
+    // Card type: show or hide the event details; remember the browser's time zone for the event.
+    (function() {{
+      const body = document.getElementById('tier-body');
+      function designRowOf(row) {{ const d = row.nextElementSibling; return d && d.classList.contains('design-row') ? d : null; }}
+      function sync(row, open) {{
+        const sel = row.querySelector('[name="tier_kind"]');
+        if (!sel) return;
+        const t = sel.value === 'ticket';
+        row.classList.toggle('is-ticket', t);
+        const d = designRowOf(row);
+        if (d) {{ d.classList.toggle('is-ticket', t); if (t && open) d.style.display = ''; }}
+      }}
+      function setTz(d) {{
+        const st = d.querySelector('[name="tier_event_start"]'), tz = d.querySelector('[name="tier_event_tz"]');
+        if (!st || !tz || !st.value) return;
+        const when = new Date(st.value);
+        if (!isNaN(when)) tz.value = String(when.getTimezoneOffset());
+      }}
+      body.addEventListener('change', (e) => {{
+        const row = e.target.closest('tr');
+        if (!row) return;
+        if (e.target.name === 'tier_kind') {{ sync(row, true); return; }}
+        if (e.target.name === 'tier_event_start') {{ const d = row.classList.contains('design-row') ? row : null; if (d) setTz(d); }}
+      }});
+      Array.from(body.querySelectorAll('tr.tier-row')).forEach((r) => sync(r, false));
+      document.getElementById('add-tier').addEventListener('click', () => {{
+        const rows = body.querySelectorAll('tr.tier-row'); if (rows.length) sync(rows[rows.length - 1], false);
+      }});
+    }})();
 
     document.getElementById('tier-body').addEventListener('click', (e) => {{
       if (e.target.classList.contains('remove-tier')) {{
@@ -2796,6 +3241,42 @@ def _dashboard_page() -> str:
       }});
     }})();
 
+    // Access extended: same preview/test routes, kind = "extended".
+    (function() {{
+      const f = id => document.getElementById(id);
+      const frame = f('extended-preview-frame'), status = f('extended-status');
+      const pbtn = f('extended-preview-btn'), tbtn = f('extended-test-btn'), to = f('extended-test-to');
+      function fields() {{
+        return {{ kind: 'extended', extended_subject: f('extended-subject').value,
+                 extended_text: f('extended-text').value }};
+      }}
+      function say(text, good) {{ status.textContent = text; status.style.color = good ? 'var(--ok)' : 'var(--bad)'; }}
+      function post(url, body) {{
+        return fetch(url, {{ method: 'POST', credentials: 'same-origin',
+                            headers: {{ 'Content-Type': 'application/json' }},
+                            body: JSON.stringify(body) }})
+          .then(r => r.json().then(j => ({{ status: r.status, body: j }})));
+      }}
+      pbtn.addEventListener('click', () => {{
+        pbtn.disabled = true; say('Loading preview…', true);
+        post('/admin/email/preview', fields()).then(res => {{
+          pbtn.disabled = false;
+          if (!res.body.success) {{ say(res.body.error || 'Preview failed.', false); return; }}
+          frame.srcdoc = res.body.html; frame.style.display = '';
+          say('Subject: ' + res.body.subject, true);
+        }}).catch(() => {{ pbtn.disabled = false; say('Could not reach the server.', false); }});
+      }});
+      tbtn.addEventListener('click', () => {{
+        const addr = to.value.trim();
+        if (!addr || addr.indexOf('@') < 1) {{ say('Type the address to send the test to.', false); return; }}
+        tbtn.disabled = true; say('Sending…', true);
+        post('/admin/email/test', Object.assign({{ to: addr }}, fields())).then(res => {{
+          tbtn.disabled = false;
+          say(res.body.message || res.body.error || 'Failed.', !!res.body.success);
+        }}).catch(() => {{ tbtn.disabled = false; say('Could not reach the server.', false); }});
+      }});
+    }})();
+
     // Widget look: two live previews (dark page / light page). Each is the
     // real /cp.js running in a sandboxed frame with the unsaved form values
     // handed to it, so what you see is what a visitor will get once saved.
@@ -2907,6 +3388,12 @@ def _reminder_overrides(data: dict) -> dict:
         "reminder_renew_url": str(data.get("reminder_renew_url") or ""),
     }
 
+def _extended_overrides(data: dict) -> dict:
+    return {
+        "extended_subject": str(data.get("extended_subject") or "")[:email_sender.MAX_EXTENDED_SUBJECT * 2],
+        "extended_text":    str(data.get("extended_text") or "")[:email_sender.MAX_EXTENDED_TEXT * 2],
+    }
+
 def _sample_tier() -> str:
     tiers = load_config().get("tiers") or []
     return (tiers[0].get("name") if tiers else "") or "MEMBER"
@@ -2918,6 +3405,8 @@ def admin_email_preview():
     data = request.get_json(silent=True) or {}
     if data.get("kind") == "reminder":
         msg = email_sender.preview_reminder(_sample_tier(), _reminder_overrides(data))
+    elif data.get("kind") == "extended":
+        msg = email_sender.preview_extended(_sample_tier(), _extended_overrides(data))
     else:
         msg = email_sender.preview_email(_sample_tier(), _email_overrides(data))
     return jsonify({"success": True, "subject": msg["subject"], "html": msg["html"]})
@@ -2932,6 +3421,8 @@ def admin_email_test():
         return jsonify({"success": False, "message": "That doesn't look like an email address."}), 400
     if data.get("kind") == "reminder":
         ok_, message = email_sender.send_test_email(to, _sample_tier(), _reminder_overrides(data), kind="reminder")
+    elif data.get("kind") == "extended":
+        ok_, message = email_sender.send_test_email(to, _sample_tier(), _extended_overrides(data), kind="extended")
     else:
         ok_, message = email_sender.send_test_email(to, _sample_tier(), _email_overrides(data))
     return jsonify({"success": ok_, "message": message}), (200 if ok_ else 502)
@@ -2941,7 +3432,8 @@ def admin_email_test():
 # Every preview renders a real card through card_generator (the same code
 # /issue uses) with dummy member data; nothing is saved and the registry is
 # never touched.
-def _render_preview_card(cfg: dict, design: dict, tier_name: str = "MEMBER", creator_name: str = None) -> str:
+def _render_preview_card(cfg: dict, design: dict, tier_name: str = "MEMBER", creator_name: str = None,
+                         kind: str = "pass") -> str:
     from datetime import timedelta as _td
     from card_generator import generate_card
     now = datetime.now(timezone.utc)
@@ -2966,6 +3458,8 @@ def _render_preview_card(cfg: dict, design: dict, tier_name: str = "MEMBER", cre
         qr_style      = design["qr_style"],
         background_data_uri = design.get("background_data_uri"),
         background_dim      = design.get("background_dim", card_looks.DEFAULT_DIM),
+        kind          = "ticket" if kind == "ticket" else "pass",
+        event         = card_kinds.sample_event() if kind == "ticket" else None,
         save          = False,
     )
 
@@ -3135,7 +3629,8 @@ def admin_looks_preview():
     tiers = cfg.get("tiers") or []
     try:
         return _render_preview_card(cfg, resolve_look(cfg, look),
-                                    tier_name=(tiers[0].get("name") if tiers else "") or "MEMBER")
+                                    tier_name=(tiers[0].get("name") if tiers else "") or "MEMBER",
+                                    kind=request.form.get("preview_kind") or "pass")
     except Exception as e:
         return err(f"Preview failed: {str(e)}", 500)
 
@@ -3344,7 +3839,8 @@ def get_config():
     # The widget's look (colors/wording choices) is public by nature too.
     public.update(widget_look.from_config(cfg))
     tiers = [t for t in (cfg.get("tiers") or []) if isinstance(t, dict)]
-    public["tiers"] = [{k: t[k] for k in ("name", "label", "price", "expiry_days", "sections") if k in t}
+    public["tiers"] = [{**{k: t[k] for k in ("name", "label", "price", "expiry_days", "sections") if k in t},
+                        **({"kind": "ticket", "event": card_kinds.public_event(t)} if card_kinds.is_ticket(t) else {})}
                        for t in tiers]
     # Tiers with a member limit also say whether they are full (and, unless
     # the creator hides it, how many spots are left). Only read the member
@@ -3382,6 +3878,8 @@ def _member_entry(cid: str, h: str = None):
         if not entry or entry.get("revoked"):
             return None
         if datetime.fromisoformat(entry["expires_at"]) < datetime.now(timezone.utc):
+            return None
+        if entry.get("used_at"):          # an event ticket that was already checked in
             return None
         if h is not None:
             stored = (entry.get("bundle_hash") or "").lower()
@@ -3461,6 +3959,9 @@ def member_content():
                 sec["items"] = items
             sections.append(sec)
         out = {"success": True, "sections": sections}
+        note = announcements.public_current()
+        if note:
+            out["announcement"] = note
         if _card_path(cid).is_file():
             t = _file_token(cid, "card")
             out["card"] = {"view": f"/member-card/{cid}?t={t}", "download": f"/member-card/{cid}?t={t}&dl=1"}

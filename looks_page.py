@@ -101,6 +101,10 @@ _SECTION = """
         </div>
         <div class="look-preview">
           <div class="hint" style="margin-bottom:6px;">Preview (updates as you type)</div>
+          <select id="lk-prev-kind" aria-label="Show the preview as" style="margin-bottom:8px;max-width:240px;">
+            <option value="pass">Show as an access pass</option>
+            <option value="ticket">Show as an event ticket</option>
+          </select>
           <iframe id="lk-frame" sandbox="" title="Card preview"></iframe>
         </div>
         <div class="lk-actions">
@@ -289,7 +293,7 @@ _JS = r"""
     if (cur) fd.append('id', cur.id);
     fd.append('name', fName.value); fd.append('card_title', fTitle.value); fd.append('card_label', fLabel.value);
     fd.append('card_style', fStyle.value); fd.append('accent_color', fAccent.value); fd.append('accent_same', fSame.checked ? '1' : '0');
-    fd.append('barcode', fBar.value); fd.append('qr_style', fQr.value); fd.append('bg_dim', fDim.value);
+    fd.append('preview_kind', $('lk-prev-kind').value); fd.append('barcode', fBar.value); fd.append('qr_style', fQr.value); fd.append('bg_dim', fDim.value);
     fd.append('logo_clear', logoCleared ? '1' : '0'); fd.append('bg_clear', bgCleared ? '1' : '0');
     if (fLogo.files[0]) fd.append('logo', fLogo.files[0]);
     if (fBg.files[0]) fd.append('bg', fBg.files[0]);
@@ -304,6 +308,7 @@ _JS = r"""
   }
   function later() { clearTimeout(timer); timer = setTimeout(preview, 700); }
   [fName, fTitle, fLabel, fStyle, fAccent, fSame, fBar, fQr, fDim].forEach(function (f) { f.addEventListener('input', later); f.addEventListener('change', later); });
+  $('lk-prev-kind').addEventListener('change', later);
   fSame.addEventListener('change', states);
   fLogo.addEventListener('change', function () { if (fLogo.files[0]) logoCleared = false; states(); later(); });
   fBg.addEventListener('change', function () { if (fBg.files[0]) bgCleared = false; states(); later(); });

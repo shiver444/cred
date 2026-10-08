@@ -51,7 +51,7 @@ def days_left(entry, now=None) -> int:
 def is_expiring_soon(entry, window_days, now=None) -> bool:
     """Active (not revoked, not ended) and ending within `window_days`."""
     now = now or datetime.now(timezone.utc)
-    if entry.get("revoked"):
+    if entry.get("revoked") or entry.get("kind") == "ticket":   # a ticket's end is just the event
         return False
     end = _parse(entry.get("expires_at"))
     return bool(end and now < end <= now + timedelta(days=window_days))

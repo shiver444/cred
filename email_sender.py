@@ -65,6 +65,13 @@ DEFAULT_REMINDER_TEXT    = ("{name} — your {tier} access ends on {expires}, {d
                             "To keep it going, renew with {creator} before then.")
 MAX_REMINDER_SUBJECT, MAX_REMINDER_TEXT, MAX_RENEW_URL = 150, 1000, 500
 
+# "Access extended" wording (editable too). Same five placeholders plus {days},
+# which here is how many days were added ("5 days").
+DEFAULT_EXTENDED_SUBJECT = "Your access has been extended until {expires}"
+DEFAULT_EXTENDED_TEXT    = ("{name} — your {tier} access has been extended by {days}.\n"
+                            "It now runs until {expires}. Your access link has not changed.")
+MAX_EXTENDED_SUBJECT, MAX_EXTENDED_TEXT = 150, 1000
+
 
 def _fill(text: str, values: dict) -> str:
     """Replace {name}-style placeholders. Only the names present in `values`
@@ -429,12 +436,14 @@ def preview_email(tier: str, overrides: dict = None) -> dict:
 
 
 def send_test_email(to_email: str, tier: str, overrides: dict = None, kind: str = "welcome") -> tuple:
-    """Send the sample email ("welcome" or "reminder") to one address (no
+    """Send the sample email ("welcome", "reminder" or "extended") to one address (no
     attachments). Returns (ok, message for the creator)."""
     if not BREVO_API_KEY:
         return False, ("Email isn't set up on this server yet, so nothing can be sent. "
                        "Set BREVO_API_KEY and GMAIL_ADDRESS (see SETUP.md), then try again.")
-    msg = preview_reminder(tier, overrides) if kind == "reminder" else preview_email(tier, overrides)
+    msg = (preview_reminder(tier, overrides) if kind == "reminder"
+           else preview_extended(tier, overrides) if kind == "extended"
+           else preview_email(tier, overrides))
     ok, detail = _post_to_brevo({
         "sender": {"name": FROM_NAME, "email": FROM_EMAIL},
         "to": [{"email": to_email}],
@@ -449,7 +458,7 @@ def send_test_email(to_email: str, tier: str, overrides: dict = None, kind: str 
 
 
 # ── Renewal emails: "access extended" and "expiry reminder" ──
-def _shell(heading: str, intro: str, rows, link: str, link_label: str, extra_html: str = "") -> str:
+def _shell(heading: str, intro: str, rows, link: str, link_label: str, extra_html: str = "", footer_note: str = "") -> str:
     """The shared look of the two short emails below. `rows` is a list of
     (label, value) pairs; everything is escaped here."""
     acc = _esc(ACCENT_COLOR, quote=True)
@@ -484,6 +493,7 @@ def _shell(heading: str, intro: str, rows, link: str, link_label: str, extra_htm
   {extra_html}
   <div style="font-size:9px;color:#6b6058;letter-spacing:1px;word-break:break-all;margin-top:8px;">{_esc(link)}</div>
   <hr class="line">
+  {('<div style="font-size:11px;line-height:1.6;color:#8a8176;margin-top:4px;">' + _esc(footer_note) + '</div>') if footer_note else ""}
   <div class="footer">{_esc(CARD_TITLE)}</div>
 </div></body></html>"""
 
@@ -509,17 +519,26 @@ def safe_renew_url(url) -> str:
 
 
 def build_extended_email(to_name, tier, credential_id, bundle_hash, expires_at,
-                         days_added=None, link_base=None) -> dict:
-    """The note a member gets when the creator extends their card. Fixed
-    wording (it just states what happened). The access link is the same one
-    they already have, so the email repeats it."""
+                         days_added=None, link_base=None, overrides: dict = None) -> dict:
+    """The note a member gets when the creator extends their card. Subject and
+    text are editable in the dashboard (`overrides` lets the preview use wording
+    that is not saved yet). The access link is the same one they already have,
+    so the email repeats it."""
     _refresh_branding()
+    cfg = _load_config()
+    ov = overrides or {}
+
+    def pick(key):
+        return ov[key] if key in ov else cfg.get(key, "")
+
+    subject_t = (str(pick("extended_subject") or "").strip() or DEFAULT_EXTENDED_SUBJECT)[:MAX_EXTENDED_SUBJECT]
+    text_t    = (str(pick("extended_text") or "").strip() or DEFAULT_EXTENDED_TEXT)[:MAX_EXTENDED_TEXT]
     expires = (expires_at or "")[:10]
+    values = {"name": to_name, "tier": tier, "creator": CREATOR_NAME, "brand": CARD_TITLE,
+              "expires": expires, "days": _plural_days(days_added) if days_added else "some days"}
     link = _personal_link(credential_id, bundle_hash, link_base)
-    added = f" by {_plural_days(days_added)}" if days_added else ""
-    intro = (f"{to_name} — your {tier} access has been extended{added}.\n"
-             f"It now runs until {expires}. Your access link has not changed.")
-    subject = re.sub(r"[\r\n]+", " ", f"Your access has been extended until {expires}").strip()
+    intro = _fill(text_t, values)
+    subject = re.sub(r"[\r\n]+", " ", _fill(subject_t, values)).strip()
     html_body = _shell("Access extended", intro,
                        [("MEMBER", to_name.upper()), ("ACCESS CLASS", tier), ("VALID UNTIL", expires)],
                        link, "◈ Open member area")
@@ -563,6 +582,68 @@ def build_reminder_email(to_name, tier, credential_id, bundle_hash, expires_at, 
     return {"subject": subject, "html": html_body, "text": text, "link": link}
 
 
+# ── Announcements ──
+MAX_ANNOUNCE_SUBJECT = 150
+
+
+def build_announcement_email(to_name, tier, credential_id, bundle_hash, title, text, link="",
+                             link_base=None) -> dict:
+    """An announcement from the creator (see announcements.py). Plain wording
+    they typed, the member's own access link, an optional extra button for the
+    link they added, and a line saying why they are getting it."""
+    _refresh_branding()
+    title = str(title or "").strip()[:150]
+    text = str(text or "").strip()
+    personal = _personal_link(credential_id, bundle_hash, link_base)
+    subject = re.sub(r"[\r\n]+", " ", title or f"News from {CREATOR_NAME}").strip()[:MAX_ANNOUNCE_SUBJECT]
+    extra_link = safe_renew_url(link)
+    extra = (f'<a href="{_esc(extra_link, quote=True)}" class="btn" style="background:transparent;'
+             f'border:1px solid {_esc(ACCENT_COLOR, quote=True)};color:{_esc(ACCENT_COLOR, quote=True)};">'
+             f'Open the link</a>') if extra_link else ""
+    why = f"You get this because you hold a {tier} card from {CREATOR_NAME}."
+    html_body = _shell(title or "News", text, [], personal, "◈ Open member area",
+                       extra_html=extra, footer_note=why)
+    extra_text = f"\nLink: {extra_link}\n" if extra_link else ""
+    plain = (f"{CREATOR_NAME.upper()} — {CARD_TITLE.upper()}\n\n"
+             f"{title + chr(10) + chr(10) if title else ''}{text}\n{extra_text}\n"
+             f"Your access link:\n{personal}\n\n{why}\n{CARD_TITLE}\n")
+    return {"subject": subject, "html": html_body, "text": plain, "link": personal}
+
+
+def send_announcement_email(to_name, to_email, tier, credential_id, bundle_hash, title, text, link="") -> tuple:
+    """Returns (ok, detail)."""
+    if not BREVO_API_KEY:
+        return False, "Email isn't set up on this server."
+    msg = build_announcement_email(to_name, tier, credential_id, bundle_hash, title, text, link)
+    return _send_simple(to_name, to_email, msg)
+
+
+def preview_announcement(title, text, link="", tier="MEMBER") -> dict:
+    """The announcement for a made-up member (nothing is sent)."""
+    _refresh_branding()
+    return build_announcement_email(_SAMPLE["to_name"], tier or "MEMBER", _SAMPLE["credential_id"],
+                                    _SAMPLE["bundle_hash"], title, text, link,
+                                    link_base=MEMBERS_PAGE or "https://your-site.example/members")
+
+
+def send_test_announcement(to_email, title, text, link="", tier="MEMBER") -> tuple:
+    """Send the sample announcement to one address. Returns (ok, message)."""
+    if not BREVO_API_KEY:
+        return False, ("Email isn't set up on this server yet, so nothing can be sent. "
+                       "Set BREVO_API_KEY and GMAIL_ADDRESS (see SETUP.md), then try again.")
+    msg = preview_announcement(title, text, link, tier)
+    ok, detail = _post_to_brevo({
+        "sender": {"name": FROM_NAME, "email": FROM_EMAIL},
+        "to": [{"email": to_email}],
+        "subject": "[TEST] " + msg["subject"],
+        "htmlContent": msg["html"],
+        "textContent": msg["text"],
+    })
+    if ok:
+        return True, f"Test email sent to {to_email}. Check the inbox (and spam)."
+    return False, f"The email service refused it: {detail}"
+
+
 def _send_simple(to_name, to_email, msg) -> tuple:
     return _post_to_brevo({
         "sender": {"name": FROM_NAME, "email": FROM_EMAIL},
@@ -590,6 +671,15 @@ def send_reminder_email(to_name, to_email, tier, credential_id, bundle_hash, exp
     ok, detail = _send_simple(to_name, to_email, msg)
     print(f"{'✔ Reminder sent to' if ok else '❌ Reminder failed for'} {to_email}" + ("" if ok else f": {detail}"))
     return ok
+
+
+def preview_extended(tier: str, overrides: dict = None) -> dict:
+    """The "access extended" email for a made-up member (nothing is sent)."""
+    _refresh_branding()
+    d = dict(_SAMPLE)
+    d["expires_at"] = "2099-12-31T00:00:00+00:00"
+    return build_extended_email(tier=tier or "MEMBER", days_added=30, overrides=overrides,
+                                link_base=MEMBERS_PAGE or "https://your-site.example/members", **d)
 
 
 def preview_reminder(tier: str, overrides: dict = None) -> dict:

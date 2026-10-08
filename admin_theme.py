@@ -250,6 +250,7 @@ _ICONS = {
     "home": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 11.5 12 4l9 7.5"/><path d="M5.5 10v9.5h13V10"/><path d="M10 19.5v-5h4v5"/></svg>',
     "members": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.6-3.6 3.2-5.5 6.5-5.5s5.9 1.9 6.5 5.5"/><path d="M16 4.7a3.5 3.5 0 0 1 0 6.6"/><path d="M18 14.8c2 .6 3.2 2.3 3.5 5.2"/></svg>',
     "content": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 7.5a2 2 0 0 1 2-2h4l2 2.5h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z"/></svg>',
+    "announce": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 10.5v3a1 1 0 0 0 1 1H8l6 4.5v-14L8 9.5H4.5a1 1 0 0 0-1 1z"/><path d="M17.5 9a4.5 4.5 0 0 1 0 6"/></svg>',
     "settings": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>',
 }
 
@@ -432,6 +433,7 @@ _SHELL_JS = r"""
   sideItems.home = link('/admin/dashboard#/home', 'home', 'Home'); side.appendChild(sideItems.home);
   sideItems.members = link('/admin/members', 'members', 'Members'); side.appendChild(sideItems.members);
   sideItems.content = link('/admin/content', 'content', 'Content'); side.appendChild(sideItems.content);
+  sideItems.announce = link('/admin/announce', 'announce', 'Announce'); side.appendChild(sideItems.announce);
   side.appendChild(el('div', { class: 'app-grp', text: 'Settings' }));
   SETTINGS.forEach(function (s) { sideItems[s[0]] = link('/admin/dashboard#/s/' + s[0], null, s[1], 'sub'); side.appendChild(sideItems[s[0]]); });
   side.appendChild(el('div', { class: 'sp' }));
@@ -441,13 +443,15 @@ _SHELL_JS = r"""
   var tabs = el('nav', { class: 'app-tabs', 'aria-label': 'Main' });
   var tabItems = {};
   [['home', 'home', 'Home', '/admin/dashboard#/home'], ['members', 'members', 'Members', '/admin/members'],
-   ['content', 'content', 'Content', '/admin/content'], ['settings', 'settings', 'Settings', '/admin/dashboard#/settings']].forEach(function (t) {
+   ['content', 'content', 'Content', '/admin/content'], ['announce', 'announce', 'Announce', '/admin/announce'],
+   ['settings', 'settings', 'Settings', '/admin/dashboard#/settings']].forEach(function (t) {
     tabItems[t[0]] = link(t[3], t[1], t[2]); tabs.appendChild(tabItems[t[0]]);
   });
   body.appendChild(tabs);
 
   if (page === 'members') { sideItems.members.className += ' on'; tabItems.members.className += ' on'; }
   if (page === 'content') { sideItems.content.className += ' on'; tabItems.content.className += ' on'; }
+  if (page === 'announce') { sideItems.announce.className += ' on'; tabItems.announce.className += ' on'; }
   body.className += ' app-ready';
   if (page !== 'dashboard' || !secs.length) return;
 

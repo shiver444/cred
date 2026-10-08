@@ -86,16 +86,21 @@ def issue_credential(
     tier: str,
     expiry_days: int = 31,
     sections: list = None,
-    metadata: dict = None
+    metadata: dict = None,
+    expires_at_override: datetime = None,
 ) -> dict:
     """
     Issue a signed credential for a member.
 
     Returns a dict with all credential data including the signed manifest.
+
+    `expires_at_override` (a timezone-aware datetime) sets the exact moment the
+    credential stops working, instead of now + `expiry_days` (an event ticket
+    ends when its event does).
     """
 
     now        = datetime.now(timezone.utc)
-    expiry     = now + timedelta(days=expiry_days)
+    expiry     = expires_at_override if expires_at_override is not None else now + timedelta(days=expiry_days)
     issued_at  = now.isoformat()
     expires_at = expiry.isoformat()
 

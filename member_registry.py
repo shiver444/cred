@@ -77,6 +77,9 @@ def _add_credential_locked(entry: dict):
         # credential_api.py's Stripe webhook) — {stripe_session_id,
         # amount_paid, currency}. None for free-tier/manual issuance.
         "payment":          entry.get("payment"),
+        # "ticket" (with the event's details) for an event ticket; absent for
+        # an ordinary access pass. `used_at` is set by mark_used().
+        **({"kind": entry["kind"], "event": entry.get("event") or {}} if entry.get("kind") == "ticket" else {}),
         "revoked":          False,
         "revoked_at":       None,
         "verified_count":   0,
@@ -156,6 +159,33 @@ def _revoke_locked(credential_id: str) -> bool:
             _save(registry)
             print(f"✔ Revoked: {credential_id}")
             return True
+    return False
+
+
+def mark_used(credential_id: str, now=None) -> str | None:
+    """Mark an event ticket as used (let in at the door). Returns the time it
+    was used, or None if there is no such credential. A ticket already used
+    keeps its first time."""
+    with _lock:
+        registry = _load()
+        for entry in registry:
+            if entry["credential_id"] == credential_id:
+                if not entry.get("used_at"):
+                    entry["used_at"] = (now or datetime.now(timezone.utc)).isoformat()
+                    _save(registry)
+                return entry["used_at"]
+    return None
+
+
+def unmark_used(credential_id: str) -> bool:
+    """Undo a mistaken check-in."""
+    with _lock:
+        registry = _load()
+        for entry in registry:
+            if entry["credential_id"] == credential_id:
+                entry.pop("used_at", None)
+                _save(registry)
+                return True
     return False
 
 

@@ -118,7 +118,7 @@ _TEMPLATE = r"""<!DOCTYPE html>
   .upmsg.err { color:var(--bad); }
 __THEME__</style></head>
 <body __BODY_ATTRS__>
-  <div class="nav"><a href="/admin/dashboard">← Dashboard</a><a href="/admin/members">Members →</a><a href="/admin/logout">Log out</a></div>
+  <div class="nav"><a href="/admin/dashboard">← Dashboard</a><a href="/admin/members">Members →</a><a href="/admin/announce">Announce →</a><a href="/admin/logout">Log out</a></div>
   <h1>__TITLE__ — Content</h1>
   <details class="chelp" open><summary>How this page works</summary>
   <div class="hint">This is what members see after they verify. Each <b>section</b> has a short name (like <b>downloads</b>). A tier unlocks the sections listed in its "Sections" field on the Dashboard. Press <b>Save content</b> when you're done.</div>
