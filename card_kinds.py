@@ -36,6 +36,9 @@ NEVER = datetime(2100, 1, 1, tzinfo=timezone.utc)
 MAX_NAME = 80
 MAX_PLACE = 80
 MAX_NOTE = 60
+MAX_BOTTOM = 40         # the small line at the bottom of a ticket / collectible
+DEFAULT_TICKET_BOTTOM = "Show this at the door"
+DEFAULT_DROP_BOTTOM = "Limited edition"
 DEFAULT_HOURS = 12      # a ticket with no end time works for this long after the start
 
 _CTRL = re.compile(r"[\x00-\x1f\x7f]")
@@ -83,14 +86,21 @@ def _tz(value) -> int:
     return n if -900 <= n <= 900 else 0
 
 
-def clean_event(name="", starts_at="", ends_at="", place="", note="", tz=0) -> dict:
+def _flag(value) -> bool:
+    return str(value).strip().lower() in ("1", "true", "yes", "on")
+
+
+def clean_event(name="", starts_at="", ends_at="", place="", note="", tz=0, bottom="", show_price=False) -> dict:
     """The event details of a ticket tier, cleaned for saving. An end that is
-    not after the start is dropped."""
+    not after the start is dropped. `bottom` is the small line at the bottom of
+    the ticket (blank = "Show this at the door"); `show_price` puts the ticket's
+    price on the card."""
     start, end = _local(starts_at), _local(ends_at)
     if start and end and end <= start:
         end = ""
     return {"name": _text(name, MAX_NAME), "starts_at": start, "ends_at": end,
-            "place": _text(place, MAX_PLACE), "note": _text(note, MAX_NOTE), "tz": _tz(tz)}
+            "place": _text(place, MAX_PLACE), "note": _text(note, MAX_NOTE), "tz": _tz(tz),
+            "bottom": _text(bottom, MAX_BOTTOM), "show_price": _flag(show_price)}
 
 
 def event_of(tier) -> dict:
@@ -98,7 +108,7 @@ def event_of(tier) -> dict:
     e = tier.get("event") if isinstance(tier, dict) else None
     e = e if isinstance(e, dict) else {}
     return clean_event(e.get("name"), e.get("starts_at"), e.get("ends_at"),
-                       e.get("place"), e.get("note"), e.get("tz"))
+                       e.get("place"), e.get("note"), e.get("tz"), e.get("bottom"), e.get("show_price"))
 
 
 def _parse(local: str):
@@ -152,18 +162,24 @@ def public_event(tier) -> dict:
             "over": is_over(e)}
 
 
-def card_event(tier) -> dict:
-    """The event details as stored on an issued ticket and shown on its card."""
+def card_event(tier, price_text="") -> dict:
+    """The event details as stored on an issued ticket and shown on its card.
+    `price_text` (like "20.00 USD") is only kept when the creator ticked
+    "show the price on the ticket"."""
     e = event_of(tier)
-    return {"name": e["name"], "starts_at": e["starts_at"], "ends_at": e["ends_at"],
-            "place": e["place"], "note": e["note"], "tz": e["tz"], "when": when_text(e)}
+    out = {"name": e["name"], "starts_at": e["starts_at"], "ends_at": e["ends_at"],
+           "place": e["place"], "note": e["note"], "tz": e["tz"], "when": when_text(e),
+           "bottom": e["bottom"] or DEFAULT_TICKET_BOTTOM}
+    if e["show_price"] and price_text:
+        out["price"] = _text(price_text, 30)
+    return out
 
 
 def sample_event() -> dict:
     """Made-up details for previews."""
     return {"name": "Live Show", "starts_at": "2026-12-12T20:00", "ends_at": "2026-12-12T23:00",
             "place": "The Venue, Your City", "note": "Row B, seat 12", "tz": 0,
-            "when": "Sat 12 Dec 2026, 20:00-23:00"}
+            "when": "Sat 12 Dec 2026, 20:00-23:00", "bottom": DEFAULT_TICKET_BOTTOM, "price": "20.00 USD"}
 
 
 # ── Collectibles (limited-edition drops) ──
@@ -171,21 +187,21 @@ def sample_event() -> dict:
 # size is the tier's max_members; the edition number a card gets is stored with
 # the card. Times are typed local times plus `tz`, exactly as for events.
 
-def clean_drop(name="", opens_at="", closes_at="", note="", tz=0) -> dict:
+def clean_drop(name="", opens_at="", closes_at="", note="", tz=0, bottom="") -> dict:
     """The drop details of a collectible tier, cleaned for saving. A closing time
     that is not after the opening time is dropped."""
     opens, closes = _local(opens_at), _local(closes_at)
     if opens and closes and closes <= opens:
         closes = ""
     return {"name": _text(name, MAX_NAME), "opens_at": opens, "closes_at": closes,
-            "note": _text(note, MAX_NOTE), "tz": _tz(tz)}
+            "note": _text(note, MAX_NOTE), "tz": _tz(tz), "bottom": _text(bottom, MAX_BOTTOM)}
 
 
 def drop_of(tier) -> dict:
     """A tier's drop details, always a complete dict."""
     d = tier.get("drop") if isinstance(tier, dict) else None
     d = d if isinstance(d, dict) else {}
-    return clean_drop(d.get("name"), d.get("opens_at"), d.get("closes_at"), d.get("note"), d.get("tz"))
+    return clean_drop(d.get("name"), d.get("opens_at"), d.get("closes_at"), d.get("note"), d.get("tz"), d.get("bottom"))
 
 
 def drop_state(drop, now=None) -> str:
@@ -215,9 +231,9 @@ def card_drop(tier, edition: int, of=None) -> dict:
     """The drop details as stored on an issued collectible and shown on its card."""
     d = drop_of(tier)
     return {"name": d["name"], "note": d["note"], "edition": int(edition),
-            "of": int(of) if of else 0}
+            "of": int(of) if of else 0, "bottom": d["bottom"] or DEFAULT_DROP_BOTTOM}
 
 
 def sample_drop() -> dict:
     """Made-up details for previews."""
-    return {"name": "Midnight Photo Set", "note": "Signed digital print", "edition": 37, "of": 100}
+    return {"name": "Midnight Photo Set", "note": "Signed digital print", "edition": 37, "of": 100, "bottom": DEFAULT_DROP_BOTTOM}

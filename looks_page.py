@@ -81,6 +81,8 @@ _SECTION = """
           </div>
           <label for="lk-qr">QR code</label>
           <select id="lk-qr"></select>
+          <label for="lk-layout">Layout</label>
+          <select id="lk-layout"></select>
           <label for="lk-barcode">Barcode strip</label>
           <select id="lk-barcode"><option value="on">On</option><option value="off">Off</option></select>
           <label>Logo</label>
@@ -106,7 +108,7 @@ _SECTION = """
             <option value="ticket">Show as an event ticket</option>
             <option value="collectible">Show as a collectible</option>
           </select>
-          <iframe id="lk-frame" sandbox="" title="Card preview"></iframe>
+          <iframe id="lk-frame" sandbox="allow-scripts" title="Card preview"></iframe>
         </div>
         <div class="lk-actions">
           <button type="button" class="lk-primary" id="lk-save">Save look</button>
@@ -271,13 +273,15 @@ _JS = r"""
 
   // ── the editor ──
   var fName = $('lk-name'), fTitle = $('lk-title'), fLabel = $('lk-label'), fStyle = $('lk-style'), fAccent = $('lk-accent'), fSame = $('lk-accent-same'),
-      fBar = $('lk-barcode'), fQr = $('lk-qr'), fLogo = $('lk-logo'), fBg = $('lk-bg'), fDim = $('lk-dim'), frame = $('lk-frame');
+      fBar = $('lk-barcode'), fQr = $('lk-qr'), fLayout = $('lk-layout'), fLogo = $('lk-logo'), fBg = $('lk-bg'), fDim = $('lk-dim'), frame = $('lk-frame');
   (function () {
     var o = document.createElement('option'); o.value = ''; o.textContent = 'Same as the default look'; fStyle.appendChild(o);
     D.styles.forEach(function (s) { var x = document.createElement('option'); x.value = s[0]; x.textContent = s[1]; fStyle.appendChild(x); });
     D.dims.forEach(function (s) { var x = document.createElement('option'); x.value = s[0]; x.textContent = s[1]; fDim.appendChild(x); });
     var q0 = document.createElement('option'); q0.value = ''; q0.textContent = 'Same as the default look'; fQr.appendChild(q0);
     D.qr.forEach(function (s) { var x = document.createElement('option'); x.value = s[0]; x.textContent = s[1]; fQr.appendChild(x); });
+    var l0 = document.createElement('option'); l0.value = ''; l0.textContent = 'Same as the default look'; fLayout.appendChild(l0);
+    D.layouts.forEach(function (s) { var x = document.createElement('option'); x.value = s[0]; x.textContent = s[1]; fLayout.appendChild(x); });
     fTitle.placeholder = 'same as the default look (' + D.default.title + ')';
     fLabel.placeholder = 'same as the default look (' + D.default.label + ')';
   })();
@@ -294,21 +298,32 @@ _JS = r"""
     if (cur) fd.append('id', cur.id);
     fd.append('name', fName.value); fd.append('card_title', fTitle.value); fd.append('card_label', fLabel.value);
     fd.append('card_style', fStyle.value); fd.append('accent_color', fAccent.value); fd.append('accent_same', fSame.checked ? '1' : '0');
-    fd.append('preview_kind', $('lk-prev-kind').value); fd.append('barcode', fBar.value); fd.append('qr_style', fQr.value); fd.append('bg_dim', fDim.value);
+    fd.append('preview_kind', $('lk-prev-kind').value); fd.append('barcode', fBar.value); fd.append('qr_style', fQr.value); fd.append('layout', fLayout.value); fd.append('bg_dim', fDim.value);
     fd.append('logo_clear', logoCleared ? '1' : '0'); fd.append('bg_clear', bgCleared ? '1' : '0');
     if (fLogo.files[0]) fd.append('logo', fLogo.files[0]);
     if (fBg.files[0]) fd.append('bg', fBg.files[0]);
     return fd;
   }
+  var lastSig = '';
+  function sigOf(fd) {
+    var out = [];
+    fd.forEach(function (v, k) { out.push(k + '=' + (typeof v === 'string' ? v : 'file:' + v.name + ':' + v.size + ':' + v.lastModified)); });
+    return out.join('&');
+  }
   function preview() {
+    // Nothing actually changed (e.g. a field was only clicked out of): leave the preview alone,
+    // so a card the person has just turned over stays turned over.
+    var fdata = formData(), sig = sigOf(fdata);
+    if (sig === lastSig && frame.srcdoc) return;
+    lastSig = sig;
     var mine = ++seq;
-    fetch('/admin/looks/preview', { method: 'POST', body: formData(), credentials: 'same-origin' })
+    fetch('/admin/looks/preview', { method: 'POST', body: fdata, credentials: 'same-origin' })
       .then(function (r) { return r.text().then(function (h) { return { ok: r.ok, h: h }; }); })
       .then(function (x) { if (mine === seq) frame.srcdoc = x.h; })
       .catch(function () { if (mine === seq) frame.srcdoc = '<p style="font-family:sans-serif;color:#b00">Preview failed.</p>'; });
   }
   function later() { clearTimeout(timer); timer = setTimeout(preview, 700); }
-  [fName, fTitle, fLabel, fStyle, fAccent, fSame, fBar, fQr, fDim].forEach(function (f) { f.addEventListener('input', later); f.addEventListener('change', later); });
+  [fName, fTitle, fLabel, fStyle, fAccent, fSame, fBar, fQr, fLayout, fDim].forEach(function (f) { f.addEventListener('input', later); f.addEventListener('change', later); });
   $('lk-prev-kind').addEventListener('change', later);
   fSame.addEventListener('change', states);
   fLogo.addEventListener('change', function () { if (fLogo.files[0]) logoCleared = false; states(); later(); });
@@ -320,7 +335,7 @@ _JS = r"""
     cur = l || null; logoCleared = false; bgCleared = false; fLogo.value = ''; fBg.value = '';
     $('look-title').textContent = l ? 'Edit look' : 'New look';
     fName.value = l ? l.name : ''; fTitle.value = l ? l.card_title : ''; fLabel.value = l ? l.card_label : '';
-    fStyle.value = l ? l.card_style : ''; fQr.value = l ? l.qr_style : ''; fBar.value = (l && !l.show_barcode) ? 'off' : 'on'; fDim.value = l ? l.bg_dim : 'medium';
+    fStyle.value = l ? l.card_style : ''; fQr.value = l ? l.qr_style : ''; fLayout.value = l ? l.layout : ''; fBar.value = (l && !l.show_barcode) ? 'off' : 'on'; fDim.value = l ? l.bg_dim : 'medium';
     fSame.checked = !l || !l.accent_color; fAccent.value = (l && l.accent_color) || D.default.accent;
     esay(''); states();
     listView.style.display = 'none'; editor.style.display = '';
@@ -362,6 +377,7 @@ def section_html(cfg: dict) -> str:
         "styles": [[s, card_looks.STYLE_NAMES[s]] for s in card_looks.STYLES],
         "dims": [[d, card_looks.DIM_NAMES[d]] for d in card_looks.DIMS],
         "qr": [[q, card_looks.QR_NAMES[q]] for q in card_looks.QR_STYLES],
+        "layouts": [[l, card_looks.LAYOUT_NAMES[l]] for l in card_looks.LAYOUTS],
         "default": {
             "accent": card_looks.clean_color(cfg.get("accent_color")) or "#00e87a",
             "title": cfg.get("card_title", ""),

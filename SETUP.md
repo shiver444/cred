@@ -86,8 +86,13 @@ kind it is (you can also change the **Kind of card** later):
   single, a one-day-only release). See "Collectibles" below.
 
 A ticket card shows the event, the time, the place and the note in place of the
-plain "access class" row, says "Event Ticket" under the title and "Admit one" at
-the bottom, and has no barcode strip. Its look (style, colors, background
+plain "access class" row, says "Event Ticket" under the title and a small line
+at the bottom, and has no barcode strip. That bottom line is yours to write
+(**Line at the bottom of the ticket**, up to 40 characters; left empty it says
+"Show this at the door", e.g. "Doors 19:00" or "Bring ID"). Tick **Show the
+price on the ticket** (off by default) to add a PRICE row; free tickets never
+show one. Limited drops have the same kind of bottom line (default "Limited
+edition"). Its look (style, colors, background
 picture) is chosen the same way as for any other tier; in the Card looks editor
 use **Show as an event ticket** above the preview to see a look as a ticket.
 
@@ -820,6 +825,13 @@ What you can set in a look:
   personal link, and a hidden code is still inside the card file, so dropping
   the card file into the widget keeps working. Set it for the Default look under
   Branding, and per look in the editor ("Same as the default look" by default).
+- **Layout:** *Classic* (the details sit on top of the picture) or *Art front*:
+  the card first shows just your picture, clean, with a small label in the
+  corner (the event or drop name, or your brand), and a tap turns it over to
+  the details and QR code. It works for memberships, tickets and collectibles.
+  Printing a card always prints the details side. Set it for everything under
+  Branding (**Card layout**) and per look in the editor ("Same as the default
+  look" by default).
 - **Show barcode:** on or off.
 - **Preview:** both the Branding and the Card looks screens show the result
   using what's currently on screen, before you save.

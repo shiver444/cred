@@ -107,6 +107,7 @@ def generate_card(
     background_data_uri: str = None,
     background_dim: str = DEFAULT_DIM,
     qr_style: str = "solid",
+    layout: str = "classic",
     kind: str = "pass",
     event: dict = None,
     drop: dict = None,
@@ -151,14 +152,19 @@ def generate_card(
 
     `kind` is "pass" (the membership card) or "ticket". A ticket shows the
     event's details (`event`: name, when, place, note) in place of the plain
-    "access class" row, reads "Event Ticket" under the title and "Admit one"
-    at the bottom, and leaves out the barcode line to make room. The look
+    "access class" row, reads "Event Ticket" under the title and the creator's own line
+    ("Show this at the door" unless they wrote another) at the bottom, and leaves out the barcode line to make room. The look
     (style, colors, picture) is chosen separately, exactly as for a pass.
 
     `kind="collectible"` is a numbered limited-edition card: `drop` carries
     {name, note, edition, of}. It reads "Collectible" under the title, shows
     the drop name and "#37 of 100", never an expiry date, and says "Limited
     edition" at the bottom. Same compact layout as a ticket.
+
+    `layout` is "classic" (text over the picture) or "art": the front shows just
+    the picture with a small name label, and a tap flips the card over to the
+    details and the QR code (the classic card is the back). Printing always
+    prints the back, so the QR is on paper.
 
     `show_barcode` and `logo_data_uri` exist so a specific tier/pass type
     can override the deployment's global look (see the per-tier "design"
@@ -234,7 +240,12 @@ def generate_card(
     qr_style = qr_style if qr_style in QR_STYLES else "solid"
     card_classes = ("card" + (f" card--{card_style}" if card_style != "distressed" else "") + (" card--has-bg" if has_bg else "")
                     + (" card--is-ticket" if (is_ticket or is_coll) else "")
-                    + ("" if qr_style == "solid" else f" card--qr-{qr_style}"))
+                    + ("" if qr_style == "solid" else f" card--qr-{qr_style}")
+                    + (" card--art" if layout == "art" else ""))
+
+    bottom_text = _esc((((event.get("bottom") or "Show this at the door") if is_ticket
+                         else (drop.get("bottom") or "Limited edition") if is_coll
+                         else "Authorized access")).upper())
 
     if is_ticket:
         def _row(label, value, cls=""):
@@ -244,7 +255,8 @@ def generate_card(
         if event.get("when"):  rows.append(_row("WHEN", event["when"]))
         if event.get("place"): rows.append(_row("WHERE", event["place"]))
         if event.get("note"):  rows.append(_row("NOTE", event["note"]))
-        rows.append(_row("ADMIT", tier))
+        if event.get("price"): rows.append(_row("PRICE", event["price"]))
+        rows.append(_row("TICKET", tier))
         if holder_name:        rows.append(_row("NAME", holder_name))
         rows.append(f'      <div><b>ID</b> // <span>{formatted_id}</span></div>')
         meta_rows = "\n".join(rows)
@@ -263,6 +275,49 @@ def generate_card(
     else:
         meta_rows = (f'      <div><b>ACCESS CLASS</b> // <span>{e_tier}</span></div>\n'
                      f'      <div><b>ID</b> // <span>{formatted_id}</span></div>')
+
+    if layout == "art":
+        if is_ticket:
+            front_name = event.get("name") or card_title
+            front_sub = event.get("when") or ""
+        elif is_coll:
+            front_name = drop.get("name") or card_title
+            n, of = drop.get("edition"), drop.get("of")
+            front_sub = (f"#{n} of {of}" if of else f"#{n}") if n else ""
+        else:
+            front_name = card_title
+            front_sub = tier
+        # with no picture the front is the card's own style with the logo (or the name) big in the middle
+        front_mid = "" if has_bg else (logo_html if logo_html else f'<div class="front-mid-title">{e_title}</div>')
+        front_html = f"""<div class="card-front" id="cp-front" role="button" tabindex="0" aria-label="Turn the card over">
+    {('<div class="front-mid">' + front_mid + '</div>') if front_mid else ''}
+    <div class="front-label"><b>{_esc(front_name)}</b>{('<span>' + _esc(front_sub) + '</span>') if front_sub else ''}</div>
+    <div class="flip-hint">&#8635; Tap to flip</div>
+  </div>
+  <button type="button" class="flip-back" id="cp-flipback" aria-label="Show the front of the card">&#8635;</button>"""
+        flip_script = """<script>
+(function () {
+  var c = document.querySelector('.card--art'); if (!c) return;
+  var front = document.getElementById('cp-front'), back = document.getElementById('cp-flipback'), busy = false;
+  function flip() {
+    if (busy) return; busy = true;
+    var still = window.matchMedia && matchMedia('(prefers-reduced-motion: reduce)').matches;
+    if (still) { c.classList.toggle('card--flipped'); busy = false; return; }
+    c.classList.add('card--turn-out');
+    setTimeout(function () {
+      c.classList.remove('card--turn-out'); c.classList.toggle('card--flipped'); c.classList.add('card--turn-in');
+      setTimeout(function () { c.classList.remove('card--turn-in'); busy = false; }, 230);
+    }, 200);
+  }
+  [front, back].forEach(function (n) {
+    n.addEventListener('click', flip);
+    n.addEventListener('keydown', function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); flip(); } });
+  });
+})();
+</script>"""
+    else:
+        front_html = ""
+        flip_script = ""
 
     html = f"""<!DOCTYPE html>
 <html lang="en">
@@ -557,12 +612,46 @@ def generate_card(
   .card--is-ticket .card-meta > div.ev-name {{ white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }}
   .card--is-ticket .card-hr {{ margin: 14px 0 10px; }}
 
+  /* ── Art front layout: clean picture first, tap to flip for the details and QR ── */
+  .card-front, .flip-back {{ display: none; }}
+  .card--art .card-front {{ display: flex; position: absolute; inset: 0; z-index: 5; border-radius: inherit; cursor: pointer;
+    flex-direction: column; justify-content: flex-end; align-items: stretch; -webkit-tap-highlight-color: transparent; }}
+  .card--art .card-front:focus-visible {{ outline: 2px solid {accent_color}; outline-offset: -4px; }}
+  .card--art .front-mid {{ position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; padding: 34px 28px; pointer-events: none; }}
+  .card--art .front-mid .card-logo {{ margin: 0; width: 70%; max-width: 260px; }}
+  .card--art .front-mid-title {{ font-family: 'Bebas Neue', sans-serif; font-size: 40px; letter-spacing: 0.04em; line-height: 1.1; color: #e6dfd2; text-align: center; }}
+  .card--minimal:not(.card--has-bg).card--art .front-mid-title {{ color: #1d1b18; }}
+  .card--art .front-label {{ position: relative; margin: 0 14px 14px; padding: 8px 12px; align-self: flex-start; max-width: 78%; border-radius: 10px;
+    background: rgba(0,0,0,0.5); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); color: #fff; line-height: 1.35; text-shadow: none; }}
+  .card--art .front-label b {{ display: block; font-family: 'Bebas Neue', sans-serif; font-weight: 400; font-size: 19px; letter-spacing: 0.05em; }}
+  .card--art .front-label span {{ display: block; font-size: 11px; letter-spacing: 0.06em; color: {accent_color}; filter: brightness(1.35); }}
+  .card--art .flip-hint {{ position: absolute; top: 12px; right: 12px; padding: 5px 10px; border-radius: 999px; font-size: 10px; letter-spacing: 0.08em;
+    text-transform: uppercase; color: #fff; background: rgba(0,0,0,0.45); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px); }}
+  .card--art .flip-back {{ display: block; position: absolute; top: 12px; right: 12px; z-index: 6; width: 34px; height: 34px; border-radius: 50%; border: 0;
+    cursor: pointer; font-size: 17px; line-height: 34px; text-align: center; color: #fff; background: rgba(0,0,0,0.5); }}
+  .card--art:not(.card--flipped) .flip-back {{ display: none; }}
+  .card--art.card--flipped .card-front {{ display: none; }}
+  /* front showing: hide the details (and so the QR link) and the darkening layer, so the picture is clean */
+  .card--art:not(.card--flipped) .card-content {{ visibility: hidden; }}
+  .card--art:not(.card--flipped) .card-scrim {{ display: none; }}
+  .card--turn-out {{ animation: cardTurnOut 0.2s ease-in forwards; }}
+  .card--turn-in {{ animation: cardTurnIn 0.23s ease-out; }}
+  @keyframes cardTurnOut {{ to {{ transform: perspective(900px) rotateY(90deg); }} }}
+  @keyframes cardTurnIn {{ from {{ transform: perspective(900px) rotateY(-90deg); }} to {{ transform: none; }} }}
+  /* paper always gets the back, where the QR is */
+  @media print {{
+    .card--art .card-front, .card--art .flip-back {{ display: none !important; }}
+    .card--art .card-content {{ visibility: visible !important; }}
+    .card--art .card-scrim {{ display: block !important; }}
+  }}
+
 </style>
 </head>
 <body>
 
 <div class="{card_classes}">
   {bg_html}
+  {front_html}
   <div class="card-vignette"></div>
   <div class="card-content">
     {logo_html}
@@ -578,7 +667,7 @@ def generate_card(
     <div class="card-bottom-row">
       <div class="card-brand-block">
         <div>{(e_issuer + " // ") if e_issuer else ""}{_esc(creator_name.upper())}</div>
-        <div class="dim">{"ADMIT ONE" if is_ticket else "LIMITED EDITION" if is_coll else "AUTHORIZED ACCESS"}</div>
+        <div class="dim">{bottom_text}</div>
       </div>
       <a class="card-qr-link" href="{e_link}" target="_blank" rel="noopener">
         <div class="card-qr-box">{qr_svg}</div>
@@ -592,7 +681,7 @@ def generate_card(
 <!-- Embedded credential — lets this card file itself be dropped onto
      the membership widget, same as the .zip bundle. Not rendered. -->
 <script type="application/json" id="cp-manifest">{card_manifest_json}</script>
-
+{flip_script}
 </body>
 </html>"""
 

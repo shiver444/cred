@@ -42,6 +42,12 @@ QR_NAMES    = {
     "blend": "Blended: see-through, melts into the picture",
     "off":   "Hidden: no QR code on the card",
 }
+LAYOUTS     = ("classic", "art")
+LAYOUT_NAMES = {
+    "classic": "Classic: text over the picture",
+    "art":     "Art front: clean picture, tap to flip for the details and QR",
+}
+DEFAULT_LAYOUT = "classic"
 DIMS        = ("none", "soft", "medium", "strong")
 DIM_NAMES   = {"none": "Not at all", "soft": "A little", "medium": "Some (recommended)", "strong": "A lot"}
 DEFAULT_DIM = "medium"
@@ -88,6 +94,7 @@ def clean_look(raw):
         "card_label":    " ".join(str(raw.get("card_label") or "").split())[:MAX_LABEL],
         "card_style":    style if style in STYLES else "",
         "qr_style":      raw.get("qr_style") if raw.get("qr_style") in QR_STYLES else "",
+        "layout":        raw.get("layout") if raw.get("layout") in LAYOUTS else "",
         "show_barcode":  raw.get("show_barcode", True) is not False,
         "logo_data_uri": raw.get("logo_data_uri") if is_logo_data_uri(raw.get("logo_data_uri")) else "",
         "bg_data_uri":   raw.get("bg_data_uri") if is_logo_data_uri(raw.get("bg_data_uri")) else "",
@@ -157,6 +164,7 @@ def summary(look, tiers) -> dict:
         "card_label":   look["card_label"],
         "card_style":   look["card_style"],
         "qr_style":     look["qr_style"],
+        "layout":       look["layout"],
         "show_barcode": look["show_barcode"],
         "has_logo":     bool(look["logo_data_uri"]),
         "has_bg":       bool(look["bg_data_uri"]),

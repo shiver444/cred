@@ -42,7 +42,7 @@ can revoke any of them at any time.
   adapts to your page's colors and font by itself; you can also set its colors,
   corners and wording in the dashboard.
 - An admin dashboard (five looks to choose from: Daylight, Studio, Midnight, the original
-  Spaceship, or Spaceship lite, which has the same look in app-style screens): branding, cards (memberships, event tickets, limited drops) with prices, saved card looks (seven styles, logos, background pictures) you pick per tier,
+  Spaceship, or Spaceship lite, which has the same look in app-style screens): branding, cards (memberships, event tickets, limited drops) with prices, saved card looks (seven styles, logos, background pictures, an optional clean "art front" that flips to the details) you pick per tier,
   payment settings, a member list with one-click revoke, and a "copy link"
   button that gives you any member's personal access link.
 - Cards and credentials signed with ECDSA, with a private key generated for

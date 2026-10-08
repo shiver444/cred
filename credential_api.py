@@ -410,6 +410,7 @@ def load_config() -> dict:
         "logo_data_uri": cfg.get("logo_data_uri", "") or "",
         "card_style":    cfg.get("card_style", "distressed") if cfg.get("card_style") in CARD_STYLES else "distressed",
         "qr_style":      cfg.get("qr_style") if cfg.get("qr_style") in card_looks.QR_STYLES else "solid",
+        "card_layout":   cfg.get("card_layout") if cfg.get("card_layout") in card_looks.LAYOUTS else card_looks.DEFAULT_LAYOUT,
         # The Default look's optional background picture, and the saved
         # "card looks" (card_looks.py) a tier can pick instead of the default.
         "bg_data_uri":   cfg.get("bg_data_uri") if logo_utils.is_logo_data_uri(cfg.get("bg_data_uri")) else "",
@@ -466,6 +467,7 @@ def resolve_look(cfg: dict, look: dict = None, legacy_design: dict = None) -> di
         "card_label":    d.get("card_label") or cfg.get("card_subtitle") or "",
         "card_style":    style,
         "qr_style":      d.get("qr_style") if d.get("qr_style") in card_looks.QR_STYLES else cfg.get("qr_style", "solid"),
+        "layout":        d.get("layout") if d.get("layout") in card_looks.LAYOUTS else cfg.get("card_layout", card_looks.DEFAULT_LAYOUT),
         "background_data_uri": bg or None,
         "background_dim":      dim if dim in card_looks.DIMS else card_looks.DEFAULT_DIM,
     }
@@ -580,7 +582,12 @@ def _issue_and_fulfill(name: str, email: str, tier: str, days: int, sections: li
             if ends_at is None:
                 raise SignupBlocked("event_not_ready", "This ticket isn't ready yet: the event has no date.")
             raise SignupBlocked("event_over", "This event has already happened.")
-        kind, event = "ticket", card_kinds.card_event(tier_cfg_t)
+        try:
+            _p = float(tier_cfg_t.get("price") or 0)
+        except (TypeError, ValueError):
+            _p = 0
+        _price_text = ("%.2f %s" % (_p, (cfg.get("currency") or "usd").upper())) if _p > 0 else ""
+        kind, event = "ticket", card_kinds.card_event(tier_cfg_t, _price_text)
         days = max(1, -(-int((ends_at - datetime.now(timezone.utc)).total_seconds()) // 86400))
 
     # Steps 1–4 run under the signup lock so a limit check (`check`, when the
@@ -636,6 +643,7 @@ def _issue_and_fulfill(name: str, email: str, tier: str, days: int, sections: li
             card_label    = design["card_label"],
             card_style    = design["card_style"],
             qr_style      = design["qr_style"],
+            layout        = design["layout"],
             background_data_uri = design["background_data_uri"],
             background_dim      = design["background_dim"],
             kind                = kind,
@@ -2137,6 +2145,9 @@ def admin_dashboard_save():
     ev_places        = request.form.getlist("tier_event_place")
     ev_notes         = request.form.getlist("tier_event_note")
     ev_tzs           = request.form.getlist("tier_event_tz")
+    ev_bottoms       = request.form.getlist("tier_event_bottom")
+    ev_prices        = request.form.getlist("tier_event_price")
+    dr_bottoms       = request.form.getlist("tier_drop_bottom")
     dr_names         = request.form.getlist("tier_drop_name")
     dr_opens         = request.form.getlist("tier_drop_opens")
     dr_closes        = request.form.getlist("tier_drop_closes")
@@ -2198,7 +2209,8 @@ def admin_dashboard_save():
             event = card_kinds.clean_event(
                 ev_names[i] if i < len(ev_names) else "", ev_starts[i] if i < len(ev_starts) else "",
                 ev_ends[i] if i < len(ev_ends) else "", ev_places[i] if i < len(ev_places) else "",
-                ev_notes[i] if i < len(ev_notes) else "", ev_tzs[i] if i < len(ev_tzs) else 0)
+                ev_notes[i] if i < len(ev_notes) else "", ev_tzs[i] if i < len(ev_tzs) else 0,
+                ev_bottoms[i] if i < len(ev_bottoms) else "", ev_prices[i] if i < len(ev_prices) else "0")
         else:
             kind = card_kinds.clean_kind(old_t.get("kind"))
             event = card_kinds.event_of(old_t)
@@ -2206,7 +2218,7 @@ def admin_dashboard_save():
             drop = card_kinds.clean_drop(
                 dr_names[i] if i < len(dr_names) else "", dr_opens[i] if i < len(dr_opens) else "",
                 dr_closes[i] if i < len(dr_closes) else "", dr_notes[i] if i < len(dr_notes) else "",
-                dr_tzs[i] if i < len(dr_tzs) else 0)
+                dr_tzs[i] if i < len(dr_tzs) else 0, dr_bottoms[i] if i < len(dr_bottoms) else "")
         else:
             drop = card_kinds.drop_of(old_t)
         if kind == "ticket" and not event["starts_at"]:
@@ -2245,6 +2257,9 @@ def admin_dashboard_save():
     qr_style = (request.form.get("qr_style") or "").strip()
     if qr_style not in card_looks.QR_STYLES:
         qr_style = load_config().get("qr_style", "solid")      # field absent: keep what was saved
+    card_layout = (request.form.get("card_layout") or "").strip()
+    if card_layout not in card_looks.LAYOUTS:
+        card_layout = load_config().get("card_layout", card_looks.DEFAULT_LAYOUT)
 
     # The Default look's background picture, same rules as the logo.
     old_global_bg = saved_cfg.get("bg_data_uri", "") or ""
@@ -2268,6 +2283,7 @@ def admin_dashboard_save():
         "bg_dim":        global_bg_dim,
         "card_style":    card_style,
         "qr_style":      qr_style,
+        "card_layout":   card_layout,
         "creator_name":  (request.form.get("creator_name") or "").strip() or "Your Creator Name",
         "card_title":     (request.form.get("card_title") or "").strip() or "YOUR BRAND HERE",
         "card_subtitle":  (request.form.get("card_subtitle") or "").strip() or "Member Card",
@@ -2580,6 +2596,17 @@ def _dashboard_page() -> str:
               <label>Note on the ticket (optional)</label>
               <input name="tier_event_note" maxlength="{card_kinds.MAX_NOTE}" value="{esc_html(e['note'])}" placeholder="Doors 19:00, standing">
             </div>
+            <div class="design-field">
+              <label>Line at the bottom of the ticket</label>
+              <input name="tier_event_bottom" maxlength="{card_kinds.MAX_BOTTOM}" value="{esc_html(e['bottom'])}" placeholder="{card_kinds.DEFAULT_TICKET_BOTTOM}">
+            </div>
+            <div class="design-field">
+              <label>Show the price on the ticket?</label>
+              <select name="tier_event_price">
+                <option value="0" {"" if e['show_price'] else "selected"}>No</option>
+                <option value="1" {"selected" if e['show_price'] else ""}>Yes, show what it cost</option>
+              </select>
+            </div>
             <input type="hidden" name="tier_event_tz" value="{esc_html(str(e['tz']))}">
             <div class="hint event-hint">The ticket stops working when the event ends. If you leave <b>Ends</b> empty, it works for {card_kinds.DEFAULT_HOURS} hours after it starts. Times are the ones you type here, in your own time zone. People check in at the door under <b>People → Check-in</b>.</div>
           </div>"""
@@ -2603,6 +2630,10 @@ def _dashboard_page() -> str:
             <div class="design-field wide">
               <label>Note on the card (optional)</label>
               <input name="tier_drop_note" maxlength="{card_kinds.MAX_NOTE}" value="{esc_html(d['note'])}" placeholder="Signed digital print">
+            </div>
+            <div class="design-field wide">
+              <label>Line at the bottom of the card (optional)</label>
+              <input name="tier_drop_bottom" maxlength="{card_kinds.MAX_BOTTOM}" value="{esc_html(d['bottom'])}" placeholder="{card_kinds.DEFAULT_DROP_BOTTOM}">
             </div>
             <input type="hidden" name="tier_drop_tz" value="{esc_html(str(d['tz']))}">
             <div class="hint event-hint">People can only claim it between <b>Opens</b> and <b>Closes</b> (leave them empty for no window, so it runs until it sells out). Set the <b>Edition size</b> above to how many copies exist; every card gets its own number, like #37 of 100. A drop never expires. Put the drop's links in <b>Content</b> and tick them for this card. Times are in your own time zone.</div>
@@ -2701,6 +2732,8 @@ def _dashboard_page() -> str:
                        else '<span class="no-logo" id="global-bg-state">none</span>')
     global_qr_options = "".join('<option value="%s"%s>%s</option>' % (q, " selected" if cfg.get("qr_style") == q else "", esc_html(card_looks.QR_NAMES[q]))
                                 for q in card_looks.QR_STYLES)
+    global_layout_options = "".join('<option value="%s"%s>%s</option>' % (l, " selected" if cfg.get("card_layout") == l else "", esc_html(card_looks.LAYOUT_NAMES[l]))
+                                    for l in card_looks.LAYOUTS)
     global_dim_options = "".join('<option value="%s"%s>%s</option>' % (d, " selected" if cfg.get("bg_dim") == d else "", esc_html(card_looks.DIM_NAMES[d]))
                                  for d in card_looks.DIMS)
     looks_section = looks_page.section_html(cfg)
@@ -2907,6 +2940,9 @@ def _dashboard_page() -> str:
     </select>
     <label>QR code on the card</label>
     <select name="qr_style">{global_qr_options}</select>
+    <label>Card layout</label>
+    <select name="card_layout">{global_layout_options}</select>
+    <div class="hint">With <b>Art front</b> the card first shows just your picture with a small name label. Tap it to flip it over for the details and the QR code. Works for memberships, tickets and collectibles.</div>
     <div class="hint">Blended keeps the QR code on the card but makes it blend into a background picture. Members can still use their link or drop the card file.</div>
     <label>Card logo (PNG, JPG, GIF or WEBP; shrunk automatically)</label>
     <div class="logo-row">
@@ -2925,7 +2961,7 @@ def _dashboard_page() -> str:
     <label>Darken the picture so the text is readable</label>
     <select name="global_bg_dim">{global_dim_options}</select>
     <button type="button" class="preview-btn" id="global-preview-btn" style="display:block;margin-top:12px;max-width:260px;">Preview the card →</button>
-    <iframe class="preview-frame" id="global-preview-frame" style="display:none"></iframe>
+    <iframe class="preview-frame" id="global-preview-frame" sandbox="allow-scripts" style="display:none"></iframe>
     <label>Members page address (optional)</label>
     <input name="members_page" value="{esc_html(cfg['members_page_saved'] if public_url.is_real(cfg['members_page_saved']) else '')}" placeholder="{esc_html(cfg['members_page'])}">
     <div class="hint">Leave this empty to use the page this server makes for you (shown above). Only fill it in if the widget sits on a page of your own website.</div>
@@ -3244,7 +3280,7 @@ def _dashboard_page() -> str:
       btn.addEventListener('click', () => {{
         const fd = new FormData();
         fd.append('scope', 'global');
-        ['creator_name', 'card_title', 'card_subtitle', 'accent_color', 'card_style', 'qr_style'].forEach(n => {{
+        ['creator_name', 'card_title', 'card_subtitle', 'accent_color', 'card_style', 'qr_style', 'card_layout'].forEach(n => {{
           fd.append(n, document.querySelector('[name="' + n + '"]').value);
         }});
         fd.append('logo_clear', clear.value);
@@ -3557,6 +3593,7 @@ def _render_preview_card(cfg: dict, design: dict, tier_name: str = "MEMBER", cre
         card_label    = design["card_label"],
         card_style    = design["card_style"],
         qr_style      = design["qr_style"],
+        layout        = design.get("layout", card_looks.DEFAULT_LAYOUT),
         background_data_uri = design.get("background_data_uri"),
         background_dim      = design.get("background_dim", card_looks.DEFAULT_DIM),
         kind          = kind if kind in ("ticket", "collectible") else "pass",
@@ -3596,6 +3633,7 @@ def admin_dashboard_preview_card():
         "card_label":    (request.form.get("card_subtitle") or "").strip() or cfg["card_subtitle"],
         "card_style":    typed_style if typed_style in CARD_STYLES else cfg["card_style"],
         "qr_style":      (request.form.get("qr_style") or "").strip() if (request.form.get("qr_style") or "").strip() in card_looks.QR_STYLES else cfg["qr_style"],
+        "layout":        (request.form.get("card_layout") or "").strip() if (request.form.get("card_layout") or "").strip() in card_looks.LAYOUTS else cfg["card_layout"],
         "background_data_uri": bg or None,
         "background_dim": dim if dim in card_looks.DIMS else cfg["bg_dim"],
     }
@@ -3633,6 +3671,7 @@ def _look_from_form(base: dict = None):
         "card_label":    f.get("card_label"),
         "card_style":    f.get("card_style"),
         "qr_style":      f.get("qr_style"),
+        "layout":        f.get("layout"),
         "show_barcode":  f.get("barcode", "on") != "off",
         "logo_data_uri": logo or ("" if f.get("logo_clear") == "1" else base.get("logo_data_uri", "")),
         "bg_data_uri":   bg or ("" if f.get("bg_clear") == "1" else base.get("bg_data_uri", "")),
@@ -4108,8 +4147,12 @@ def member_card(cid):
     if not path.is_file():
         return denied()
     download = request.args.get("dl") == "1"
+    # the saved file is named for what it is: ticket_<id>.html, collectible_<id>.html, membership_<id>.html
+    entry = _member_entry(cid) or {}
+    kind = {"ticket": "ticket", "collectible": "collectible"}.get(entry.get("kind"), "membership")
+    fname = "%s_%s.html" % (kind, re.sub(r"[^A-Za-z0-9_-]", "", str(cid))[:64])
     resp = send_file(path, mimetype="text/html", as_attachment=download,
-                     download_name="membership-card.html", conditional=False, max_age=0)
+                     download_name=fname, conditional=False, max_age=0)
     resp.headers["Cache-Control"] = "private, no-store"
     resp.headers["X-Content-Type-Options"] = "nosniff"
     if not download:
