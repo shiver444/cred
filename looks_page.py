@@ -55,7 +55,7 @@ _SECTION = """
     <section class="dsec" id="sec-looks" data-title="Card looks">
     <h2>Card looks</h2>
     <div id="looks-view">
-      <div class="hint">A look is a saved card design. Make as many as you like (for example Monthly, Trial or VIP), then pick one for each tier under <b>Tiers &amp; pricing</b>. Editing a look changes cards issued from then on; cards members already have stay as they are.</div>
+      <div class="hint">A look is a saved card design. Make as many as you like (for example Monthly, Trial or VIP), then pick one for each card under <b>Cards</b>. Editing a look changes cards issued from then on; cards members already have stay as they are.</div>
       <div class="looks-grid" id="looks-grid"></div>
       <button type="button" class="add-tier" id="look-new">+ New look</button>
       <div class="hint" id="looks-msg" style="margin-top:10px;min-height:16px;"></div>
@@ -339,7 +339,7 @@ _JS = r"""
       if (!x.j || !x.j.success) { esay(fail(x.r, x.j), true); return; }
       var wasNew = !cur;
       looks = x.j.looks; render(); closeEditor();
-      say('Saved. ' + (wasNew ? 'Now pick it for a tier under Tiers & pricing.' : 'New cards use the updated look.'));
+      say('Saved. ' + (wasNew ? 'Now pick it for a card under Cards.' : 'New cards use the updated look.'));
     }).catch(function () { btn.disabled = false; esay('Could not reach the server.', true); });
   });
 

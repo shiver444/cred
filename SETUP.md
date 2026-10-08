@@ -71,17 +71,18 @@ be reset every time you deployed. Two things follow from this:
 This also holds your saved card looks and their uploaded pictures. Your
 members-only content (step 4) is stored the same way.
 
-### Card type: Access pass, Event ticket or Collectible
+### Card kinds: Membership, Event ticket or Limited drop
 
-Every tier has a **Card type**:
+Every card is one box on the **Cards** screen. Press **+ New card** and pick what
+kind it is (you can also change the **Kind of card** later):
 
-- **Access pass** (the default, and what every tier was before): a membership that
-  lasts a number of days and unlocks your members-only content.
-- **Event ticket**: for one event. When you pick it, the **Days** box turns into
-  "Until the event ends" and **More ▾** opens by itself with the event's details:
+- **Membership** (the default, and what every tier was before): access for a
+  number of days that unlocks your members-only content.
+- **Event ticket**: for one event. The **Days** box turns into "Until the event
+  ends" and the box shows the event's details:
   **Event name**, **Starts**, **Ends** (optional), **Place** and a **Note on the
   ticket** (a seat, "doors 19:00"...). Type the times in your own time zone.
-- **Collectible**: a limited-edition drop (an exclusive photo set, an album, a
+- **Limited drop** (a collectible): a limited-edition drop (an exclusive photo set, an album, a
   single, a one-day-only release). See "Collectibles" below.
 
 A ticket card shows the event, the time, the place and the note in place of the
@@ -98,8 +99,8 @@ unlock content if you want a ticket to include some (a stream link, a download).
 Tickets never get the "your access is ending" reminder, and the event details
 are part of what is signed into the card.
 
-**Check-in (at the door).** On **Members**, the **Check-in (tickets)** link opens a
-page for the door. Press **Scan with the camera** and point it at a ticket's QR
+**Check-in (at the door).** Under **People**, the **Check-in** tab (it appears once you
+have an event ticket card) opens a page for the door. Press **Scan with the camera** and point it at a ticket's QR
 code, or paste the ticket's link or code. A good ticket is checked off right away
 and the page shows a big green **Let in** with the name and event; a ticket that
 was already used, cancelled or expired shows a red reason. The page counts how many
@@ -113,7 +114,7 @@ camera use for this site; if it can't, paste the link instead.)
 
 ### Limits per tier: spots and one card per email
 
-Each tier row has a **More ▾** button. It opens the **limits** (and, for an event ticket, the event details, see below):
+Each card box on the **Cards** screen has the limits: **Max members** sits in the main grid, and an **Advanced** fold holds the other two. (An event ticket also shows the event details in its box, see below.)
 
 - **Max members** — leave blank for no limit. With a number, the tier shows
   as "Sold out" in the signup widget once it's full, and anyone who still
@@ -143,8 +144,8 @@ rule until it expires. Choose *No limit* on that tier if you'd rather allow it.
 
 ### Collectibles (limited-edition drops)
 
-Pick **Collectible** as the Card type to sell or give away a numbered edition. The
-**Days** box turns into "Never expires" and **More ▾** opens with:
+Press **+ New card → Limited drop** to sell or give away a numbered edition. The
+**Days** box turns into "Never expires" and the box shows:
 
 - **Drop name** (shown on the card), **Opens** and **Closes** (both optional: people can
   only claim it inside that window; leave both empty and it stays open until it sells
@@ -159,7 +160,7 @@ reminder and can't be extended. The tier picker on your site shows the drop and 
 it closes; before it opens the tier says "Opens ..." and after it closes "Drop closed",
 and neither can be picked. A revoked copy keeps its number, so a sold-out edition stays
 sold out. By default one person can claim one copy (change "Cards per email address" in
-**More ▾** if you want otherwise). Free or paid, it works like any other tier. When you
+**Advanced** if you want otherwise). Free or paid, it works like any other tier. When you
 give one away by hand from Members, "Ignore limits" lets you hand out a copy outside
 the window.
 
@@ -298,7 +299,7 @@ Members page, with a note once a reminder went out.
 
 ### Announcements: tell your members about something new
 
-Open **Announce** (in the side bar or bottom bar, or the **Announce →** link at the top of Members and Content). Write a **title** (optional), a **message** and an optional **link**, then choose:
+Open **Content → News** (the **Content** place in the menu has two small tabs: Content and News). Write a **title** (optional), a **message** and an optional **link**, then choose:
 
 - **Pin it at the top of every member's page.** Members who open their link see it in a
   "Latest from you" box above their card, with the link as a button. It stays until you
@@ -381,7 +382,7 @@ Railway project or Volume, for example), all of it would be gone, and every
 card you ever issued would stop working, because the key that signed them
 would be gone too. A backup is one `.zip` file you keep somewhere safe.
 
-**Make one:** Dashboard → scroll to **Backup & restore** at the bottom →
+**Make one:** **Settings → Backup** →
 **Download backup**. The first button saves your members, key, settings and
 content (usually well under a few MB). If you have uploaded files, a second
 button includes them too (as big as your uploads are). The checklist at the
@@ -613,8 +614,7 @@ sign-up pop-up from them, so it fits a dark page, a light page, a colorful
 page or one with a photo behind it. If your site switches between dark and
 light, the widget follows.
 
-To change that, open the dashboard and find **Widget look** (below
-Branding). You can set:
+To change that, open **Design → Widget look**. You can set:
 
 - **Colors** — *Match my page* (default), *Always dark*, *Always light*, or
   *My own colors* (a background color and a text color you pick).
@@ -640,8 +640,8 @@ page as soon as you save — nothing to edit on your site.
 ### Dashboard style
 
 The pages only you see (dashboard, Members, Content and the login page) can
-look five different ways. Open the dashboard and find **Dashboard style**
-(above Branding), click a card and press **Save changes**:
+look five different ways. Open **Design → Dashboard style**,
+click a card and press **Save changes**:
 
 - **Spaceship** — near-black with typewriter lettering and small capitals
   (the original look).
@@ -662,10 +662,11 @@ looks:
 - **Studio** is also one long page, with a small contents list beside it on a
   wide screen to jump between sections. It has the same Save changes bar.
 - **Spaceship lite**, **Daylight** and **Midnight** work like an app. On a computer there is a
-  menu down the left (Home, Members, Content, Settings). On a phone the menu
-  sits along the bottom, and Settings is a list of screens (Branding, Card looks, Widget
-  look, Tiers, Payment, Emails, Dashboard style, Backup) that you open one at
-  a time. When you change something, a **Save changes** bar appears; nothing is
+  menu down the left with six places: **Home**, **People** (Members and
+  Check-in), **Cards**, **Content** (Content and News), **Design** (Branding,
+  Card looks, Widget look, Dashboard style) and **Settings** (Payment, Emails,
+  Backup). On a phone the same six sit along the bottom. Places with more than
+  one screen show them as small tabs under the title. When you change something, a **Save changes** bar appears; nothing is
   saved until you press it.
   On a phone, the Members page shows each member as a card: tap a card to open
   it and see the email, dates and the Copy link, Extend, Revoke and Delete
@@ -790,7 +791,7 @@ upload to the server) in two places:
   as you type. Each saved look has **Edit**, **Copy** (a quick way to make a
   variation) and **Delete** (press twice). You can keep up to 12.
 
-Then open **Tiers & pricing**: every tier has a **Card look** menu. Pick
+Then open **Cards**: every card has a **Card look** menu. Pick
 which look that tier's members get. A tier left on "Default look" uses what's
 in Branding. If you delete a look that a tier uses, that tier goes back to
 the Default look (the dashboard tells you which).

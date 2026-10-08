@@ -38,30 +38,84 @@ LABELS = {
 #         phone, one settings screen at a time, a save bar (Daylight, Midnight)
 LAYOUTS = {"spaceship": "long", "spacelite": "app", "studio": "toc", "daylight": "app", "midnight": "app"}
 
-# The dashboard's settings screens, in the order they are listed: (id, title, one line).
+# The dashboard's screens, in the order they are listed: (id, title, one line).
 # Each id matches a <section id="sec-<id>"> on the dashboard page.
 SETTINGS_SCREENS = [
-    ("branding", "Branding & cards", "Name, accent color, logo and the default card look"),
-    ("looks",    "Card looks",       "Your saved card designs, one per kind of card"),
+    ("tiers",    "Cards",            "What people can get: memberships, event tickets and limited drops"),
+    ("branding", "Branding",         "Name, accent color, logo and the default card look"),
+    ("looks",    "Card looks",       "Your saved card designs"),
     ("widget",   "Widget look",      "Colors, lettering and wording of the member widget"),
-    ("tiers",    "Tiers & pricing",  "Passes, prices, limits and which card look each uses"),
-    ("payment",  "Payment",          "How paid tiers are fulfilled"),
-    ("emails",   "Emails",           "Welcome email and expiry reminder"),
     ("style",    "Dashboard style",  "How these admin pages look"),
+    ("payment",  "Payment",          "How paid cards are fulfilled"),
+    ("emails",   "Emails",           "Welcome email and expiry reminder"),
     ("backup",   "Backup & restore", "Download or restore your data"),
 ]
-SETTINGS_IDS = tuple(s[0] for s in SETTINGS_SCREENS)
+SETTINGS_IDS = tuple(s[0] for s in SETTINGS_SCREENS) + ("home",)
+
+# The menu: six groups. Each item is (key, label, address, only_if). A key that
+# is a dashboard screen id opens that screen; the others are their own pages.
+# only_if "tickets" = shown only when the creator has an event-ticket card.
+_D = "/admin/dashboard#/s/"
+GROUPS = [
+    {"id": "home", "label": "Home", "icon": "home", "items": [("home", "Home", "/admin/dashboard#/home", "")]},
+    {"id": "people", "label": "People", "icon": "members", "items": [
+        ("members", "Members", "/admin/members", ""), ("checkin", "Check-in", "/admin/checkin", "tickets")]},
+    {"id": "cards", "label": "Cards", "icon": "cards", "items": [("tiers", "Cards", _D + "tiers", "")]},
+    {"id": "content", "label": "Content", "icon": "content", "items": [
+        ("content", "Content", "/admin/content", ""), ("announce", "News", "/admin/announce", "")]},
+    {"id": "design", "label": "Design", "icon": "design", "items": [
+        ("branding", "Branding", _D + "branding", ""), ("looks", "Card looks", _D + "looks", ""),
+        ("widget", "Widget look", _D + "widget", ""), ("style", "Dashboard style", _D + "style", "")]},
+    {"id": "settings", "label": "Settings", "icon": "settings", "items": [
+        ("payment", "Payment", _D + "payment", ""), ("emails", "Emails", _D + "emails", ""),
+        ("backup", "Backup", _D + "backup", "")]},
+]
+
+
+def _group_of(key):
+    for g in GROUPS:
+        for it in g["items"]:
+            if it[0] == key:
+                return g
+    return GROUPS[0]
+
+
+def _plain_href(item):
+    """Where an item goes on the long (single-page) layouts: dashboard screens
+    are sections of one long page there."""
+    key, href = item[0], item[2]
+    if href.startswith(_D):
+        return "/admin/dashboard#sec-" + key
+    return "/admin/dashboard" if key == "home" else href
+
+
+def nav_html(page, tickets=False):
+    """The link row at the top of every page on the long layouts (the app
+    layouts hide it and build a sidebar / tab bar instead). One link per menu
+    group; pages that share a group get a second row with its items."""
+    from html import escape
+    cur = _group_of(page)
+    row = "\n".join('<a href="%s"%s>%s</a>' % (_plain_href(g["items"][0]), ' class="on"' if g is cur else "", escape(g["label"]))
+                    for g in GROUPS) + "\n"
+    out = '<div class="nav">' + row + '<a href="/admin/logout">Log out</a></div>'
+    sub = [it for it in cur["items"] if not it[3] or tickets]
+    if page != "dashboard" and len(sub) > 1:
+        out += '<div class="nav subnav">' + "\n".join(
+            '<a href="%s"%s>%s</a>' % (_plain_href(it), ' class="on"' if it[0] == page else "", escape(it[1])) for it in sub) + "</div>"
+    return out
 
 
 def layout(style):
     return LAYOUTS[clean_style(style)]
 
 
-def body_attrs(style, page, brand=""):
+def body_attrs(style, page, brand="", tickets=False):
     """Attributes for the <body> tag: tells the shell script which layout and
-    page this is. `brand` is shown in the sidebar."""
+    page this is. `brand` is shown in the sidebar; `tickets` adds the Check-in
+    tab to the People group."""
     from html import escape
-    return 'data-layout="%s" data-page="%s" data-brand="%s"' % (layout(style), escape(page, quote=True), escape(str(brand or ""), quote=True))
+    return 'data-layout="%s" data-page="%s" data-brand="%s"%s' % (
+        layout(style), escape(page, quote=True), escape(str(brand or ""), quote=True), ' data-tickets="1"' if tickets else "")
 
 
 _SANS  = "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif"
@@ -232,13 +286,11 @@ html { background:var(--page); }
 .app-title { font-size:18px !important; font-weight:400; text-transform:uppercase; letter-spacing:.14em; color:var(--accent-text); }
 .app-side a { font-size:12px; text-transform:uppercase; letter-spacing:.09em; }
 .app-side a.sub { font-size:11.5px; }
+.app-seg a { font-size:12px; text-transform:uppercase; letter-spacing:.08em; }
 .app-side .app-grp { letter-spacing:.14em; font-weight:400; }
 .app-side a.on { font-weight:400; border-left:2px solid var(--accent-text); }
-.app-list .t { font-size:13px; font-weight:400; text-transform:uppercase; letter-spacing:.08em; }
-.app-list .s { font-size:12px; }
 .app-tabs a { font-size:10px; text-transform:uppercase; letter-spacing:.08em; border-radius:0; }
 .app-tabs a.on { font-weight:400; }
-.app-back { font-size:12px; text-transform:uppercase; letter-spacing:.08em; }
 .app-savebar { font-size:12px; text-transform:uppercase; letter-spacing:.06em; box-shadow:none; }
 .app-savebar button { font-size:12px; text-transform:uppercase; letter-spacing:.1em; font-weight:400; }
 .app-ready .dsec.on { box-shadow:none; }
@@ -251,6 +303,8 @@ _ICONS = {
     "members": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c.6-3.6 3.2-5.5 6.5-5.5s5.9 1.9 6.5 5.5"/><path d="M16 4.7a3.5 3.5 0 0 1 0 6.6"/><path d="M18 14.8c2 .6 3.2 2.3 3.5 5.2"/></svg>',
     "content": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 7.5a2 2 0 0 1 2-2h4l2 2.5h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z"/></svg>',
     "announce": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 10.5v3a1 1 0 0 0 1 1H8l6 4.5v-14L8 9.5H4.5a1 1 0 0 0-1 1z"/><path d="M17.5 9a4.5 4.5 0 0 1 0 6"/></svg>',
+    "cards": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5.5" width="18" height="13" rx="2"/><path d="M3 10h18"/><path d="M7 15h4"/></svg>',
+    "design": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a9 9 0 1 0 0 18c1.2 0 1.8-.8 1.8-1.7 0-1.1-1-1.4-1-2.4 0-.9.7-1.6 1.7-1.6H17a4 4 0 0 0 4-4C21 6.6 17 3 12 3z"/><circle cx="7.5" cy="11" r="1"/><circle cx="10" cy="7.5" r="1"/><circle cx="14.5" cy="7.5" r="1"/></svg>',
     "settings": '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>',
 }
 
@@ -281,8 +335,6 @@ body[data-layout=app].app-ready { max-width:none !important; margin:0 !important
 .app-main.plain > .app-card { overflow-x:auto; background:var(--bg); border:1px solid var(--line); border-radius:var(--radius-lg); padding:26px 30px 34px; box-shadow:var(--shadow); }
 .app-main.plain > .app-card > h1 { margin-top:0; }
 .app-title { font-family:var(--head); font-size:30px !important; font-weight:700; margin:0 0 20px !important; letter-spacing:-.01em; color:var(--fg); }
-.app-back { display:none; align-items:center; gap:2px; margin:0 0 6px -6px; padding:6px 8px; color:var(--accent-text); text-decoration:none; font-size:16px; font-weight:500; }
-.app-back svg { width:20px; height:20px; }
 .app-side { position:fixed; top:0; bottom:0; left:0; width:var(--side-w); box-sizing:border-box; padding:22px 14px 18px; background:var(--bg);
   border-right:1px solid var(--line); overflow:auto; display:flex; flex-direction:column; gap:2px; z-index:20; font-family:var(--font); }
 .app-brand { font-family:var(--head); font-weight:700; font-size:17px; padding:4px 12px 20px; color:var(--fg); line-height:1.25; word-break:break-word; }
@@ -295,17 +347,15 @@ body[data-layout=app].app-ready { max-width:none !important; margin:0 !important
 .app-side .sp { flex:1; }
 .app-tabs { display:none; position:fixed; left:0; right:0; bottom:0; z-index:40; background:color-mix(in srgb, var(--bg) 94%, transparent);
   -webkit-backdrop-filter:blur(14px); backdrop-filter:blur(14px); border-top:1px solid var(--line); padding:6px 6px calc(6px + env(safe-area-inset-bottom)); font-family:var(--font); }
-.app-tabs a { flex:1; display:flex; flex-direction:column; align-items:center; gap:3px; font-size:11px; color:var(--muted); text-decoration:none; padding:6px 0; border-radius:12px; }
-.app-tabs a svg { width:25px; height:25px; }
+.app-tabs a { flex:1 1 0; min-width:0; display:flex; flex-direction:column; align-items:center; gap:3px; font-size:10.5px; color:var(--muted); text-decoration:none; padding:6px 0; border-radius:12px; }
+.app-tabs a svg { width:24px; height:24px; }
 .app-tabs a.on { color:var(--accent-text); font-weight:600; }
-.app-list { display:none; }
-.app-list .grp { background:var(--bg); border:1px solid var(--line); border-radius:var(--radius-lg); overflow:hidden; margin:0 0 18px; box-shadow:var(--shadow); }
-.app-list a { display:flex; align-items:center; gap:12px; padding:14px 16px; border-bottom:1px solid var(--line); color:var(--fg); text-decoration:none; }
-.app-list a:last-child { border-bottom:0; }
-.app-list a:active { background:var(--hover); }
-.app-list .t { display:block; font-size:15px; font-weight:600; }
-.app-list .s { display:block; font-size:12.5px; color:var(--muted); margin-top:2px; line-height:1.4; }
-.app-list a::after { content:"\\203A"; margin-left:auto; color:var(--muted); font-size:24px; line-height:1; }
+.app-seg { display:flex; gap:8px; margin:0 0 20px; overflow-x:auto; -webkit-overflow-scrolling:touch; padding:2px 0 4px; font-family:var(--font); }
+.app-seg:empty { display:none; }
+.app-seg a { flex:0 0 auto; padding:8px 16px; border-radius:var(--radius); border:1px solid var(--line); background:var(--bg); color:var(--soft);
+  text-decoration:none; font-size:14px; white-space:nowrap; }
+.app-seg a:hover { border-color:var(--accent-text); color:var(--fg); }
+.app-seg a.on { background:color-mix(in srgb, var(--accent-text) 13%, transparent); border-color:var(--accent-text); color:var(--accent-text); font-weight:600; }
 .app-savebar { display:none; position:fixed; left:var(--side-w); right:0; bottom:0; z-index:50; align-items:center; justify-content:space-between; gap:14px;
   padding:12px 28px; background:var(--bg); border-top:1px solid var(--line); box-shadow:0 -10px 30px rgba(0,0,0,.10); font-family:var(--font); font-size:14px; color:var(--soft); }
 .app-savebar.show { display:flex; }
@@ -316,8 +366,6 @@ body[data-layout=app].app-ready { max-width:none !important; margin:0 !important
   .app-tabs { display:flex; }
   .app-main { padding:18px 14px calc(110px + env(safe-area-inset-bottom)); max-width:none; }
   .app-title { font-size:30px !important; margin-bottom:14px !important; }
-  .view-s .app-back { display:inline-flex; }
-  .view-list .app-list { display:block; }
   .app-ready .dsec.on { padding:2px 16px 22px; box-shadow:none; }
   .app-main.plain > .app-card { padding:18px 16px 26px; box-shadow:none; }
   .app-savebar { left:0; right:0; bottom:calc(66px + env(safe-area-inset-bottom)); padding:10px 14px; }
@@ -384,7 +432,7 @@ _SHELL_JS = r"""
   var body = document.body;
   var layout = body.getAttribute('data-layout') || 'long', page = body.getAttribute('data-page') || '';
   if (layout !== 'app' && layout !== 'toc') return;
-  var SETTINGS = __SETTINGS__, ICONS = __ICONS__;
+  var GROUPS = __GROUPS__, ICONS = __ICONS__, TICKETS = body.getAttribute('data-tickets') === '1';
   function el(tag, props, kids) {
     var n = document.createElement(tag);
     Object.keys(props || {}).forEach(function (k) {
@@ -400,12 +448,17 @@ _SHELL_JS = r"""
   if (layout === 'toc') {
     if (!secs.length) return;
     var toc = el('nav', { class: 'toc', 'aria-label': 'Sections' });
-    secs.forEach(function (s) { toc.appendChild(el('a', { href: '#' + s.id, text: s.getAttribute('data-title') || s.id })); });
+    // listed in menu order (Home, Cards, Design, Settings), whatever order the page holds them in
+    var order = ['home'];
+    GROUPS.forEach(function (g) { g.items.forEach(function (i) { if (i[2].indexOf('/admin/dashboard#/s/') === 0) order.push(i[0]); }); });
+    var byId = {}; secs.forEach(function (s) { byId[s.id.replace(/^sec-/, '')] = s; });
+    var listed = order.map(function (k) { return byId[k]; }).filter(Boolean);
+    listed.forEach(function (s) { toc.appendChild(el('a', { href: '#' + s.id, text: s.getAttribute('data-title') || s.id })); });
     body.appendChild(toc);
     var links = [].slice.call(toc.querySelectorAll('a'));
     function spy() {
-      var cur = 0;
-      secs.forEach(function (s, i) { if (s.getBoundingClientRect().top < 140) cur = i; });
+      var cur = 0, best = -1e9;
+      listed.forEach(function (s, i) { var t = s.getBoundingClientRect().top; if (t < 140 && t > best) { best = t; cur = i; } });
       links.forEach(function (a, i) { a.classList.toggle('on', i === cur); });
     }
     window.addEventListener('scroll', spy, { passive: true }); spy();
@@ -425,48 +478,50 @@ _SHELL_JS = r"""
   var origH1 = holder.querySelector('h1');
   if (secs.length && origH1) origH1.className += ' orig-title';
 
-  function a(href, icon, label, cls) { return el('a', { href: href, class: cls || '', html: (icon ? ICONS[icon] : '') + '<span></span>' }, []); }
-  function link(href, icon, label, cls) { var n = a(href, icon, label, cls); n.querySelector('span').textContent = label; return n; }
+  function link(href, icon, label, cls) {
+    var n = el('a', { href: href, class: cls || '', html: (icon ? ICONS[icon] : '') + '<span></span>' });
+    n.querySelector('span').textContent = label; return n;
+  }
+  function shown(g) { return g.items.filter(function (i) { return !i[3] || TICKETS; }); }
+  function groupOfKey(k) { for (var x = 0; x < GROUPS.length; x++) for (var y = 0; y < GROUPS[x].items.length; y++) if (GROUPS[x].items[y][0] === k) return GROUPS[x]; return GROUPS[0]; }
+
+  // The six places: a sidebar on a computer, a tab bar on a phone.
   var side = el('aside', { class: 'app-side' });
   side.appendChild(el('div', { class: 'app-brand', text: brand }));
-  var sideItems = {};
-  sideItems.home = link('/admin/dashboard#/home', 'home', 'Home'); side.appendChild(sideItems.home);
-  sideItems.members = link('/admin/members', 'members', 'Members'); side.appendChild(sideItems.members);
-  sideItems.content = link('/admin/content', 'content', 'Content'); side.appendChild(sideItems.content);
-  sideItems.announce = link('/admin/announce', 'announce', 'Announce'); side.appendChild(sideItems.announce);
-  side.appendChild(el('div', { class: 'app-grp', text: 'Settings' }));
-  SETTINGS.forEach(function (s) { sideItems[s[0]] = link('/admin/dashboard#/s/' + s[0], null, s[1], 'sub'); side.appendChild(sideItems[s[0]]); });
+  var tabs = el('nav', { class: 'app-tabs', 'aria-label': 'Main' });
+  var sideItems = {}, tabItems = {};
+  GROUPS.forEach(function (g) {
+    var href = g.items[0][2];
+    sideItems[g.id] = link(href, g.icon, g.label); side.appendChild(sideItems[g.id]);
+    tabItems[g.id] = link(href, g.icon, g.label); tabs.appendChild(tabItems[g.id]);
+  });
   side.appendChild(el('div', { class: 'sp' }));
   side.appendChild(link('/admin/logout', null, 'Log out'));
-  body.appendChild(side);
+  body.appendChild(side); body.appendChild(tabs);
 
-  var tabs = el('nav', { class: 'app-tabs', 'aria-label': 'Main' });
-  var tabItems = {};
-  [['home', 'home', 'Home', '/admin/dashboard#/home'], ['members', 'members', 'Members', '/admin/members'],
-   ['content', 'content', 'Content', '/admin/content'], ['announce', 'announce', 'Announce', '/admin/announce'],
-   ['settings', 'settings', 'Settings', '/admin/dashboard#/settings']].forEach(function (t) {
-    tabItems[t[0]] = link(t[3], t[1], t[2]); tabs.appendChild(tabItems[t[0]]);
-  });
-  body.appendChild(tabs);
+  // The small tab row under the title, for the places that hold more than one screen.
+  var seg = el('nav', { class: 'app-seg', 'aria-label': 'Screens' });
+  function paintGroup(g, key) {
+    GROUPS.forEach(function (x) { sideItems[x.id].classList.toggle('on', x === g); tabItems[x.id].classList.toggle('on', x === g); });
+    seg.innerHTML = '';
+    var its = shown(g);
+    if (its.length < 2) return;
+    its.forEach(function (i) { var n = el('a', { href: i[2], text: i[1] }); if (i[0] === key) n.className = 'on'; seg.appendChild(n); });
+  }
 
-  if (page === 'members') { sideItems.members.className += ' on'; tabItems.members.className += ' on'; }
-  if (page === 'content') { sideItems.content.className += ' on'; tabItems.content.className += ' on'; }
-  if (page === 'announce') { sideItems.announce.className += ' on'; tabItems.announce.className += ' on'; }
   body.className += ' app-ready';
-  if (page !== 'dashboard' || !secs.length) return;
+  if (page !== 'dashboard' || !secs.length) {
+    paintGroup(groupOfKey(page), page);
+    main.insertBefore(seg, holder);
+    return;
+  }
 
   // dashboard: one screen at a time
   var title = el('h1', { class: 'app-title' });
-  var back = el('a', { class: 'app-back', href: '/admin/dashboard#/settings', html: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5l-7 7 7 7"/></svg><span>Settings</span>' });
-  var list = el('div', { class: 'app-list' });
-  var grp = el('div', { class: 'grp' });
-  SETTINGS.forEach(function (s) { grp.appendChild(el('a', { href: '#/s/' + s[0] }, [el('span', {}, [el('span', { class: 't', text: s[1] }), el('span', { class: 's', text: s[2] })])])); });
-  list.appendChild(grp);
-  var first = main.firstChild;
-  // the "Saved." banners stay on top, then back link, title, list
   var banners = [].slice.call(main.querySelectorAll(':scope > .banner'));
+  // the "Saved." banners stay on top, then the title and the tab row
   var anchor = banners.length ? banners[banners.length - 1].nextSibling : main.firstChild;
-  main.insertBefore(back, anchor); main.insertBefore(title, anchor); main.insertBefore(list, anchor);
+  main.insertBefore(title, anchor); main.insertBefore(seg, anchor);
 
   var form = document.querySelector('form[action="/admin/dashboard"]');
   var secField = null;
@@ -482,28 +537,25 @@ _SHELL_JS = r"""
     form.addEventListener('invalid', function (e) { var s = e.target.closest && e.target.closest('.dsec'); if (s && !s.classList.contains('on')) location.hash = '#/s/' + s.id.replace(/^sec-/, ''); }, true);
     form.addEventListener('submit', function () { dirty = false; });
   }
-  var isWide = function () { return window.matchMedia('(min-width: 900px)').matches; };
   function paint() { bar.classList.toggle('show', dirty && view === 's'); }
-  function titleOf(id) { var s = SETTINGS.filter(function (x) { return x[0] === id; })[0]; return s ? s[1] : id; }
+  function labelOf(g, key) { var its = g.items; if (its.length > 1) return g.label; return its[0][1]; }
   function route() {
     var h = location.hash || '';
     if (h === '#backup') h = '#/s/backup';
-    var m = h.match(/^#\/s\/([a-z0-9-]+)$/), id = m && secOf(m[1]) ? m[1] : null, v = 'home';
-    if (id) v = 's';
-    else if (h === '#/settings') { if (isWide()) { v = 's'; id = SETTINGS[0][0]; } else v = 'list'; }
-    view = v;
-    secs.forEach(function (s) { s.classList.toggle('on', (v === 'home' && s.id === 'sec-home') || (v === 's' && s.id === 'sec-' + id)); });
-    body.classList.toggle('view-home', v === 'home'); body.classList.toggle('view-list', v === 'list'); body.classList.toggle('view-s', v === 's');
-    title.textContent = v === 'home' ? 'Home' : v === 'list' ? 'Settings' : titleOf(id);
-    Object.keys(sideItems).forEach(function (k) { sideItems[k].classList.toggle('on', v === 'home' ? k === 'home' : v === 's' ? k === id : (k === 'branding' && false)); });
-    sideItems.members.classList.remove('on'); sideItems.content.classList.remove('on');
-    tabItems.home.classList.toggle('on', v === 'home'); tabItems.settings.classList.toggle('on', v !== 'home');
-    if (secField) secField.value = v === 's' ? id : '';
+    if (h === '#/settings') h = '#/s/payment';
+    var m = h.match(/^#\/s\/([a-z0-9-]+)$/), id = m && secOf(m[1]) ? m[1] : null;
+    var key = id || 'home';
+    view = id && id !== 'home' ? 's' : 'home';
+    secs.forEach(function (s) { s.classList.toggle('on', s.id === 'sec-' + key); });
+    body.classList.toggle('view-home', view === 'home'); body.classList.toggle('view-s', view === 's');
+    var g = groupOfKey(key);
+    title.textContent = labelOf(g, key);
+    paintGroup(g, key);
+    if (secField) secField.value = view === 's' ? id : '';
     if (!firstRoute) { banners.forEach(function (b) { b.style.display = 'none'; }); window.scrollTo(0, 0); }
     firstRoute = false; paint();
   }
   window.addEventListener('hashchange', route);
-  window.addEventListener('resize', function () { if (location.hash === '#/settings') route(); });
   route();
 })();
 """
@@ -514,6 +566,8 @@ _SHELL_JS = r"""
 # layouts have: it appears as soon as something is changed, saves the form, and
 # after saving brings you back to where you were with a short "Saved" note.
 _SAVEBAR_CSS = """
+.nav a.on { font-weight:700; text-decoration:underline; }
+.subnav { margin-top:-8px; }
 .sv-bar { display:none; position:fixed; left:0; right:0; bottom:0; z-index:50; align-items:center; justify-content:center; gap:16px;
   padding:12px 16px calc(12px + env(safe-area-inset-bottom)); background:var(--bg); border-top:1px solid var(--line-strong);
   box-shadow:0 -10px 30px rgba(0,0,0,.20); font-family:var(--font); font-size:13px; color:var(--soft); }
@@ -565,7 +619,7 @@ def shell_js(style):
     import json
     if layout(style) == "long":
         return "<script>" + _SAVEBAR_JS.replace("</", "<\\/") + "</script>"
-    js = _SHELL_JS.replace("__SETTINGS__", json.dumps([list(s) for s in SETTINGS_SCREENS])).replace("__ICONS__", json.dumps(_ICONS))
+    js = _SHELL_JS.replace("__GROUPS__", json.dumps([{"id": g["id"], "label": g["label"], "icon": g["icon"], "items": [list(i) for i in g["items"]]} for g in GROUPS])).replace("__ICONS__", json.dumps(_ICONS))
     extra = "<script>" + _SAVEBAR_JS.replace("</", "<\\/") + "</script>" if layout(style) == "toc" else ""
     return "<script>" + js.replace("</", "<\\/") + "</script>" + extra
 

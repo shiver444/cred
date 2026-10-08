@@ -1292,7 +1292,7 @@ def admin_checkin():
     html = checkin_page.render(
         admin_theme.css(cfg["admin_style"], cfg["accent_color"], "wide"),
         admin_theme.shell_js(cfg["admin_style"]),
-        admin_theme.body_attrs(cfg["admin_style"], "checkin", cfg["card_title"]),
+        admin_theme.body_attrs(cfg["admin_style"], "checkin", cfg["card_title"], tickets=True),
         cfg["card_title"], _checkin_stats(),
         any(card_kinds.is_ticket(t) for t in (cfg.get("tiers") or [])))
     resp = app.response_class(html, mimetype="text/html")
@@ -1700,7 +1700,8 @@ def admin_members():
     title  = esc_html(cfg["card_title"])
     theme_css = admin_theme.css(cfg["admin_style"], cfg["accent_color"], "wide")
     theme_js = admin_theme.shell_js(cfg["admin_style"])
-    body_attrs = admin_theme.body_attrs(cfg["admin_style"], "members", cfg["card_title"])
+    body_attrs = admin_theme.body_attrs(cfg["admin_style"], "members", cfg["card_title"],
+                                        tickets=any(card_kinds.is_ticket(t) for t in (cfg.get("tiers") or [])))
 
     members_page_warning = ""
     if members_page_unset:
@@ -1807,7 +1808,7 @@ def admin_members():
   .nav a:hover {{ text-decoration:underline; }}
 {theme_css}</style></head>
 <body {body_attrs}>
-  <div class="nav"><a href="/admin/dashboard">← Dashboard</a><a href="/admin/content">Content →</a><a href="/admin/announce">Announce →</a>{checkin_link}<a href="/admin/logout">Log out</a></div>
+  {admin_theme.nav_html("members", bool(checkin_link))}
   <h1>{title} — Members ({len(members)})</h1>
   <div class="count">Newest first.</div>
   <details class="mhelp" open><summary>What do these columns and buttons mean?</summary>
@@ -2409,11 +2410,11 @@ def _welcome_html(cfg: dict) -> str:
   <div class="welcome-box">
     <h2 style="margin-top:0;">Welcome — three steps and you're live</h2>
     <ol>
-      <li><b>Name your brand.</b> Under <b>Branding</b>, enter your name and the title for your cards, then press Save.</li>
-      <li><b>Check your tiers.</b> Under <b>Tiers &amp; pricing</b> you already have two examples. Rename them, set a price, or add your own.</li>
+      <li><b>Name your brand.</b> Under <b>Design → Branding</b>, enter your name and the title for your cards, then press Save.</li>
+      <li><b>Check your cards.</b> Under <b>Cards</b> you already have two examples. Rename them, set a price, or add your own.</li>
       <li><b>Put two lines on your website.</b> Copy them from <b>Embed on your website</b> just below and paste them where you want the sign-up box and members area.</li>
     </ol>
-    <div class="hint">Everything else (emails, content, tickets, announcements) can wait. You can come back to it any time.</div>
+    <div class="hint">Everything else (emails, content, tickets, news) can wait. You can come back to it any time.</div>
     <form method="POST" action="/admin/welcome/hide" style="margin-top:10px;"><button type="submit" class="copy-btn">Got it, hide this</button></form>
   </div>"""
 
@@ -2463,8 +2464,8 @@ def _dashboard_page() -> str:
         '<a href="/admin/content" style="color:' + accent + ';">Content</a> page. Right now you have: <b>'
         + (esc_html(", ".join(content_keys)) if content_keys else "none yet") + '</b>.</div>'
         + ('<div class="warn" style="background:var(--warn-bg);color:var(--warn);font-size:11px;line-height:1.6;padding:10px 14px;margin:8px 0;">'
-           '⚠ A tier lists section(s) that don\'t exist on the Content page: <b>' + esc_html(", ".join(missing))
-           + '</b>. Members of that tier would not get anything for them — create a section with that key, or fix the name.</div>' if missing else "")
+           '⚠ A card lists section(s) that don\'t exist on the Content page: <b>' + esc_html(", ".join(missing))
+           + '</b>. Members of that card would not get anything for them — create a section with that key, or fix the name.</div>' if missing else "")
     )
 
     try:
@@ -2505,26 +2506,32 @@ def _dashboard_page() -> str:
     except Exception:
         _registry, _requests = [], []
 
-    def _limits_panel(t: dict) -> str:
+    UI_KIND = {"pass": "Membership", "ticket": "Event ticket", "collectible": "Limited drop"}
+
+    def _cap_field(t: dict) -> str:
         cap = limits.tier_max(t)
         taken = limits.count_taken(_registry, _requests, t.get("name", ""), ever=limits.is_numbered(t)) if cap else 0
-        numbered = limits.is_numbered(t)
-        if numbered:
+        if limits.is_numbered(t):
             usage = (f'{taken} of {cap} copies claimed{" — SOLD OUT" if taken >= cap else ""}.' if cap
                      else "No edition size set: anyone can claim one while the drop is open.")
         else:
             usage = (f'Right now: {taken} of {cap} spots in use'
                      f'{" — SOLD OUT" if taken >= cap else ""}.') if cap else "No limit set."
+        return f"""
+          <div class="of">
+            <label><span class="lbl-members">Max members (blank = no limit)</span><span class="lbl-tickets">Tickets available (blank = no limit)</span><span class="lbl-edition">Edition size (blank = open)</span></label>
+            <input name="tier_max_members" type="number" min="1" step="1" value="{esc_html(str(cap) if cap else '')}" placeholder="no limit">
+            <div class="hint of-usage">{esc_html(usage)}</div>
+          </div>"""
+
+    def _adv_panel(t: dict) -> str:
         mode = limits.per_email_mode(t)
         show = t.get("show_spots_left", True) is not False
         def sel(cond): return "selected" if cond else ""
         return f"""
+          <details class="offer-adv">
+            <summary>Advanced</summary>
             <div class="design-panel limits-panel">
-              <div class="design-field">
-                <label><span class="lbl-members">Max members (blank = no limit)</span><span class="lbl-edition">Edition size (blank = open edition)</span></label>
-                <input name="tier_max_members" type="number" min="1" step="1" value="{esc_html(str(cap) if cap else '')}" placeholder="no limit">
-                <div class="hint" style="margin-top:4px;">{esc_html(usage)}</div>
-              </div>
               <div class="design-field">
                 <label>Show visitors how many spots are left?</label>
                 <select name="tier_show_spots">
@@ -2540,90 +2547,99 @@ def _dashboard_page() -> str:
                   <option value="unlimited" {sel(mode == "unlimited")}>No limit</option>
                 </select>
               </div>
-            </div>"""
+            </div>
+          </details>"""
 
     def _kind_select(kind: str) -> str:
         return ('<select name="tier_kind">'
-                + "".join(f'<option value="{k}"{" selected" if k == kind else ""}>{card_kinds.KIND_NAMES[k]}</option>'
+                + "".join(f'<option value="{k}"{" selected" if k == kind else ""}>{UI_KIND[k]}</option>'
                           for k in card_kinds.KINDS)
                 + '</select>')
 
     def _event_panel(t: dict) -> str:
         e = card_kinds.event_of(t)
         return f"""
-            <div class="design-panel event-block">
-              <div class="design-field wide">
-                <label>Event name</label>
-                <input name="tier_event_name" maxlength="{card_kinds.MAX_NAME}" value="{esc_html(e['name'])}" placeholder="Halloween Live Show">
-              </div>
-              <div class="design-field">
-                <label>Starts</label>
-                <input name="tier_event_start" type="datetime-local" value="{esc_html(e['starts_at'])}">
-              </div>
-              <div class="design-field">
-                <label>Ends (optional)</label>
-                <input name="tier_event_end" type="datetime-local" value="{esc_html(e['ends_at'])}">
-              </div>
-              <div class="design-field">
-                <label>Place</label>
-                <input name="tier_event_place" maxlength="{card_kinds.MAX_PLACE}" value="{esc_html(e['place'])}" placeholder="Venue, city or link">
-              </div>
-              <div class="design-field">
-                <label>Note on the ticket (optional)</label>
-                <input name="tier_event_note" maxlength="{card_kinds.MAX_NOTE}" value="{esc_html(e['note'])}" placeholder="Doors 19:00, standing">
-              </div>
-              <input type="hidden" name="tier_event_tz" value="{esc_html(str(e['tz']))}">
-              <div class="hint event-hint">The ticket stops working when the event ends. If you leave <b>Ends</b> empty, it works for {card_kinds.DEFAULT_HOURS} hours after it starts. Times are the ones you type here, in your own time zone.</div>
-            </div>"""
+          <div class="design-panel event-block">
+            <div class="design-field wide">
+              <label>Event name</label>
+              <input name="tier_event_name" maxlength="{card_kinds.MAX_NAME}" value="{esc_html(e['name'])}" placeholder="Halloween Live Show">
+            </div>
+            <div class="design-field">
+              <label>Starts</label>
+              <input name="tier_event_start" type="datetime-local" value="{esc_html(e['starts_at'])}">
+            </div>
+            <div class="design-field">
+              <label>Ends (optional)</label>
+              <input name="tier_event_end" type="datetime-local" value="{esc_html(e['ends_at'])}">
+            </div>
+            <div class="design-field">
+              <label>Place</label>
+              <input name="tier_event_place" maxlength="{card_kinds.MAX_PLACE}" value="{esc_html(e['place'])}" placeholder="Venue, city or link">
+            </div>
+            <div class="design-field">
+              <label>Note on the ticket (optional)</label>
+              <input name="tier_event_note" maxlength="{card_kinds.MAX_NOTE}" value="{esc_html(e['note'])}" placeholder="Doors 19:00, standing">
+            </div>
+            <input type="hidden" name="tier_event_tz" value="{esc_html(str(e['tz']))}">
+            <div class="hint event-hint">The ticket stops working when the event ends. If you leave <b>Ends</b> empty, it works for {card_kinds.DEFAULT_HOURS} hours after it starts. Times are the ones you type here, in your own time zone. People check in at the door under <b>People → Check-in</b>.</div>
+          </div>"""
 
     def _drop_panel(t: dict) -> str:
         d = card_kinds.drop_of(t)
         return f"""
-            <div class="design-panel drop-block">
-              <div class="design-field wide">
-                <label>Drop name (shown on the card)</label>
-                <input name="tier_drop_name" maxlength="{card_kinds.MAX_NAME}" value="{esc_html(d['name'])}" placeholder="Midnight Photo Set">
-              </div>
-              <div class="design-field">
-                <label>Opens (optional)</label>
-                <input name="tier_drop_opens" type="datetime-local" value="{esc_html(d['opens_at'])}">
-              </div>
-              <div class="design-field">
-                <label>Closes (optional)</label>
-                <input name="tier_drop_closes" type="datetime-local" value="{esc_html(d['closes_at'])}">
-              </div>
-              <div class="design-field wide">
-                <label>Note on the card (optional)</label>
-                <input name="tier_drop_note" maxlength="{card_kinds.MAX_NOTE}" value="{esc_html(d['note'])}" placeholder="Signed digital print">
-              </div>
-              <input type="hidden" name="tier_drop_tz" value="{esc_html(str(d['tz']))}">
-              <div class="hint event-hint">People can only claim it between <b>Opens</b> and <b>Closes</b> (leave them empty for no window, so it runs until it sells out). Set <b>Edition size</b> below to how many copies exist; every card gets its own number, like #37 of 100. A collectible never expires. Put the drop's links in <b>Content</b> and tick them for this tier. Times are in your own time zone.</div>
-            </div>"""
+          <div class="design-panel drop-block">
+            <div class="design-field wide">
+              <label>Drop name (shown on the card)</label>
+              <input name="tier_drop_name" maxlength="{card_kinds.MAX_NAME}" value="{esc_html(d['name'])}" placeholder="Midnight Photo Set">
+            </div>
+            <div class="design-field">
+              <label>Opens (optional)</label>
+              <input name="tier_drop_opens" type="datetime-local" value="{esc_html(d['opens_at'])}">
+            </div>
+            <div class="design-field">
+              <label>Closes (optional)</label>
+              <input name="tier_drop_closes" type="datetime-local" value="{esc_html(d['closes_at'])}">
+            </div>
+            <div class="design-field wide">
+              <label>Note on the card (optional)</label>
+              <input name="tier_drop_note" maxlength="{card_kinds.MAX_NOTE}" value="{esc_html(d['note'])}" placeholder="Signed digital print">
+            </div>
+            <input type="hidden" name="tier_drop_tz" value="{esc_html(str(d['tz']))}">
+            <div class="hint event-hint">People can only claim it between <b>Opens</b> and <b>Closes</b> (leave them empty for no window, so it runs until it sells out). Set the <b>Edition size</b> above to how many copies exist; every card gets its own number, like #37 of 100. A drop never expires. Put the drop's links in <b>Content</b> and tick them for this card. Times are in your own time zone.</div>
+          </div>"""
 
-    tier_rows = ""
-    for t in cfg["tiers"]:
+    def _offer_box(t: dict) -> str:
         look_sel = t.get("look") if card_looks.get(cfg["card_looks"], t.get("look")) else ""
-        _tk = card_kinds.clean_kind(t.get("kind"))
-        _tcls = " is-ticket" if _tk == "ticket" else " is-collectible" if _tk == "collectible" else ""
-        tier_rows += f"""
-        <tr class="tier-row{_tcls}">
-          <td data-label="Name"><input name="tier_name" value="{esc_html(t.get('name',''))}"></td>
-          <td data-label="Label"><input name="tier_label" value="{esc_html(t.get('label',''))}"></td>
-          <td data-label="Price"><input name="tier_price" type="number" step="0.01" value="{esc_html(str(t.get('price',0)))}"></td>
-          <td data-label="Card type">{_kind_select(_tk)}</td>
-          <td data-label="Days of access" class="c-days"><input name="tier_expiry_days" type="number" value="{esc_html(str(t.get('expiry_days',31)))}"><span class="days-note">Until the event ends</span></td>
-          <td data-label="Sections (separated by commas)"><input name="tier_sections" value="{esc_html(', '.join(t.get('sections',[])))}" placeholder="downloads, chat"></td>
-          <td data-label="Card look"><select name="tier_look">{looks_page.picker_options(cfg, look_sel)}</select></td>
-          <td><button type="button" class="design-toggle">More ▾</button></td>
-          <td><button type="button" class="remove-tier" title="Remove this tier">×</button></td>
-        </tr>
-        <tr class="design-row{_tcls}" style="display:none">
-          <td colspan="9">
-            {_event_panel(t)}
-            {_drop_panel(t)}
-            {_limits_panel(t)}
-          </td>
-        </tr>"""
+        k = card_kinds.clean_kind(t.get("kind"))
+        cls = " is-ticket" if k == "ticket" else " is-collectible" if k == "collectible" else ""
+        return f"""
+        <div class="offer tier-row{cls}">
+          <div class="offer-head">
+            <span class="offer-type"><span class="ot-pass">Membership</span><span class="ot-ticket">Event ticket</span><span class="ot-collectible">Limited drop</span></span>
+            <button type="button" class="remove-tier" title="Remove this card">Remove</button>
+          </div>
+          <div class="offer-grid">
+            <div class="of"><label>Name</label><input name="tier_name" value="{esc_html(t.get('name',''))}"></div>
+            <div class="of"><label>Shown to visitors as</label><input name="tier_label" value="{esc_html(t.get('label',''))}"></div>
+            <div class="of"><label>Price</label><input name="tier_price" type="number" step="0.01" value="{esc_html(str(t.get('price',0)))}"></div>
+            <div class="of c-days"><label>Days of access</label><input name="tier_expiry_days" type="number" value="{esc_html(str(t.get('expiry_days',31)))}"><span class="days-note">Until the event ends</span></div>
+            {_cap_field(t)}
+            <div class="of"><label>Kind of card</label>{_kind_select(k)}</div>
+            <div class="of wide"><label>What it unlocks (names of your Content sections, separated by commas)</label><input name="tier_sections" value="{esc_html(', '.join(t.get('sections',[])))}" placeholder="downloads, chat"></div>
+            <div class="of"><label>Card look</label><select name="tier_look">{looks_page.picker_options(cfg, look_sel)}</select></div>
+          </div>
+          {_event_panel(t)}
+          {_drop_panel(t)}
+          {_adv_panel(t)}
+        </div>"""
+
+    tier_rows = "".join(_offer_box(t) for t in cfg["tiers"])
+    tier_template = _offer_box({})
+    new_card_types = "".join(
+        f'<button type="button" class="new-type" data-newkind="{k}"><b>{UI_KIND[k]}</b><span>{d}</span></button>'
+        for k, d in (("pass", "Access for a number of days. Unlocks your members-only content."),
+                     ("ticket", "For one event. Shows the event on the card and can be checked in at the door."),
+                     ("collectible", "A numbered, limited edition (like #37 of 100) that never expires.")))
 
     saved_banner = '<div class="banner">Saved.</div>' if request.args.get("saved") else ""
     if request.args.get("logo_note"):
@@ -2764,23 +2780,42 @@ def _dashboard_page() -> str:
   .adv-box summary {{ cursor:pointer; color:var(--accent-text); font-size:12px; margin:4px 0; }}
   .placeholder {{ color:var(--muted); font-size:11px; line-height:1.7; border-left:2px solid var(--line); padding:10px 14px; }}
   .banner {{ background:var(--ok-bg); color:var(--ok); font-size:11px; padding:10px 14px; margin-bottom:16px; letter-spacing:1px; text-transform:uppercase; }}
-  .design-toggle {{ background:transparent; border:1px solid var(--line); color:var(--soft); font-family:var(--font);
-           font-size:10px; padding:6px 10px; cursor:pointer; white-space:nowrap; }}
   .design-panel {{ background:var(--panel); border:1px solid var(--line); padding:16px; margin:6px 0; display:flex; flex-wrap:wrap; gap:16px; align-items:flex-start; }}
   .design-field {{ flex:1 1 180px; min-width:160px; }}
   .design-field.wide {{ flex:1 1 100%; }}
   .design-field label {{ margin-top:0; }}
   .design-field input {{ width:100%; box-sizing:border-box; }}
   .event-hint {{ flex:1 1 100%; margin:0; }}
-  /* Card type: a ticket has no "days", and shows its event details */
-  .days-note {{ display:none; color:var(--muted); font-size:11px; }}
-  tr.tier-row.is-ticket .c-days input, tr.tier-row.is-collectible .c-days input {{ display:none; }}
-  tr.tier-row.is-ticket .c-days .days-note, tr.tier-row.is-collectible .c-days .days-note {{ display:inline; }}
-  tr.design-row:not(.is-ticket) .event-block {{ display:none; }}
-  tr.design-row:not(.is-collectible) .drop-block {{ display:none; }}
-  .lbl-edition {{ display:none; }}
-  tr.design-row.is-collectible .lbl-edition {{ display:inline; }}
-  tr.design-row.is-collectible .lbl-members {{ display:none; }}
+  /* Cards: one box per card; a box shows only the fields for its kind */
+  .offers {{ display:flex; flex-direction:column; gap:16px; margin-top:14px; }}
+  .offer {{ background:var(--panel); border:1px solid var(--line); border-radius:var(--radius-lg, 0); padding:14px 18px 18px; }}
+  .offer-head {{ display:flex; justify-content:space-between; align-items:center; gap:10px; margin-bottom:4px; }}
+  .offer-type {{ font-size:11px; letter-spacing:1.4px; text-transform:uppercase; color:var(--accent-text); font-weight:600; }}
+  .offer-type span {{ display:none; }}
+  .offer:not(.is-ticket):not(.is-collectible) .ot-pass, .offer.is-ticket .ot-ticket, .offer.is-collectible .ot-collectible {{ display:inline; }}
+  .offer .remove-tier {{ width:auto; height:auto; padding:6px 12px; font-family:var(--font); font-size:11px; }}
+  .offer-grid {{ display:grid; grid-template-columns:repeat(auto-fit, minmax(190px, 1fr)); gap:0 16px; }}
+  .of {{ min-width:0; }}
+  .of.wide {{ grid-column:1 / -1; }}
+  .offer input, .offer select {{ width:100%; box-sizing:border-box; }}
+  .of-usage {{ margin-top:4px; }}
+  .days-note {{ display:none; color:var(--muted); font-size:12px; padding:8px 0; }}
+  .offer.is-ticket .c-days input, .offer.is-collectible .c-days input {{ display:none; }}
+  .offer.is-ticket .c-days .days-note, .offer.is-collectible .c-days .days-note {{ display:block; }}
+  .offer .event-block, .offer .drop-block {{ display:none; margin-top:14px; }}
+  .offer.is-ticket .event-block, .offer.is-collectible .drop-block {{ display:flex; }}
+  .lbl-edition, .lbl-tickets {{ display:none; }}
+  .offer.is-collectible .lbl-edition, .offer.is-ticket .lbl-tickets {{ display:inline; }}
+  .offer.is-collectible .lbl-members, .offer.is-ticket .lbl-members {{ display:none; }}
+  .offer-adv {{ margin-top:12px; }}
+  .offer-adv summary {{ cursor:pointer; color:var(--accent-text); font-size:12px; }}
+  .new-types {{ display:none; gap:12px; flex-wrap:wrap; margin-top:14px; }}
+  .new-types.open {{ display:flex; }}
+  .new-type {{ flex:1 1 200px; text-align:left; padding:14px 16px; background:var(--panel); border:1px solid var(--line); color:var(--fg);
+               cursor:pointer; font-family:var(--font); border-radius:var(--radius-lg, 0); }}
+  .new-type:hover {{ border-color:var(--accent-text); }}
+  .new-type b {{ display:block; color:var(--accent-text); font-size:13px; margin-bottom:4px; }}
+  .new-type span {{ display:block; font-size:11px; color:var(--muted); line-height:1.5; }}
   .design-field select {{ width:100%; background:var(--field); border:1px solid var(--line); color:var(--fg);
            font-family:var(--font); font-size:12px; padding:8px 10px; }}
   .logo-row {{ display:flex; align-items:center; gap:8px; flex-wrap:wrap; }}
@@ -2790,7 +2825,7 @@ def _dashboard_page() -> str:
            font-size:9px; padding:4px 8px; cursor:pointer; }}
   .preview-btn {{ background:transparent; border:1px solid var(--accent-text); color:var(--accent-text); font-family:var(--font);
            font-size:10px; letter-spacing:1px; padding:8px 14px; cursor:pointer; flex:1 1 100%; }}
-  .preview-frame {{ width:100%; height:480px; border:1px solid var(--line); margin-top:10px; flex:1 1 100%; background:var(--frame-bg); }}
+  .preview-frame {{ width:100%; height:600px; border:1px solid var(--line); margin-top:10px; flex:1 1 100%; background:var(--frame-bg); }}
   .welcome-box {{ border:1px solid var(--accent-text); background:var(--panel); padding:14px 18px; margin:18px 0 0; }}
   .welcome-box ol {{ margin:8px 0 10px; padding-left:20px; font-size:12px; line-height:1.8; }}
   .checklist {{ border:1px solid var(--line); background:var(--panel); padding:12px 16px; margin:18px 0 0; }}
@@ -2802,37 +2837,20 @@ def _dashboard_page() -> str:
            font-size:12px; line-height:1.7; padding:12px 14px; margin:8px 0; white-space:pre-wrap; word-break:break-all; }}
   .copy-btn {{ background:var(--accent); color:var(--on-accent); border:none; font-family:var(--font);
            font-size:11px; letter-spacing:1.5px; text-transform:uppercase; padding:8px 16px; cursor:pointer; }}
-  /* Tiers on a wide screen: keep the type and look pickers readable, the number boxes small. */
-  @media (min-width:900px) {{
-    #sec-tiers td[data-label="Card type"] select, #sec-tiers td[data-label="Card look"] select {{ min-width:116px; }}
-    #sec-tiers td[data-label="Price"] input, #sec-tiers td.c-days input {{ max-width:84px; }}
-  }}
-  /* Tiers on a phone: one card per tier instead of a table you have to scroll sideways. */
+  /* Cards on a phone: one column, big touch targets. */
   @media (max-width:899px) {{
-    #sec-tiers table, #sec-tiers tbody {{ display:block; width:100%; }}
-    #sec-tiers tr:has(> th) {{ display:none; }}
-    #sec-tiers tr.tier-row {{ display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:10px 12px; margin-top:12px; padding:14px;
-      background:var(--panel); border:1px solid var(--line); border-radius:var(--radius-lg, 8px); }}
-    #sec-tiers tr.tier-row > td {{ display:block; padding:0; min-width:0; }}
-    #sec-tiers tr.tier-row > td[data-label]::before {{ content:attr(data-label); display:block; font-size:12px; color:var(--muted); margin-bottom:4px; letter-spacing:0; text-transform:none; }}
-    #sec-tiers tr.tier-row > td:nth-child(6), #sec-tiers tr.tier-row > td:nth-child(7) {{ grid-column:1 / -1; }}
-    #sec-tiers tr.tier-row select {{ width:100%; box-sizing:border-box; padding:11px 12px; font-size:16px; }}
-    #sec-tiers tr.tier-row input {{ width:100%; box-sizing:border-box; padding:11px 12px; font-size:16px; }}
-    #sec-tiers .design-toggle, #sec-tiers .remove-tier {{ width:100%; height:auto; box-sizing:border-box; padding:11px 12px; font-size:13px; }}
-    #sec-tiers .remove-tier {{ font-size:0 !important; line-height:1; }}
-    #sec-tiers .remove-tier::after {{ content:"Remove tier"; font-size:13px; font-family:var(--font); }}
-    #sec-tiers tr.design-row {{ display:block; margin-top:6px; }}
-    #sec-tiers tr.design-row > td {{ display:block; padding:0; }}
-    #sec-tiers .design-panel {{ padding:14px; gap:14px; }}
-    #sec-tiers .design-field {{ flex:1 1 100%; min-width:0; }}
-    #sec-tiers .design-field input[type=datetime-local] {{ min-height:44px; }}
-    #sec-tiers .design-field input, #sec-tiers .design-field select {{ width:100%; max-width:100%; box-sizing:border-box; padding:11px 12px; font-size:16px; }}
-    #sec-tiers .design-field input[type=file] {{ font-size:13px; padding:8px 0; }}
-    #sec-tiers .preview-btn {{ padding:12px 14px; font-size:13px; }}
+    .offer {{ padding:12px 14px 16px; }}
+    .offer-grid {{ grid-template-columns:minmax(0,1fr); }}
+    .offer select, .offer input {{ padding:11px 12px; font-size:16px; }}
+    .offer .remove-tier {{ padding:9px 14px; font-size:13px; }}
+    .offer .design-panel {{ padding:14px; gap:14px; }}
+    .offer .design-field {{ flex:1 1 100%; min-width:0; }}
+    .offer .design-field input[type=datetime-local] {{ min-height:44px; }}
+    .new-type {{ flex:1 1 100%; }}
   }}
 {theme_css}</style></head>
 <body {body_attrs}>
-  <div class="nav"><a href="/admin/members">Members →</a><a href="/admin/content">Content →</a><a href="/admin/announce">Announce →</a><a href="/admin/logout">Log out</a></div>
+  {admin_theme.nav_html("dashboard")}
   <h1>{title} — Dashboard</h1>
   {saved_banner}
 
@@ -2854,16 +2872,21 @@ def _dashboard_page() -> str:
 
   <form method="POST" action="/admin/dashboard" enctype="multipart/form-data">
 
-    <section class="dsec" id="sec-style" data-title="Dashboard style">
-    <h2>Dashboard style</h2>
-    <div class="hint" style="margin-bottom:10px;">How these admin pages look. Only you see it; cards, emails and the widget don't change. Press <b>Save changes</b> to apply.</div>
-    <div class="style-cards">{style_cards}</div>
+
+    <section class="dsec" id="sec-tiers" data-title="Cards">
+    <h2>Cards</h2>
+    {tier_sections_hint}
+    <div class="hint" style="margin-bottom:6px;">Each box is one card people can get. Press <b>+ New card</b> to add one: a <b>Membership</b> (access for a number of days), an <b>Event ticket</b> (for one event, can be checked in at the door) or a <b>Limited drop</b> (a numbered collectible that never expires). Pick how each card looks under <b>Design → Card looks</b>.</div>
+    <div class="offers" id="tier-body">{tier_rows}</div>
+    <div class="hint" id="no-cards" style="display:none;margin-top:10px;">No cards yet. Press <b>+ New card</b> to make your first one.</div>
+    <button type="button" class="add-tier" id="add-tier">+ New card</button>
+    <div class="new-types" id="new-types">{new_card_types}</div>
 
     </section>
 
-    <section class="dsec" id="sec-branding" data-title="Branding &amp; cards">
+    <section class="dsec" id="sec-branding" data-title="Branding">
     <h2>Branding</h2>
-    <div class="hint" style="margin-bottom:6px;">This is the <b>default look</b> for your cards. To make other looks (like Trial or Monthly), open <b>Card looks</b>, then pick one for each tier under <b>Tiers &amp; pricing</b>.</div>
+    <div class="hint" style="margin-bottom:6px;">This is the <b>default look</b> for your cards. To make other looks (like Trial or Monthly), open <b>Card looks</b>, then pick one for each card under <b>Cards</b>.</div>
     <label>Creator name</label>
     <input name="creator_name" value="{esc_html(cfg['creator_name'])}">
     <label>Card title (the big name on cards and emails)</label>
@@ -2970,17 +2993,13 @@ def _dashboard_page() -> str:
 
     </section>
 
-    <section class="dsec" id="sec-tiers" data-title="Tiers &amp; pricing">
-    <h2>Tiers &amp; pricing</h2>
-    {tier_sections_hint}
-    <div class="hint" style="margin-bottom:8px;">Each tier is its own kind of card (for example Monthly, Trial or VIP). Pick a <b>Card look</b> for each one; make and edit looks under <b>Card looks</b>. <b>Card type</b> is <b>Access pass</b> (a membership that lasts a number of days) or <b>Event ticket</b> (for one event: it shows the event on the card, stops working when the event ends, and can be checked in at the door) or <b>Collectible</b> (a limited-edition drop: every card is numbered, like #37 of 100, and never expires). <b>More</b> opens the event or drop details, how many members a tier can have and how many cards one email can get.</div>
-    <table>
-      <tr><th>Name</th><th>Label</th><th>Price</th><th>Card type</th><th>Expiry (days)</th><th>Sections (separated by commas)</th><th>Card look</th><th></th><th></th></tr>
-      <tbody id="tier-body">{tier_rows}</tbody>
-    </table>
-    <button type="button" class="add-tier" id="add-tier">+ Add tier</button>
+    <section class="dsec" id="sec-style" data-title="Dashboard style">
+    <h2>Dashboard style</h2>
+    <div class="hint" style="margin-bottom:10px;">How these admin pages look. Only you see it; cards, emails and the widget don't change. Press <b>Save changes</b> to apply.</div>
+    <div class="style-cards">{style_cards}</div>
 
     </section>
+
 
     <section class="dsec" id="sec-payment" data-title="Payment">
     <h2>Payment</h2>
@@ -3091,46 +3110,7 @@ def _dashboard_page() -> str:
   {backup_html}
   </section>
 
-  <template id="tier-row-template">
-    <tr class="tier-row">
-      <td data-label="Name"><input name="tier_name" value=""></td>
-      <td data-label="Label"><input name="tier_label" value=""></td>
-      <td data-label="Price"><input name="tier_price" type="number" step="0.01" value="0"></td>
-      <td data-label="Card type">{_kind_select("pass")}</td>
-      <td data-label="Days of access" class="c-days"><input name="tier_expiry_days" type="number" value="31"><span class="days-note">Until the event ends</span></td>
-      <td data-label="Sections (separated by commas)"><input name="tier_sections" value="" placeholder="downloads, chat"></td>
-      <td data-label="Card look"><select name="tier_look">{looks_page.picker_options(cfg, "")}</select></td>
-      <td><button type="button" class="design-toggle">More ▾</button></td>
-      <td><button type="button" class="remove-tier" title="Remove this tier">×</button></td>
-    </tr>
-    <tr class="design-row" style="display:none">
-      <td colspan="9">
-        {_event_panel({})}
-        {_drop_panel({})}
-        <div class="design-panel limits-panel">
-          <div class="design-field">
-            <label><span class="lbl-members">Max members (blank = no limit)</span><span class="lbl-edition">Edition size (blank = open edition)</span></label>
-            <input name="tier_max_members" type="number" min="1" step="1" value="" placeholder="no limit">
-          </div>
-          <div class="design-field">
-            <label>Show visitors how many spots are left?</label>
-            <select name="tier_show_spots">
-              <option value="show" selected>Yes, e.g. "12 left"</option>
-              <option value="hide">No, only show "Sold out" when full</option>
-            </select>
-          </div>
-          <div class="design-field">
-            <label>Cards per email address</label>
-            <select name="tier_per_email">
-              <option value="one_active" selected>One working card at a time</option>
-              <option value="one_ever">Only one ever (good for a free trial)</option>
-              <option value="unlimited">No limit</option>
-            </select>
-          </div>
-        </div>
-      </td>
-    </tr>
-  </template>
+  <template id="tier-row-template">{tier_template}</template>
 
   <script>
     // Embed snippet — built here (not in the HTML above) for two reasons:
@@ -3165,69 +3145,62 @@ def _dashboard_page() -> str:
       }});
     }})();
 
-    document.getElementById('add-tier').addEventListener('click', () => {{
-      const tpl = document.getElementById('tier-row-template');
-      const rows = tpl.content.cloneNode(true);
-      document.getElementById('tier-body').appendChild(rows);
-    }});
-
-    // Card type: show or hide the event details; remember the browser's time zone for the event.
+    // Cards: "+ New card" asks which kind, then adds a box for it. A box shows only the
+    // fields for its kind; the browser's time zone is remembered for event and drop times.
     (function() {{
       const body = document.getElementById('tier-body');
-      function designRowOf(row) {{ const d = row.nextElementSibling; return d && d.classList.contains('design-row') ? d : null; }}
-      function sync(row, open) {{
-        const sel = row.querySelector('[name="tier_kind"]');
+      const tpl = document.getElementById('tier-row-template');
+      const chooser = document.getElementById('new-types');
+      const empty = document.getElementById('no-cards');
+      function boxOf(el) {{ return el.closest('.offer'); }}
+      function sync(box, fresh) {{
+        const sel = box.querySelector('[name="tier_kind"]');
         if (!sel) return;
         const t = sel.value === 'ticket', c = sel.value === 'collectible';
-        row.classList.toggle('is-ticket', t);
-        row.classList.toggle('is-collectible', c);
-        const note = row.querySelector('.days-note');
+        box.classList.toggle('is-ticket', t);
+        box.classList.toggle('is-collectible', c);
+        const note = box.querySelector('.days-note');
         if (note) note.textContent = c ? 'Never expires' : 'Until the event ends';
-        const d = designRowOf(row);
-        if (d) {{
-          d.classList.toggle('is-ticket', t); d.classList.toggle('is-collectible', c);
-          if ((t || c) && open) d.style.display = '';
-          // a collectible is one copy per person by default
-          const pe = d.querySelector('select[name=tier_per_email]');
-          if (c && open && pe && pe.value === 'one_active') pe.value = 'one_ever';
-        }}
+        // a collectible is one copy per person by default
+        const pe = box.querySelector('select[name=tier_per_email]');
+        if (c && fresh && pe && pe.value === 'one_active') pe.value = 'one_ever';
       }}
-      function setTz(d) {{
-        const st = d.querySelector('[name="tier_event_start"]'), tz = d.querySelector('[name="tier_event_tz"]');
+      function setTz(box) {{
+        const st = box.querySelector('[name="tier_event_start"]'), tz = box.querySelector('[name="tier_event_tz"]');
         if (st && tz && st.value) {{
           const when = new Date(st.value);
           if (!isNaN(when)) tz.value = String(when.getTimezoneOffset());
         }}
-        const o = d.querySelector('[name="tier_drop_opens"]'), c = d.querySelector('[name="tier_drop_closes"]'), dz = d.querySelector('[name="tier_drop_tz"]');
+        const o = box.querySelector('[name="tier_drop_opens"]'), c = box.querySelector('[name="tier_drop_closes"]'), dz = box.querySelector('[name="tier_drop_tz"]');
         const dv = o && o.value ? o.value : (c && c.value ? c.value : '');
         if (dz && dv) {{ const w = new Date(dv); if (!isNaN(w)) dz.value = String(w.getTimezoneOffset()); }}
       }}
+      function refresh() {{ empty.style.display = body.querySelector('.offer') ? 'none' : ''; }}
       body.addEventListener('change', (e) => {{
-        const row = e.target.closest('tr');
-        if (!row) return;
-        if (e.target.name === 'tier_kind') {{ sync(row, true); return; }}
-        if (e.target.name === 'tier_event_start' || e.target.name === 'tier_drop_opens' || e.target.name === 'tier_drop_closes') {{ const d = row.classList.contains('design-row') ? row : null; if (d) setTz(d); }}
+        const box = boxOf(e.target);
+        if (!box) return;
+        if (e.target.name === 'tier_kind') {{ sync(box, true); return; }}
+        if (e.target.name === 'tier_event_start' || e.target.name === 'tier_drop_opens' || e.target.name === 'tier_drop_closes') setTz(box);
       }});
-      Array.from(body.querySelectorAll('tr.tier-row')).forEach((r) => sync(r, false));
-      document.getElementById('add-tier').addEventListener('click', () => {{
-        const rows = body.querySelectorAll('tr.tier-row'); if (rows.length) sync(rows[rows.length - 1], false);
+      body.addEventListener('click', (e) => {{
+        if (e.target.classList.contains('remove-tier')) {{ boxOf(e.target).remove(); refresh(); }}
       }});
+      document.getElementById('add-tier').addEventListener('click', () => {{ chooser.classList.toggle('open'); }});
+      chooser.addEventListener('click', (e) => {{
+        const btn = e.target.closest('[data-newkind]');
+        if (!btn) return;
+        body.appendChild(tpl.content.cloneNode(true));
+        const box = body.lastElementChild;
+        box.querySelector('[name="tier_kind"]').value = btn.getAttribute('data-newkind');
+        sync(box, true);
+        chooser.classList.remove('open'); refresh();
+        const first = box.querySelector('[name="tier_name"]'); if (first) first.focus();
+        // adding a box is a change: let the Save bar know
+        box.dispatchEvent(new Event('input', {{ bubbles: true }}));
+      }});
+      Array.from(body.querySelectorAll('.offer')).forEach((b) => sync(b, false));
+      refresh();
     }})();
-
-    document.getElementById('tier-body').addEventListener('click', (e) => {{
-      if (e.target.classList.contains('remove-tier')) {{
-        const mainRow = e.target.closest('tr');
-        const designRow = mainRow.nextElementSibling;
-        mainRow.remove();
-        if (designRow && designRow.classList.contains('design-row')) designRow.remove();
-        return;
-      }}
-      if (e.target.classList.contains('design-toggle')) {{
-        const designRow = e.target.closest('tr').nextElementSibling;
-        designRow.style.display = (designRow.style.display === 'none') ? '' : 'none';
-        return;
-      }}
-    }});
 
     // Payment: "Use the practice page" fills in the pretend payment link.
     (function() {{

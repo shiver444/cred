@@ -291,6 +291,8 @@ def generate_card(
     width: 100%;
     max-width: 380px;
     aspect-ratio: 0.76 / 1;
+    display: flex;
+    flex-direction: column;
     border-radius: 26px;
     background:
       radial-gradient(circle at 18% 10%, rgba(255,255,255,0.05), transparent 42%),
@@ -298,7 +300,9 @@ def generate_card(
     box-shadow:
       0 0 0 1px rgba(230,223,210,0.08),
       0 30px 70px rgba(0,0,0,0.65);
-    overflow: hidden;
+    /* No overflow:hidden here on purpose: with it the card kept its fixed shape and
+       pushed the QR code out of the bottom when the text was long or the screen narrow.
+       Now the card grows to fit; the decorative layers round their own corners instead. */
   }}
 
   /* film-grain texture */
@@ -339,7 +343,7 @@ def generate_card(
   .card-content {{
     position: relative;
     z-index: 2;
-    height: 100%;
+    flex: 1 1 auto;
     padding: 34px 28px 24px;
     display: flex;
     flex-direction: column;
@@ -466,8 +470,9 @@ def generate_card(
   .card--clean .card-logo {{ filter: none; }}
 
   /* The creator's own picture behind the card, darkened for readability. */
-  .card-bg {{ position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; z-index: 0; }}
-  .card-scrim {{ position: absolute; inset: 0; z-index: 0; pointer-events: none; }}
+  .card-bg {{ position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; z-index: 0; border-radius: inherit; }}
+  .card-scrim {{ position: absolute; inset: 0; z-index: 0; pointer-events: none; border-radius: inherit; }}
+  .card::before, .card::after, .card-vignette {{ border-radius: inherit; }}
   /* Over a picture the small grey text needs more contrast. */
   .card--has-bg .card-content {{ text-shadow: 0 1px 3px rgba(0,0,0,0.65); }}
   .card--has-bg .card-meta {{ color: #e6dfd2; }}

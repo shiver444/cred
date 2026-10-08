@@ -13,6 +13,7 @@ again server-side through content_store.save().
 """
 
 import json
+import admin_theme
 from html import escape as esc_html
 
 
@@ -39,6 +40,7 @@ def render(accent: str, title: str, content: dict, tiers: list, max_mb: int = 10
             .replace("__CONTENT__", _json_for_script(content))
             .replace("__TIERS__", _json_for_script(tier_info))
             .replace("__THEME__", theme_css)
+            .replace("__NAV__", admin_theme.nav_html("content"))
             .replace("__BODY_ATTRS__", body_attrs)
             .replace("__THEME_JS__", theme_js)
             .replace("__META__", _json_for_script({"max_mb": int(max_mb), "used_bytes": int(used_bytes),
@@ -118,7 +120,7 @@ _TEMPLATE = r"""<!DOCTYPE html>
   .upmsg.err { color:var(--bad); }
 __THEME__</style></head>
 <body __BODY_ATTRS__>
-  <div class="nav"><a href="/admin/dashboard">← Dashboard</a><a href="/admin/members">Members →</a><a href="/admin/announce">Announce →</a><a href="/admin/logout">Log out</a></div>
+  __NAV__
   <h1>__TITLE__ — Content</h1>
   <details class="chelp" open><summary>How this page works</summary>
   <div class="hint">This is what members see after they verify. Each <b>section</b> has a short name (like <b>downloads</b>). A tier unlocks the sections listed in its "Sections" field on the Dashboard. Press <b>Save content</b> when you're done.</div>

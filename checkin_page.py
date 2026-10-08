@@ -10,6 +10,7 @@ This file only draws the page; credential_api.py does the look-ups
 """
 
 import json
+import admin_theme
 import re
 from datetime import datetime, timezone
 from html import escape
@@ -89,7 +90,7 @@ def render(theme_css: str, theme_js: str, body_attrs: str, title: str, stat_rows
   .warn {{ background:var(--warn-bg); color:var(--warn); font-size:12px; line-height:1.6; padding:10px 14px; margin:14px 0 0; }}
 {theme_css}</style></head>
 <body {body_attrs}>
-  <div class="nav"><a href="/admin/dashboard">← Dashboard</a><a href="/admin/members">← Members</a><a href="/admin/logout">Log out</a></div>
+  {admin_theme.nav_html("checkin", True)}
   <h1>{escape(title)} — Check-in</h1>
   <div class="ci">
     <div class="hint">Scan a ticket's QR code, or paste its link or code. A good ticket is checked off right away and can't be used again.</div>

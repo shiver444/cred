@@ -10,6 +10,7 @@ This file only draws the page. credential_api.py does the work
 """
 
 import json
+import admin_theme
 from html import escape
 
 
@@ -18,7 +19,7 @@ def render(theme_css: str, theme_js: str, body_attrs: str, title: str, state: di
     return f"""<!DOCTYPE html>
 <html><head><meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Announce — Admin</title>
+<title>News — Admin</title>
 <style>
   body {{ background:var(--bg); color:var(--fg); font-family:var(--font); padding:32px; }}
   h1 {{ color:var(--accent-text); font-size:16px; letter-spacing:2px; text-transform:uppercase; }}
@@ -55,8 +56,8 @@ def render(theme_css: str, theme_js: str, body_attrs: str, title: str, state: di
   #an-frame {{ display:none; width:100%; height:520px; border:1px solid var(--line); margin-top:10px; background:var(--frame-bg); }}
 {theme_css}</style></head>
 <body {body_attrs}>
-  <div class="nav"><a href="/admin/dashboard">← Dashboard</a><a href="/admin/members">Members →</a><a href="/admin/content">Content →</a><a href="/admin/logout">Log out</a></div>
-  <h1>{escape(title)} — Announce</h1>
+  {admin_theme.nav_html("announce")}
+  <h1>{escape(title)} — News</h1>
   <div class="an">
     <div class="hint">Tell your members about something new, like a new post or upload. Pin it at the top of their page, email it to a group, or both.</div>
 
