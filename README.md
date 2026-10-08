@@ -67,9 +67,13 @@ can revoke any of them at any time.
 - Renewals: one click on the Members page extends a member (same card, same
   link), and an optional email reminds members shortly before their access
   ends.
-- Two kinds of card: an access pass (a membership with members-only content) or an
-  event ticket (event, time, place and note on the card, valid until the event ends),
-  with a Check-in page for the door that scans the QR code and marks each ticket used.
+- Three kinds of card: an access pass (a membership with members-only content), an
+  event ticket (event, time, place and note on the card, valid until the event ends,
+  with a Check-in page for the door that scans the QR code), or a collectible (a
+  numbered limited-edition drop, "#37 of 100", with a claim window; it never expires).
+- Small touches: a welcome box on a fresh dashboard, automatic YouTube thumbnails, an
+  optional locked preview of your content for visitors, and optional terms/privacy links
+  in the sign-up box.
 - Announcements: write one note, pin it at the top of every member's page and/or email it
   to everyone, one tier, or one event's ticket holders. The welcome, reminder and
   "access extended" emails are all editable.

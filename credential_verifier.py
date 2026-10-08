@@ -119,6 +119,7 @@ def verify_credential(credential_id: str = None,
             "days_left":     days_left,
             "fingerprint_hash": entry.get("fingerprint_hash", "NOT_ANCHORED"),
             **({"kind": "ticket", "event": entry.get("event") or {}} if is_ticket else {}),
+            **({"kind": "collectible", "drop": entry.get("drop") or {}} if entry.get("kind") == "collectible" else {}),
         }
 
     # ── Full path: verify from bundle ZIP ──
@@ -208,6 +209,8 @@ def _verify_from_bundle(bundle_path: str, ip: str = None) -> dict:
             "fingerprint_hash": manifest.get("fingerprint_hash", "NOT_ANCHORED"),
             **({"kind": "ticket", "event": (manifest.get("metadata") or {}).get("event") or {}}
                if (manifest.get("metadata") or {}).get("kind") == "ticket" else {}),
+            **({"kind": "collectible", "drop": (manifest.get("metadata") or {}).get("drop") or {}}
+               if (manifest.get("metadata") or {}).get("kind") == "collectible" else {}),
         }
 
     except Exception as e:

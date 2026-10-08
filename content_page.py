@@ -327,6 +327,12 @@ __THEME__</style></head>
     lay.value = sec.layout === 'grid' ? 'grid' : 'list';
     lay.addEventListener('change', function () { sec.layout = lay.value; touch(); });
     box.appendChild(el('div', {}, [el('label', { text: 'Show the items as' }), lay]));
+    var tz = el('input', { type: 'checkbox', style: 'width:auto' });
+    tz.checked = !!sec.teaser;
+    tz.addEventListener('change', function () { if (tz.checked) sec.teaser = true; else delete sec.teaser; touch(); });
+    box.appendChild(el('label', { style: 'display:flex;gap:8px;align-items:center;text-transform:none;letter-spacing:0;margin-top:12px' }, [
+      tz, el('span', { text: 'Show the item titles to visitors as a locked preview (no links, files or notes)' })
+    ]));
     sec.items = sec.items || [];
     if (!sec.items.length) box.appendChild(el('div', { class: 'empty', text: 'No items yet.' }));
     sec.items.forEach(function (it, i) {

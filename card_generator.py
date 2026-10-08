@@ -109,6 +109,7 @@ def generate_card(
     qr_style: str = "solid",
     kind: str = "pass",
     event: dict = None,
+    drop: dict = None,
     save: bool = True,
 ) -> str:
     """
@@ -154,6 +155,11 @@ def generate_card(
     at the bottom, and leaves out the barcode line to make room. The look
     (style, colors, picture) is chosen separately, exactly as for a pass.
 
+    `kind="collectible"` is a numbered limited-edition card: `drop` carries
+    {name, note, edition, of}. It reads "Collectible" under the title, shows
+    the drop name and "#37 of 100", never an expiry date, and says "Limited
+    edition" at the bottom. Same compact layout as a ticket.
+
     `show_barcode` and `logo_data_uri` exist so a specific tier/pass type
     can override the deployment's global look (see the per-tier "design"
     editor in /admin/dashboard) — `logo_data_uri`, when given, is used
@@ -168,8 +174,11 @@ def generate_card(
         accent_color = "#00e87a"
     accent_color = accent_color.strip()
     is_ticket    = kind == "ticket"
+    is_coll      = kind == "collectible"
     event        = event if (is_ticket and isinstance(event, dict)) else {}
-    label_text   = "Event Ticket" if is_ticket else ((card_label or "").strip()[:40] or "Member Keycard")
+    drop         = drop if (is_coll and isinstance(drop, dict)) else {}
+    label_text   = ("Event Ticket" if is_ticket else "Collectible" if is_coll
+                    else ((card_label or "").strip()[:40] or "Member Keycard"))
 
     sections = sections or []
     card_manifest = {
@@ -181,6 +190,7 @@ def generate_card(
         "issued_at":      issued_at,
         "expires_at":     expires_at,
         **({"kind": "ticket"} if is_ticket else {}),
+        **({"kind": "collectible", "edition": drop.get("edition")} if is_coll else {}),
     }
     # Goes inside a <script> block: "<" is written as \u003c so a name like
     # "</script><script>…" can never close the block (JSON.parse reads it back
@@ -216,14 +226,14 @@ def generate_card(
     e_link    = _esc(access_link, quote=True)
     accent_color = _esc(accent_color, quote=True)
     logo_html = f'<img class="card-logo" src="{_esc(logo_uri, quote=True)}" alt="{_esc(creator_name, quote=True)}">' if logo_uri else ""
-    barcode_html = '<div class="card-barcode"></div>' if (show_barcode and not is_ticket) else ''
+    barcode_html = '<div class="card-barcode"></div>' if (show_barcode and not is_ticket and not is_coll) else ''
     has_bg = is_logo_data_uri(background_data_uri)
     dim = DIM_ALPHA.get(background_dim, DIM_ALPHA[DEFAULT_DIM])
     bg_html = (f'<img class="card-bg" src="{_esc(background_data_uri, quote=True)}" alt="">'
                f'<div class="card-scrim" style="background:rgba(0,0,0,{dim})"></div>') if has_bg else ""
     qr_style = qr_style if qr_style in QR_STYLES else "solid"
     card_classes = ("card" + (f" card--{card_style}" if card_style != "distressed" else "") + (" card--has-bg" if has_bg else "")
-                    + (" card--is-ticket" if is_ticket else "")
+                    + (" card--is-ticket" if (is_ticket or is_coll) else "")
                     + ("" if qr_style == "solid" else f" card--qr-{qr_style}"))
 
     if is_ticket:
@@ -236,6 +246,18 @@ def generate_card(
         if event.get("note"):  rows.append(_row("NOTE", event["note"]))
         rows.append(_row("ADMIT", tier))
         if holder_name:        rows.append(_row("NAME", holder_name))
+        rows.append(f'      <div><b>ID</b> // <span>{formatted_id}</span></div>')
+        meta_rows = "\n".join(rows)
+    elif is_coll:
+        def _crow(label, value, cls=""):
+            return f'      <div{(" class=" + chr(34) + cls + chr(34)) if cls else ""}><b>{label}</b> // <span>{_esc(value)}</span></div>'
+        n, of = drop.get("edition"), drop.get("of")
+        rows = []
+        if drop.get("name"):  rows.append(_crow("DROP", drop["name"], "ev-name"))
+        if n:                 rows.append(_crow("EDITION", f"#{n} of {of}" if of else f"#{n}"))
+        if drop.get("note"):  rows.append(_crow("NOTE", drop["note"]))
+        if holder_name:       rows.append(_crow("COLLECTOR", holder_name))
+        rows.append(_crow("CLAIMED", (issued_at or "")[:10]))
         rows.append(f'      <div><b>ID</b> // <span>{formatted_id}</span></div>')
         meta_rows = "\n".join(rows)
     else:
@@ -551,7 +573,7 @@ def generate_card(
     <div class="card-bottom-row">
       <div class="card-brand-block">
         <div>{(e_issuer + " // ") if e_issuer else ""}{_esc(creator_name.upper())}</div>
-        <div class="dim">{"ADMIT ONE" if is_ticket else "AUTHORIZED ACCESS"}</div>
+        <div class="dim">{"ADMIT ONE" if is_ticket else "LIMITED EDITION" if is_coll else "AUTHORIZED ACCESS"}</div>
       </div>
       <a class="card-qr-link" href="{e_link}" target="_blank" rel="noopener">
         <div class="card-qr-box">{qr_svg}</div>

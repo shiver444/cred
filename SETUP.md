@@ -71,7 +71,7 @@ be reset every time you deployed. Two things follow from this:
 This also holds your saved card looks and their uploaded pictures. Your
 members-only content (step 4) is stored the same way.
 
-### Card type: Access pass or Event ticket
+### Card type: Access pass, Event ticket or Collectible
 
 Every tier has a **Card type**:
 
@@ -81,6 +81,8 @@ Every tier has a **Card type**:
   "Until the event ends" and **More ▾** opens by itself with the event's details:
   **Event name**, **Starts**, **Ends** (optional), **Place** and a **Note on the
   ticket** (a seat, "doors 19:00"...). Type the times in your own time zone.
+- **Collectible**: a limited-edition drop (an exclusive photo set, an album, a
+  single, a one-day-only release). See "Collectibles" below.
 
 A ticket card shows the event, the time, the place and the note in place of the
 plain "access class" row, says "Event Ticket" under the title and "Admit one" at
@@ -139,6 +141,35 @@ simultaneous payments can overshoot the limit by a few. A member who wants to
 renew while their card is still working is blocked by the default one-card
 rule until it expires. Choose *No limit* on that tier if you'd rather allow it.
 
+### Collectibles (limited-edition drops)
+
+Pick **Collectible** as the Card type to sell or give away a numbered edition. The
+**Days** box turns into "Never expires" and **More ▾** opens with:
+
+- **Drop name** (shown on the card), **Opens** and **Closes** (both optional: people can
+  only claim it inside that window; leave both empty and it stays open until it sells
+  out) and a **Note on the card** ("Signed print").
+- **Edition size**: how many copies exist (the same box other tiers call "Max members").
+  Every card gets its own number, like **#37 of 100**, printed on the card and signed
+  into it. Leave it empty for an open edition (numbered, but no limit).
+
+A collectible card says "Collectible" under the title and "Limited edition" at the bottom,
+shows "forever" instead of an expiry date, and never expires, so it never gets a
+reminder and can't be extended. The tier picker on your site shows the drop and when
+it closes; before it opens the tier says "Opens ..." and after it closes "Drop closed",
+and neither can be picked. A revoked copy keeps its number, so a sold-out edition stays
+sold out. By default one person can claim one copy (change "Cards per email address" in
+**More ▾** if you want otherwise). Free or paid, it works like any other tier. When you
+give one away by hand from Members, "Ignore limits" lets you hand out a copy outside
+the window.
+
+What the collector gets is the **drop content**: make a section on the **Content** page
+with the links (a Drive or Bandcamp link, a YouTube video, a download) and list its key
+under that tier's "Sections". Only people holding that card can see it. Uploaded files
+count against your storage, so for big albums or photo sets a link to where they live is
+usually easier. Cards can't be transferred or resold in this version: the card belongs
+to the email it was claimed with.
+
 ## 4. Add your members-only content
 
 Log in to the dashboard and open **Content** (top of the page). Here you
@@ -154,6 +185,13 @@ decide what a member sees once they're verified:
   "Sections" field. List the keys that tier unlocks, e.g. `downloads, chat`.
   The Content page shows who sees what, and flags a tier that names a
   section which doesn't exist.
+- **Thumbnails**: an item with a YouTube link gets that video's picture automatically.
+  Any item can also have its own preview picture (upload one) or be a file you upload.
+- **Locked preview**: tick "Show the item titles to visitors as a locked preview" on a
+  Links section and visitors who have no card yet see a "What members get" box above the
+  sign-up with the titles (and which tiers include them). They never see links, files or
+  notes. The box disappears once someone is signed in.
+- Items and sections can be reordered with the arrows (↑ ↓) next to each.
 - Press **Save content**. It's stored on your Volume next to your other
   settings, so it survives redeploys. (`content.json` in the repo is only
   the starter you get on first boot; after your first save, edit in the
@@ -588,6 +626,10 @@ Branding). You can set:
   sign-up pop-up (title, text and button). Leave a box empty to keep the
   standard wording. Text is shown exactly as typed; HTML in it is not
   interpreted.
+- **Terms and privacy links** (optional) — add a link to your terms and/or privacy page
+  and the sign-up pop-up says "By getting a card you agree to the Terms and Privacy
+  Policy." with those words linked (opens in a new tab). Only http and https links are
+  accepted. Leave both empty for no line at all.
 
 Two live previews (one on a dark page, one on a light page) show your real
 widget and follow every change before you save. The **accent color** (under

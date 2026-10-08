@@ -25,6 +25,7 @@ import requests
 from html import escape as _esc
 from pathlib import Path
 
+import card_kinds
 import config_store
 import public_url
 
@@ -133,7 +134,10 @@ def build_email(
     intro_t   = (str(pick("email_intro")   or "").strip() or DEFAULT_INTRO)[:MAX_INTRO]
     signoff_t = (str(pick("email_signoff") or "").strip())[:MAX_SIGNOFF]
 
-    expires = (expires_at or "")[:10]
+    # A collectible never expires: say so instead of printing the far-future date.
+    never   = card_kinds.is_never(expires_at)
+    expires = "forever" if never else (expires_at or "")[:10]
+    exp_label = "VALID" if never else "VALID UNTIL"
     values  = {"name": to_name, "tier": tier, "creator": CREATOR_NAME,
                "brand": CARD_TITLE, "expires": expires}
 
@@ -270,7 +274,7 @@ def build_email(
     <span class="row-val">{_esc(credential_id[:16].upper())}</span>
   </div>
   <div class="row">
-    <span class="row-label">VALID UNTIL</span>
+    <span class="row-label">{exp_label}</span>
     <span class="row-val">{_esc(expires)}</span>
   </div>
   <div class="row">
@@ -325,7 +329,7 @@ def build_email(
 MEMBER:      {to_name.upper()}
 TIER:        {tier}
 ID:          {credential_id[:16].upper()}
-VALID UNTIL: {expires}
+{exp_label+":":<12} {expires}
 ISSUED BY:   {CREATOR_NAME.upper()}
 
 YOUR PERSONAL ACCESS LINK (this is what gets you in):

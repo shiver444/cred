@@ -527,6 +527,13 @@ def _signup_check(cfg: dict, tier_cfg: dict, tier: str, email: str):
             return ("event_not_ready", "This ticket isn't ready yet: the event has no date.")
         if card_kinds.is_over(ev):
             return ("event_over", "This event has already happened.")
+    if card_kinds.is_collectible(tier_cfg):
+        state = card_kinds.drop_state(card_kinds.drop_of(tier_cfg))
+        if state == "soon":
+            opens = card_kinds.public_drop(tier_cfg)["opens"]
+            return ("drop_not_open", "This drop hasn't opened yet" + (f": it opens {opens}." if opens else "."))
+        if state == "closed":
+            return ("drop_closed", "This drop is closed.")
     from member_registry import list_all as registry_list
     from payment_requests import list_all as requests_list
     return limits.check_signup(tier_cfg, tier, email, registry_list(), requests_list(),
@@ -560,7 +567,12 @@ def _issue_and_fulfill(name: str, email: str, tier: str, days: int, sections: li
     # An event ticket works until its event ends, whatever number of days the
     # caller passed; its event details are signed into the card and shown on it.
     tier_cfg_t = get_tier(cfg, tier)
-    kind, event, ends_at = "pass", None, None
+    kind, event, ends_at, drop = "pass", None, None, None
+    if card_kinds.is_collectible(tier_cfg_t):
+        # A collectible never expires. Its drop window is checked by the caller's
+        # `check` (the creator can override that when giving one away by hand).
+        kind, ends_at = "collectible", card_kinds.NEVER
+        days = 36500
     if card_kinds.is_ticket(tier_cfg_t):
         ev = card_kinds.event_of(tier_cfg_t)
         ends_at = card_kinds.ends_utc(ev)
@@ -580,6 +592,15 @@ def _issue_and_fulfill(name: str, email: str, tier: str, days: int, sections: li
             if blocked:
                 raise SignupBlocked(*blocked)
 
+        # A collectible is one numbered copy of a limited edition: the next free
+        # number, counted from the cards already issued for this tier (revoked
+        # ones keep theirs).
+        if kind == "collectible":
+            from member_registry import list_all as _reg_all
+            used = [int((e.get("drop") or {}).get("edition") or 0) for e in _reg_all()
+                    if str(e.get("tier") or "").upper() == str(tier).upper()]
+            drop = card_kinds.card_drop(tier_cfg_t, max(used + [0]) + 1, limits.tier_max(tier_cfg_t))
+
         # 1 — Issue
         result = issue_credential(
             name        = name,
@@ -587,7 +608,8 @@ def _issue_and_fulfill(name: str, email: str, tier: str, days: int, sections: li
             tier        = tier,
             expiry_days = days,
             sections    = sections,
-            metadata    = {"kind": "ticket", "event": event} if kind == "ticket" else None,
+            metadata    = ({"kind": "ticket", "event": event} if kind == "ticket"
+                           else {"kind": "collectible", "drop": drop} if kind == "collectible" else None),
             expires_at_override = ends_at,
         )
 
@@ -618,6 +640,7 @@ def _issue_and_fulfill(name: str, email: str, tier: str, days: int, sections: li
             background_dim      = design["background_dim"],
             kind                = kind,
             event               = event,
+            drop                = drop,
         )
 
         # 4 — Registry (payment_meta, if given, is recorded on the entry —
@@ -629,6 +652,7 @@ def _issue_and_fulfill(name: str, email: str, tier: str, days: int, sections: li
             "payment":     payment_meta,
             "kind":        kind,
             "event":       event,
+            "drop":        drop,
         })
 
     # 5 — Email (skipped when the caller doesn't want one, e.g. the creator
@@ -1205,6 +1229,8 @@ def admin_members_extend():
             return err("No such member.", 404)
         if entry.get("revoked"):
             return err("This member's access was revoked, so it can't be extended.", 409)
+        if entry.get("kind") == "collectible":
+            return err("A collectible never expires, so there is nothing to extend.", 409)
         was_active = limits.is_active(entry)
         if not was_active:
             # An ended card that comes back takes a spot again, so a full tier
@@ -1596,7 +1622,8 @@ def admin_members():
         except (ValueError, TypeError):
             default_days = 30
         default_days = min(max(default_days, 1), member_registry.MAX_EXTEND_DAYS)
-        if revoked:
+        is_cl = m.get("kind") == "collectible"
+        if revoked or is_cl:                    # a collectible never expires: nothing to extend
             extend_cell = '—'
         else:
             notify_box = ('<label class="small"><input type="checkbox" class="extend-notify" checked> email them</label>'
@@ -1610,6 +1637,10 @@ def admin_members():
             _ev = m.get("event") if isinstance(m.get("event"), dict) else {}
             tier_esc += ('<br><span class="small">ticket'
                          + (f' · {esc_html(str(_ev.get("name") or ""))}' if _ev.get("name") else "") + '</span>')
+        if is_cl:
+            _dr = m.get("drop") if isinstance(m.get("drop"), dict) else {}
+            _num = f' · #{esc_html(str(_dr.get("edition")))}' + (f' of {esc_html(str(_dr.get("of")))}' if _dr.get("of") else "") if _dr.get("edition") else ""
+            tier_esc += f'<br><span class="small">collectible{_num}</span>'
         if isinstance(m.get("payment"), dict) and m["payment"].get("comped"):
             tier_esc += '<br><span class="small">given free</span>'
 
@@ -1655,7 +1686,7 @@ def admin_members():
           <td class="c-tier" data-label="Tier">{tier_esc}</td>
           <td class="c-sections" data-label="Sections">{sections_esc}</td>
           <td class="c-issued" data-label="Issued">{(m.get('issued_at') or '')[:16].replace('T',' ')}</td>
-          <td class="exp-cell c-exp" data-label="Expires">{(m.get('expires_at') or '')[:16].replace('T',' ')}</td>
+          <td class="exp-cell c-exp" data-label="Expires">{"never" if is_cl else (m.get('expires_at') or '')[:16].replace('T',' ')}</td>
           <td class="status-cell c-status" data-label="Status">{status_label}</td>
           <td class="c-ver" data-label="Verified">{m.get('verified_count', 0)}</td>
           <td class="c-ips" data-label="IPs" title="{esc_html(ip_title)}">{ip_count}</td>
@@ -2105,6 +2136,11 @@ def admin_dashboard_save():
     ev_places        = request.form.getlist("tier_event_place")
     ev_notes         = request.form.getlist("tier_event_note")
     ev_tzs           = request.form.getlist("tier_event_tz")
+    dr_names         = request.form.getlist("tier_drop_name")
+    dr_opens         = request.form.getlist("tier_drop_opens")
+    dr_closes        = request.form.getlist("tier_drop_closes")
+    dr_notes         = request.form.getlist("tier_drop_note")
+    dr_tzs           = request.form.getlist("tier_drop_tz")
     have_kinds       = "tier_kind" in request.form
     tier_show_spots  = request.form.getlist("tier_show_spots")
     tier_per_email   = request.form.getlist("tier_per_email")
@@ -2165,19 +2201,27 @@ def admin_dashboard_save():
         else:
             kind = card_kinds.clean_kind(old_t.get("kind"))
             event = card_kinds.event_of(old_t)
+        if have_kinds:
+            drop = card_kinds.clean_drop(
+                dr_names[i] if i < len(dr_names) else "", dr_opens[i] if i < len(dr_opens) else "",
+                dr_closes[i] if i < len(dr_closes) else "", dr_notes[i] if i < len(dr_notes) else "",
+                dr_tzs[i] if i < len(dr_tzs) else 0)
+        else:
+            drop = card_kinds.drop_of(old_t)
         if kind == "ticket" and not event["starts_at"]:
             logo_notes.append(f"Ticket \u201c{name.upper()}\u201d needs a start date and time before anyone can get it.")
 
         tiers.append({
             "name":        name.upper(),
             **({"kind": "ticket", "event": event} if kind == "ticket" else {}),
+            **({"kind": "collectible", "drop": drop} if kind == "collectible" else {}),
             "label":       (tier_labels[i] if i < len(tier_labels) else "").strip(),
             "price":       price,
             "expiry_days": expiry_days,
             "sections":    sections,
             **({"max_members": max_members} if max_members else {}),
             **({"show_spots_left": False} if not show_spots else {}),
-            **({"per_email": per_email} if per_email != limits.DEFAULT_PER_EMAIL else {}),
+            **({"per_email": per_email} if (per_email != limits.DEFAULT_PER_EMAIL or kind == "collectible") else {}),
             **({"look": look_id} if look_id else {}),
             **({"design": legacy_design} if legacy_design else {}),
         })
@@ -2355,6 +2399,34 @@ def _setup_checklist_html(cfg: dict, provider: str) -> str:
       <div class="hint">Copy the two lines from "Embed on your website" just below and paste them into your site. This can't be detected automatically, so it's never ticked.</div></div></div>
   </details>"""
 
+def _welcome_html(cfg: dict) -> str:
+    """A short "start here" box for a brand-new deployment: shown until the
+    creator has set their branding (or hides it with the button)."""
+    fresh = cfg["creator_name"] == "Your Creator Name" and cfg["card_title"] == "YOUR BRAND HERE"
+    if not fresh or _read_config_file().get("welcome_hidden"):
+        return ""
+    return """
+  <div class="welcome-box">
+    <h2 style="margin-top:0;">Welcome — three steps and you're live</h2>
+    <ol>
+      <li><b>Name your brand.</b> Under <b>Branding</b>, enter your name and the title for your cards, then press Save.</li>
+      <li><b>Check your tiers.</b> Under <b>Tiers &amp; pricing</b> you already have two examples. Rename them, set a price, or add your own.</li>
+      <li><b>Put two lines on your website.</b> Copy them from <b>Embed on your website</b> just below and paste them where you want the sign-up box and members area.</li>
+    </ol>
+    <div class="hint">Everything else (emails, content, tickets, announcements) can wait. You can come back to it any time.</div>
+    <form method="POST" action="/admin/welcome/hide" style="margin-top:10px;"><button type="submit" class="copy-btn">Got it, hide this</button></form>
+  </div>"""
+
+
+@app.route("/admin/welcome/hide", methods=["POST"])
+def admin_welcome_hide():
+    page = require_admin_page("/admin/dashboard")
+    if page is not None:
+        return page
+    save_config({"welcome_hidden": True})
+    return redirect("/admin/dashboard")
+
+
 def _dashboard_page() -> str:
     cfg = load_config()
     accent = esc_html(cfg["accent_color"])
@@ -2380,7 +2452,7 @@ def _dashboard_page() -> str:
     if provider not in ("manual", "stripe", "custom"):
         provider = "manual"
 
-    checklist_html = _setup_checklist_html(cfg, provider)
+    checklist_html = _welcome_html(cfg) + _setup_checklist_html(cfg, provider)
 
     # What "Sections" on a tier can refer to: the keys of the sections made on
     # the Content page. Warn about any tier section nobody has created yet.
@@ -2435,16 +2507,21 @@ def _dashboard_page() -> str:
 
     def _limits_panel(t: dict) -> str:
         cap = limits.tier_max(t)
-        taken = limits.count_taken(_registry, _requests, t.get("name", "")) if cap else 0
-        usage = (f'Right now: {taken} of {cap} spots in use'
-                 f'{" — SOLD OUT" if taken >= cap else ""}.') if cap else "No limit set."
+        taken = limits.count_taken(_registry, _requests, t.get("name", ""), ever=limits.is_numbered(t)) if cap else 0
+        numbered = limits.is_numbered(t)
+        if numbered:
+            usage = (f'{taken} of {cap} copies claimed{" — SOLD OUT" if taken >= cap else ""}.' if cap
+                     else "No edition size set: anyone can claim one while the drop is open.")
+        else:
+            usage = (f'Right now: {taken} of {cap} spots in use'
+                     f'{" — SOLD OUT" if taken >= cap else ""}.') if cap else "No limit set."
         mode = limits.per_email_mode(t)
         show = t.get("show_spots_left", True) is not False
         def sel(cond): return "selected" if cond else ""
         return f"""
             <div class="design-panel limits-panel">
               <div class="design-field">
-                <label>Max members (blank = no limit)</label>
+                <label><span class="lbl-members">Max members (blank = no limit)</span><span class="lbl-edition">Edition size (blank = open edition)</span></label>
                 <input name="tier_max_members" type="number" min="1" step="1" value="{esc_html(str(cap) if cap else '')}" placeholder="no limit">
                 <div class="hint" style="margin-top:4px;">{esc_html(usage)}</div>
               </div>
@@ -2499,11 +2576,35 @@ def _dashboard_page() -> str:
               <div class="hint event-hint">The ticket stops working when the event ends. If you leave <b>Ends</b> empty, it works for {card_kinds.DEFAULT_HOURS} hours after it starts. Times are the ones you type here, in your own time zone.</div>
             </div>"""
 
+    def _drop_panel(t: dict) -> str:
+        d = card_kinds.drop_of(t)
+        return f"""
+            <div class="design-panel drop-block">
+              <div class="design-field wide">
+                <label>Drop name (shown on the card)</label>
+                <input name="tier_drop_name" maxlength="{card_kinds.MAX_NAME}" value="{esc_html(d['name'])}" placeholder="Midnight Photo Set">
+              </div>
+              <div class="design-field">
+                <label>Opens (optional)</label>
+                <input name="tier_drop_opens" type="datetime-local" value="{esc_html(d['opens_at'])}">
+              </div>
+              <div class="design-field">
+                <label>Closes (optional)</label>
+                <input name="tier_drop_closes" type="datetime-local" value="{esc_html(d['closes_at'])}">
+              </div>
+              <div class="design-field wide">
+                <label>Note on the card (optional)</label>
+                <input name="tier_drop_note" maxlength="{card_kinds.MAX_NOTE}" value="{esc_html(d['note'])}" placeholder="Signed digital print">
+              </div>
+              <input type="hidden" name="tier_drop_tz" value="{esc_html(str(d['tz']))}">
+              <div class="hint event-hint">People can only claim it between <b>Opens</b> and <b>Closes</b> (leave them empty for no window, so it runs until it sells out). Set <b>Edition size</b> below to how many copies exist; every card gets its own number, like #37 of 100. A collectible never expires. Put the drop's links in <b>Content</b> and tick them for this tier. Times are in your own time zone.</div>
+            </div>"""
+
     tier_rows = ""
     for t in cfg["tiers"]:
         look_sel = t.get("look") if card_looks.get(cfg["card_looks"], t.get("look")) else ""
         _tk = card_kinds.clean_kind(t.get("kind"))
-        _tcls = " is-ticket" if _tk == "ticket" else ""
+        _tcls = " is-ticket" if _tk == "ticket" else " is-collectible" if _tk == "collectible" else ""
         tier_rows += f"""
         <tr class="tier-row{_tcls}">
           <td data-label="Name"><input name="tier_name" value="{esc_html(t.get('name',''))}"></td>
@@ -2519,6 +2620,7 @@ def _dashboard_page() -> str:
         <tr class="design-row{_tcls}" style="display:none">
           <td colspan="9">
             {_event_panel(t)}
+            {_drop_panel(t)}
             {_limits_panel(t)}
           </td>
         </tr>"""
@@ -2672,9 +2774,13 @@ def _dashboard_page() -> str:
   .event-hint {{ flex:1 1 100%; margin:0; }}
   /* Card type: a ticket has no "days", and shows its event details */
   .days-note {{ display:none; color:var(--muted); font-size:11px; }}
-  tr.tier-row.is-ticket .c-days input {{ display:none; }}
-  tr.tier-row.is-ticket .c-days .days-note {{ display:inline; }}
+  tr.tier-row.is-ticket .c-days input, tr.tier-row.is-collectible .c-days input {{ display:none; }}
+  tr.tier-row.is-ticket .c-days .days-note, tr.tier-row.is-collectible .c-days .days-note {{ display:inline; }}
   tr.design-row:not(.is-ticket) .event-block {{ display:none; }}
+  tr.design-row:not(.is-collectible) .drop-block {{ display:none; }}
+  .lbl-edition {{ display:none; }}
+  tr.design-row.is-collectible .lbl-edition {{ display:inline; }}
+  tr.design-row.is-collectible .lbl-members {{ display:none; }}
   .design-field select {{ width:100%; background:var(--field); border:1px solid var(--line); color:var(--fg);
            font-family:var(--font); font-size:12px; padding:8px 10px; }}
   .logo-row {{ display:flex; align-items:center; gap:8px; flex-wrap:wrap; }}
@@ -2685,6 +2791,8 @@ def _dashboard_page() -> str:
   .preview-btn {{ background:transparent; border:1px solid var(--accent-text); color:var(--accent-text); font-family:var(--font);
            font-size:10px; letter-spacing:1px; padding:8px 14px; cursor:pointer; flex:1 1 100%; }}
   .preview-frame {{ width:100%; height:480px; border:1px solid var(--line); margin-top:10px; flex:1 1 100%; background:var(--frame-bg); }}
+  .welcome-box {{ border:1px solid var(--accent-text); background:var(--panel); padding:14px 18px; margin:18px 0 0; }}
+  .welcome-box ol {{ margin:8px 0 10px; padding-left:20px; font-size:12px; line-height:1.8; }}
   .checklist {{ border:1px solid var(--line); background:var(--panel); padding:12px 16px; margin:18px 0 0; }}
   .checklist summary {{ cursor:pointer; color:var(--accent-text); font-size:12px; letter-spacing:1.5px; text-transform:uppercase; }}
   .chk-row {{ display:flex; gap:12px; align-items:flex-start; margin-top:12px; font-size:12px; }}
@@ -2844,6 +2952,11 @@ def _dashboard_page() -> str:
       <div><div class="hint">Sign-up pop-up: title</div><input name="widget_signup_title" id="wl-signup-title" maxlength="60" value="{esc_html(cfg['widget_signup_title'])}" placeholder="{esc_html(widget_look.TEXTS['widget_signup_title'][1])}"></div>
       <div><div class="hint">Sign-up pop-up: button</div><input name="widget_button_text" id="wl-button" maxlength="40" value="{esc_html(cfg['widget_button_text'])}" placeholder="{esc_html(widget_look.TEXTS['widget_button_text'][1])}"></div>
     </div>
+    <div class="wl-grid" style="margin-top:8px;">
+      <div><div class="hint">Terms link (optional)</div><input name="widget_terms_url" id="wl-terms" maxlength="300" value="{esc_html(cfg['widget_terms_url'])}" placeholder="https://your-site.com/terms"></div>
+      <div><div class="hint">Privacy link (optional)</div><input name="widget_privacy_url" id="wl-privacy" maxlength="300" value="{esc_html(cfg['widget_privacy_url'])}" placeholder="https://your-site.com/privacy"></div>
+    </div>
+    <div class="hint" style="margin-top:4px;">If you add a link, the sign-up pop-up says "By getting a card you agree to the Terms and Privacy Policy." with those words linked.</div>
     <div class="hint" style="margin-top:8px;">Sign-up pop-up: text under the title</div>
     <textarea name="widget_signup_sub" id="wl-signup-sub" rows="2" maxlength="200" placeholder="{esc_html(widget_look.TEXTS['widget_signup_sub'][1])}">{esc_html(cfg['widget_signup_sub'])}</textarea>
     <div style="margin-top:12px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
@@ -2860,7 +2973,7 @@ def _dashboard_page() -> str:
     <section class="dsec" id="sec-tiers" data-title="Tiers &amp; pricing">
     <h2>Tiers &amp; pricing</h2>
     {tier_sections_hint}
-    <div class="hint" style="margin-bottom:8px;">Each tier is its own kind of card (for example Monthly, Trial or VIP). Pick a <b>Card look</b> for each one; make and edit looks under <b>Card looks</b>. <b>Card type</b> is <b>Access pass</b> (a membership that lasts a number of days) or <b>Event ticket</b> (for one event: it shows the event on the card, stops working when the event ends, and can be checked in at the door). <b>More</b> opens the event details of a ticket, how many members a tier can have and how many cards one email can get.</div>
+    <div class="hint" style="margin-bottom:8px;">Each tier is its own kind of card (for example Monthly, Trial or VIP). Pick a <b>Card look</b> for each one; make and edit looks under <b>Card looks</b>. <b>Card type</b> is <b>Access pass</b> (a membership that lasts a number of days) or <b>Event ticket</b> (for one event: it shows the event on the card, stops working when the event ends, and can be checked in at the door) or <b>Collectible</b> (a limited-edition drop: every card is numbered, like #37 of 100, and never expires). <b>More</b> opens the event or drop details, how many members a tier can have and how many cards one email can get.</div>
     <table>
       <tr><th>Name</th><th>Label</th><th>Price</th><th>Card type</th><th>Expiry (days)</th><th>Sections (separated by commas)</th><th>Card look</th><th></th><th></th></tr>
       <tbody id="tier-body">{tier_rows}</tbody>
@@ -2993,9 +3106,10 @@ def _dashboard_page() -> str:
     <tr class="design-row" style="display:none">
       <td colspan="9">
         {_event_panel({})}
+        {_drop_panel({})}
         <div class="design-panel limits-panel">
           <div class="design-field">
-            <label>Max members (blank = no limit)</label>
+            <label><span class="lbl-members">Max members (blank = no limit)</span><span class="lbl-edition">Edition size (blank = open edition)</span></label>
             <input name="tier_max_members" type="number" min="1" step="1" value="" placeholder="no limit">
           </div>
           <div class="design-field">
@@ -3064,22 +3178,35 @@ def _dashboard_page() -> str:
       function sync(row, open) {{
         const sel = row.querySelector('[name="tier_kind"]');
         if (!sel) return;
-        const t = sel.value === 'ticket';
+        const t = sel.value === 'ticket', c = sel.value === 'collectible';
         row.classList.toggle('is-ticket', t);
+        row.classList.toggle('is-collectible', c);
+        const note = row.querySelector('.days-note');
+        if (note) note.textContent = c ? 'Never expires' : 'Until the event ends';
         const d = designRowOf(row);
-        if (d) {{ d.classList.toggle('is-ticket', t); if (t && open) d.style.display = ''; }}
+        if (d) {{
+          d.classList.toggle('is-ticket', t); d.classList.toggle('is-collectible', c);
+          if ((t || c) && open) d.style.display = '';
+          // a collectible is one copy per person by default
+          const pe = d.querySelector('select[name=tier_per_email]');
+          if (c && open && pe && pe.value === 'one_active') pe.value = 'one_ever';
+        }}
       }}
       function setTz(d) {{
         const st = d.querySelector('[name="tier_event_start"]'), tz = d.querySelector('[name="tier_event_tz"]');
-        if (!st || !tz || !st.value) return;
-        const when = new Date(st.value);
-        if (!isNaN(when)) tz.value = String(when.getTimezoneOffset());
+        if (st && tz && st.value) {{
+          const when = new Date(st.value);
+          if (!isNaN(when)) tz.value = String(when.getTimezoneOffset());
+        }}
+        const o = d.querySelector('[name="tier_drop_opens"]'), c = d.querySelector('[name="tier_drop_closes"]'), dz = d.querySelector('[name="tier_drop_tz"]');
+        const dv = o && o.value ? o.value : (c && c.value ? c.value : '');
+        if (dz && dv) {{ const w = new Date(dv); if (!isNaN(w)) dz.value = String(w.getTimezoneOffset()); }}
       }}
       body.addEventListener('change', (e) => {{
         const row = e.target.closest('tr');
         if (!row) return;
         if (e.target.name === 'tier_kind') {{ sync(row, true); return; }}
-        if (e.target.name === 'tier_event_start') {{ const d = row.classList.contains('design-row') ? row : null; if (d) setTz(d); }}
+        if (e.target.name === 'tier_event_start' || e.target.name === 'tier_drop_opens' || e.target.name === 'tier_drop_closes') {{ const d = row.classList.contains('design-row') ? row : null; if (d) setTz(d); }}
       }});
       Array.from(body.querySelectorAll('tr.tier-row')).forEach((r) => sync(r, false));
       document.getElementById('add-tier').addEventListener('click', () => {{
@@ -3288,7 +3415,8 @@ def _dashboard_page() -> str:
         const v = {{ accent_color: form.elements['accent_color'].value }};
         ['widget_theme', 'widget_font', 'widget_corners', 'widget_bg', 'widget_text',
          'widget_banner_text', 'widget_drop_title', 'widget_drop_sub',
-         'widget_signup_title', 'widget_signup_sub', 'widget_button_text'].forEach(n => {{ v[n] = form.elements[n].value; }});
+         'widget_signup_title', 'widget_signup_sub', 'widget_button_text',
+         'widget_terms_url', 'widget_privacy_url'].forEach(n => {{ v[n] = form.elements[n].value; }});
         return v;
       }}
       function pageDoc(bg, fg, font) {{
@@ -3310,7 +3438,7 @@ def _dashboard_page() -> str:
       }}
       function later() {{ clearTimeout(timer); timer = setTimeout(refresh, 450); }}
       ['wl-theme', 'wl-font', 'wl-corners', 'wl-bg', 'wl-text', 'wl-banner', 'wl-drop-title', 'wl-drop-sub',
-       'wl-signup-title', 'wl-signup-sub', 'wl-button'].forEach(id => {{
+       'wl-signup-title', 'wl-signup-sub', 'wl-button', 'wl-terms', 'wl-privacy'].forEach(id => {{
         f(id).addEventListener('input', later); f(id).addEventListener('change', later);
       }});
       form.elements['accent_color'].addEventListener('input', later);
@@ -3458,8 +3586,9 @@ def _render_preview_card(cfg: dict, design: dict, tier_name: str = "MEMBER", cre
         qr_style      = design["qr_style"],
         background_data_uri = design.get("background_data_uri"),
         background_dim      = design.get("background_dim", card_looks.DEFAULT_DIM),
-        kind          = "ticket" if kind == "ticket" else "pass",
+        kind          = kind if kind in ("ticket", "collectible") else "pass",
         event         = card_kinds.sample_event() if kind == "ticket" else None,
+        drop          = card_kinds.sample_drop() if kind == "collectible" else None,
         save          = False,
     )
 
@@ -3840,8 +3969,17 @@ def get_config():
     public.update(widget_look.from_config(cfg))
     tiers = [t for t in (cfg.get("tiers") or []) if isinstance(t, dict)]
     public["tiers"] = [{**{k: t[k] for k in ("name", "label", "price", "expiry_days", "sections") if k in t},
-                        **({"kind": "ticket", "event": card_kinds.public_event(t)} if card_kinds.is_ticket(t) else {})}
+                        **({"kind": "ticket", "event": card_kinds.public_event(t)} if card_kinds.is_ticket(t) else {}),
+                        **({"kind": "collectible", "drop": card_kinds.public_drop(t)} if card_kinds.is_collectible(t) else {})}
                        for t in tiers]
+    # An optional locked preview of the members-only content: item titles only,
+    # for the sections the creator marked as a teaser (never links or files).
+    try:
+        tz_list = content_store.teaser(content_store.load(), tiers)
+    except Exception:
+        tz_list = []
+    if tz_list:
+        public["teaser"] = tz_list
     # Tiers with a member limit also say whether they are full (and, unless
     # the creator hides it, how many spots are left). Only read the member
     # list when at least one tier has a limit.

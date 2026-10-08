@@ -56,9 +56,16 @@ def tier_max(tier_cfg):
     return clean_max_members((tier_cfg or {}).get("max_members"))
 
 
+def is_numbered(tier_cfg) -> bool:
+    """A collectible (limited edition): every card ever issued uses up one
+    number of the edition, even if it is later revoked, so the count only goes up."""
+    return (tier_cfg or {}).get("kind") == "collectible"
+
+
 def per_email_mode(tier_cfg) -> str:
     m = (tier_cfg or {}).get("per_email")
-    return m if m in PER_EMAIL_MODES else DEFAULT_PER_EMAIL
+    # one copy per person is the natural rule for a collectible
+    return m if m in PER_EMAIL_MODES else ("one_ever" if is_numbered(tier_cfg) else DEFAULT_PER_EMAIL)
 
 
 def _now(now):
@@ -81,9 +88,11 @@ def _same_tier(a, b) -> bool:
     return str(a or "").strip().upper() == str(b or "").strip().upper()
 
 
-def count_taken(registry, requests, tier_name, now=None) -> int:
-    """Spots in use: active members plus requests waiting for approval."""
-    active = sum(1 for e in registry if _same_tier(e.get("tier"), tier_name) and is_active(e, now))
+def count_taken(registry, requests, tier_name, now=None, ever=False) -> int:
+    """Spots in use: active members plus requests waiting for approval.
+    With `ever`, every card ever issued counts (a numbered edition)."""
+    active = sum(1 for e in registry if _same_tier(e.get("tier"), tier_name)
+                 and (ever or is_active(e, now)))
     pending = sum(1 for r in requests if r.get("status") == "pending" and _same_tier(r.get("tier"), tier_name))
     return active + pending
 
@@ -94,7 +103,7 @@ def public_state(tier_cfg, registry, requests, now=None) -> dict:
     cap = tier_max(tier_cfg)
     if cap is None:
         return {}
-    left = max(0, cap - count_taken(registry, requests, tier_cfg.get("name"), now))
+    left = max(0, cap - count_taken(registry, requests, tier_cfg.get("name"), now, ever=is_numbered(tier_cfg)))
     state = {"sold_out": left == 0}
     if tier_cfg.get("show_spots_left", True) is not False:
         state["spots_left"] = left
@@ -130,6 +139,6 @@ def check_signup(tier_cfg, tier_name, email, registry, requests, creator="the cr
                     f"or contact {creator} if you can't find it.")
 
     cap = tier_max(tier_cfg)
-    if cap is not None and count_taken(registry, requests, tier_name, now) >= cap:
+    if cap is not None and count_taken(registry, requests, tier_name, now, ever=is_numbered(tier_cfg)) >= cap:
         return ("sold_out", f"Sorry, {label} is sold out.")
     return None

@@ -80,6 +80,8 @@ def _add_credential_locked(entry: dict):
         # "ticket" (with the event's details) for an event ticket; absent for
         # an ordinary access pass. `used_at` is set by mark_used().
         **({"kind": entry["kind"], "event": entry.get("event") or {}} if entry.get("kind") == "ticket" else {}),
+        # "collectible": the numbered drop card ({name, note, edition, of}).
+        **({"kind": "collectible", "drop": entry.get("drop") or {}} if entry.get("kind") == "collectible" else {}),
         "revoked":          False,
         "revoked_at":       None,
         "verified_count":   0,

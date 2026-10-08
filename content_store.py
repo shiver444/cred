@@ -22,6 +22,8 @@ A links item can also have:
              unlocked by buying; you deliver from that link.
 A links section can show its items as a "list" (default) or a "grid" of
 pictures (layout).
+A links section can also be a "teaser" (teaser: true): visitors who have no
+card yet see its item TITLES as a locked preview (never links, files or notes).
 
 A section's `key` is the name tiers refer to in their "Sections" field
 (e.g. a tier with sections "downloads, chat" unlocks the sections whose
@@ -157,6 +159,8 @@ def _clean(data: dict, warnings: list = None) -> dict:
         if typ == "links":
             sec["button"] = _text(s.get("button"), 30)
             sec["layout"] = _text(s.get("layout"), 10).lower() if _text(s.get("layout"), 10).lower() in LAYOUTS else "list"
+            if s.get("teaser") is True:
+                sec["teaser"] = True
             items = []
             for it in (s.get("items") or [])[:MAX_ITEMS]:
                 if not isinstance(it, dict):
@@ -216,6 +220,27 @@ def save(payload) -> tuple:
     clean = _clean(data, warnings)
     config_store.write_content(clean)
     return clean, warnings
+
+
+MAX_TEASER_ITEMS = 8
+
+
+def teaser(content: dict, tiers: list) -> list:
+    """The locked preview shown to visitors without a card: for each section the
+    creator marked as a teaser, its title, up to MAX_TEASER_ITEMS item titles and
+    the tiers that unlock it. Titles only: no links, files, notes or pictures."""
+    out = []
+    for s in content.get("sections", []):
+        if s.get("type") != "links" or s.get("teaser") is not True:
+            continue
+        titles = [it["title"] for it in s.get("items", []) if it.get("title")]
+        if not titles:
+            continue
+        who = [str(t.get("label") or t.get("name") or "") for t in (tiers or [])
+               if s["key"] in {str(x).strip().lower() for x in (t.get("sections") or [])}]
+        out.append({"title": s["title"], "items": titles[:MAX_TEASER_ITEMS],
+                    "more": max(0, len(titles) - MAX_TEASER_ITEMS), "tiers": [w for w in who if w]})
+    return out
 
 
 def sections_for_member(content: dict, member_sections) -> list:

@@ -73,6 +73,12 @@
     return /^(https?:\/\/|mailto:)/i.test(u) ? u : ''
   }
 
+  // A YouTube video's id from a watch / short / embed / youtu.be link ("" if it isn't one).
+  function ytId(u) {
+    const m = String(u || '').match(/^https?:\/\/(?:www\.|m\.)?(?:youtube\.com\/(?:watch\?(?:[^#]*&)?v=|embed\/|shorts\/|live\/)|youtu\.be\/)([A-Za-z0-9_-]{11})(?![A-Za-z0-9_-])/i)
+    return m ? m[1] : ''
+  }
+
   function fmtSize(n) {
     n = Number(n) || 0
     if (n >= 1073741824) return (n / 1073741824).toFixed(1) + ' GB'
@@ -127,14 +133,46 @@
     signupSub: text(config.widget_signup_sub,    'Pick a tier, enter your name and email.\nYour card arrives instantly.', 200),
     send:      text(config.widget_button_text,   'Send my card', 40),
   }
+  // Optional links to the creator's terms and privacy pages (http/https only).
+  const termsUrl = safeUrl(config.widget_terms_url), privacyUrl = safeUrl(config.widget_privacy_url)
+  const termsLine = (termsUrl || privacyUrl)
+    ? 'By getting a card you agree to the ' +
+      [termsUrl ? '<a href="' + esc(termsUrl) + '" target="_blank" rel="noopener noreferrer">Terms</a>' : '',
+       privacyUrl ? '<a href="' + esc(privacyUrl) + '" target="_blank" rel="noopener noreferrer">Privacy Policy</a>' : ''].filter(Boolean).join(' and ') + '.'
+    : ''
+  // A locked preview of the members-only content (item titles only; set per section in Content).
+  const teaserHtml = (function () {
+    const list = Array.isArray(config.teaser) ? config.teaser.slice(0, 6) : []
+    if (!list.length) return ''
+    return '<div class="ca-teaser" id="ca-teaser"><div class="ca-teaser-head">What members get</div>' + list.map(s => {
+      const items = (Array.isArray(s.items) ? s.items : []).slice(0, 8).map(t => '<div class="ca-teaser-item"><span class="ca-lock">\u{1F512}</span>' + esc(t) + '</div>').join('')
+      const more = Number(s.more) > 0 ? '<div class="ca-teaser-more">+ ' + esc(Math.floor(Number(s.more))) + ' more</div>' : ''
+      const who = Array.isArray(s.tiers) && s.tiers.length ? '<div class="ca-teaser-who">Included in: ' + s.tiers.map(esc).join(', ') + '</div>' : ''
+      return '<div class="ca-teaser-sec"><div class="ca-teaser-title">' + esc(s.title) + '</div>' + items + more + who + '</div>'
+    }).join('') + '</div>'
+  })()
   const name    = config.creator_name || 'Creator'
   const tiers   = (config.tiers && config.tiers.length) ? config.tiers : [{ name: 'MEMBER', label: 'Free', price: 0 }]
   // A tier with a member limit that is full comes with sold_out: true; start on
   // the first one that still has room.
   // An event ticket for an event that is over can't be picked either.
   tiers.forEach(t => { if (t && t.kind === 'ticket' && t.event && t.event.over) t.sold_out = true })
+  // A collectible can only be claimed while its drop window is open.
+  tiers.forEach(t => { if (t && t.kind === 'collectible' && t.drop && t.drop.state && t.drop.state !== 'open') t.sold_out = true })
   let selectedTier = tiers.find(t => !t.sold_out) || tiers[0]
   const isTicket = t => !!t && t.kind === 'ticket'
+  const isCollectible = t => !!t && t.kind === 'collectible'
+  // The right-hand label of a tier in the sign-up list.
+  function tierBadge(t) {
+    if (t.sold_out) {
+      if (isTicket(t) && t.event && t.event.over) return 'Event over'
+      if (isCollectible(t) && t.drop && t.drop.state === 'soon') return t.drop.opens ? 'Opens ' + t.drop.opens : 'Not open yet'
+      if (isCollectible(t) && t.drop && t.drop.state === 'closed') return 'Drop closed'
+      return 'Sold out'
+    }
+    const price = t.price ? '$' + t.price + ((isTicket(t) || isCollectible(t)) ? '' : '/mo') : 'Free'
+    return price + (typeof t.spots_left === 'number' ? ' \u00b7 ' + Math.max(0, Math.floor(t.spots_left)) + ' left' : '')
+  }
 
   // ── Inject base styles ──
   const style = document.createElement('style')
@@ -574,6 +612,19 @@
       display: block;
     }
     .ca-field:focus { border-color: ${accent}; }
+    .ca-teaser { border: 1px solid var(--ca-line); background: var(--ca-panel); padding: 14px 16px; margin: -12px 0 24px; }
+    .ca-teaser-head { font-size: 9px; letter-spacing: 2px; text-transform: uppercase; color: var(--ca-accent-text); margin-bottom: 10px; }
+    .ca-teaser-sec + .ca-teaser-sec { margin-top: 12px; padding-top: 10px; border-top: 1px dashed var(--ca-line); }
+    .ca-teaser-title { font-size: 12px; margin-bottom: 4px; }
+    .ca-teaser-item { font-size: 11px; color: var(--ca-ash); padding: 2px 0; }
+    .ca-lock { margin-right: 8px; opacity: .8; }
+    .ca-teaser-more, .ca-teaser-who { font-size: 10px; color: var(--ca-ash); margin-top: 4px; }
+    #credential-widget.ca-clean .ca-teaser-title { font-size: 14px; }
+    #credential-widget.ca-clean .ca-teaser-item { font-size: 13px; }
+    #credential-widget.ca-clean .ca-teaser-more, #credential-widget.ca-clean .ca-teaser-who { font-size: 12px; }
+    .ca-terms { font-size: 9px; letter-spacing: .5px; line-height: 1.7; color: var(--ca-ash); margin-top: 10px; }
+    .ca-terms a { color: var(--ca-accent-text); text-decoration: underline; }
+    #credential-widget.ca-clean .ca-terms { font-size: 12px; letter-spacing: 0; }
     .ca-submit-row { display: flex; gap: 0; margin-top: 8px; }
     .ca-submit {
       flex: 1;
@@ -813,6 +864,8 @@
       <div class="ca-banner-text">${esc(T.banner)}</div>
     </div>
 
+    ${teaserHtml}
+
     <!-- DROP ZONE -->
     <div class="ca-drop-zone" id="ca-drop-zone">
       <input type="file" id="ca-file-input" accept=".zip,.html" style="display:none">
@@ -870,6 +923,7 @@
         <input type="email" class="ca-field" id="ca-signup-email" placeholder="Your email">
         <div class="ca-msg-err" id="ca-signup-err"></div>
         <div class="ca-msg-ok"  id="ca-signup-ok"></div>
+        ${termsLine ? '<div class="ca-terms" id="ca-terms">' + termsLine + '</div>' : ''}
         <div class="ca-submit-row">
           <button class="ca-submit" id="ca-submit">${esc(T.send)}</button>
           <button class="ca-close"  id="ca-close">✕</button>
@@ -883,8 +937,8 @@
     const el = document.getElementById('ca-tier-picker')
     el.innerHTML = tiers.map((t, i) => `
       <div class="ca-tier-option${t === selectedTier ? ' selected' : ''}${t.sold_out ? ' sold-out' : ''}" data-i="${i}">
-        <span class="ca-tier-name">${esc(t.name)}${t.label ? ' — ' + esc(t.label) : ''}${isTicket(t) && t.event && (t.event.name || t.event.when) ? '<small class="ca-tier-ev">' + esc([t.event.name, t.event.when].filter(Boolean).join(' \u00b7 ')) + '</small>' : ''}</span>
-        <span class="ca-tier-price">${t.sold_out ? (isTicket(t) && t.event && t.event.over ? 'Event over' : 'Sold out') : (t.price ? '$' + esc(t.price) + (isTicket(t) ? '' : '/mo') : 'Free') + (typeof t.spots_left === 'number' ? ' · ' + esc(Math.max(0, Math.floor(t.spots_left))) + ' left' : '')}</span>
+        <span class="ca-tier-name">${esc(t.name)}${t.label ? ' — ' + esc(t.label) : ''}${isTicket(t) && t.event && (t.event.name || t.event.when) ? '<small class="ca-tier-ev">' + esc([t.event.name, t.event.when].filter(Boolean).join(' \u00b7 ')) + '</small>' : ''}${isCollectible(t) && t.drop && ((t.drop.name && t.drop.name.toLowerCase() !== String(t.label || '').toLowerCase()) || t.drop.closes) ? '<small class="ca-tier-ev">' + esc([(t.drop.name && t.drop.name.toLowerCase() !== String(t.label || '').toLowerCase()) ? t.drop.name : '', t.drop.closes ? 'until ' + t.drop.closes : ''].filter(Boolean).join(' \u00b7 ')) + '</small>' : ''}</span>
+        <span class="ca-tier-price">${esc(tierBadge(t))}</span>
       </div>`).join('')
     el.querySelectorAll('.ca-tier-option').forEach(opt => {
       opt.onclick = () => {
@@ -1256,15 +1310,20 @@
   // ── GRANT ACCESS ──
   async function grantAccess(data) {
     memberData = data
+    const teaserEl = document.getElementById('ca-teaser'); if (teaserEl) teaserEl.style.display = 'none'
     const memberName = data.holder_name || data.name || 'Member'
     const expiry = new Date(data.expires_at).toLocaleDateString('en-GB', {
       day: '2-digit', month: 'short', year: 'numeric'
     })
 
     const ev = (data.kind === 'ticket' && data.event) ? data.event : null
+    const dr = (data.kind === 'collectible' && data.drop) ? data.drop : null
+    const edText = dr && dr.edition ? '#' + dr.edition + (dr.of ? ' of ' + dr.of : '') : ''
     showResult('valid', ev
       ? `✔ Welcome, ${memberName}. Your ticket: ${[ev.name, ev.when].filter(Boolean).join(' · ') || data.tier}`
-      : `✔ Welcome, ${memberName}. ${data.tier} access · valid until ${expiry}`)
+      : dr
+        ? `✔ Welcome, ${memberName}. Your collectible: ${[dr.name, edText].filter(Boolean).join(' · ') || data.tier}`
+        : `✔ Welcome, ${memberName}. ${data.tier} access · valid until ${expiry}`)
 
     document.getElementById('ca-member-header').innerHTML = `
       <div class="ca-member-name">${esc(memberName)}</div>
@@ -1276,6 +1335,10 @@
         ${ev.place ? `<div><b>WHERE</b> // <span>${esc(ev.place)}</span></div>` : ''}
         ${ev.note ? `<div><b>NOTE</b> // <span>${esc(ev.note)}</span></div>` : ''}
         <div><b>ADMIT</b> // <span>${esc(data.tier)}</span></div>`
+        : dr ? `${dr.name ? `<div><b>DROP</b> // <span>${esc(dr.name)}</span></div>` : ''}
+        ${edText ? `<div><b>EDITION</b> // <span>${esc(edText)}</span></div>` : ''}
+        ${dr.note ? `<div><b>NOTE</b> // <span>${esc(dr.note)}</span></div>` : ''}
+        <div><b>VALID</b> // <span>forever</span></div>`
         : `<div><b>ACCESS CLASS</b> // <span>${esc(data.tier)}</span></div>
         <div><b>VALID UNTIL</b> // <span>${esc(expiry)}</span></div>`}
       </div>`
@@ -1388,7 +1451,9 @@
         // The preview picture arrives as a short-lived path on the API (/member-preview/…).
         const hasThumb = typeof it.thumb === 'string' &&
                          /^\/member-preview\/[a-f0-9]{24}\?t=[A-Za-z0-9_.=-]+$/.test(it.thumb)
-        const thumb = hasThumb ? `<img class="ca-thumb" src="${esc(API_BASE + it.thumb)}" alt="" loading="lazy">` : ''
+        const yt = (!hasThumb && !isFile) ? ytId(it.url) : ''
+        const thumb = hasThumb ? `<img class="ca-thumb" src="${esc(API_BASE + it.thumb)}" alt="" loading="lazy">`
+          : yt ? `<img class="ca-thumb" src="https://i.ytimg.com/vi/${yt}/hqdefault.jpg" alt="" loading="lazy">` : ''
         const btn = buyUrl
           ? `<a href="${esc(buyUrl)}" class="ca-dl-btn" target="_blank" rel="noopener noreferrer">${esc('Buy' + (price ? ' · ' + price : ''))}</a>`
           : url

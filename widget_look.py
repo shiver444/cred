@@ -12,6 +12,10 @@ can never reach the public /config answer (and from there the visitor's page):
   widget_bg       background color for "custom"  (#rrggbb)
   widget_text     text color for "custom"        (#rrggbb)
   widget_*_text   the wording of six texts; blank = the built-in wording
+  widget_terms_url / widget_privacy_url
+                  optional links (http/https only). When either is set the sign-up
+                  box shows "By getting a card you agree to the Terms and Privacy
+                  Policy." under the form, with those words as links.
 
 cp.js checks the same values again on its side, because the dashboard's live
 preview hands it unsaved ones.
@@ -34,7 +38,17 @@ TEXTS = {
     "widget_button_text":   (40,  "Send my card"),
 }
 
-KEYS = ("widget_theme", "widget_font", "widget_corners", "widget_bg", "widget_text") + tuple(TEXTS)
+URLS = ("widget_terms_url", "widget_privacy_url")
+MAX_URL = 300
+
+KEYS = ("widget_theme", "widget_font", "widget_corners", "widget_bg", "widget_text") + tuple(TEXTS) + URLS
+
+
+def clean_url(value):
+    """An http(s) address, or "" (no javascript:, data:, spaces or markup)."""
+    import re
+    v = str(value or "").strip()[:MAX_URL]
+    return v if re.match(r"^https?://[^\s<>\"']+$", v, re.I) else ""
 
 
 def clean_choice(value, allowed, default):
@@ -71,6 +85,8 @@ def from_values(get) -> dict:
     }
     for key, (max_len, _default) in TEXTS.items():
         out[key] = clean_text(get(key), max_len)
+    for key in URLS:
+        out[key] = clean_url(get(key))
     return out
 
 

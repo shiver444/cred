@@ -104,6 +104,7 @@ _SECTION = """
           <select id="lk-prev-kind" aria-label="Show the preview as" style="margin-bottom:8px;max-width:240px;">
             <option value="pass">Show as an access pass</option>
             <option value="ticket">Show as an event ticket</option>
+            <option value="collectible">Show as a collectible</option>
           </select>
           <iframe id="lk-frame" sandbox="" title="Card preview"></iframe>
         </div>
