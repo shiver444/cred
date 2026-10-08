@@ -505,13 +505,65 @@ _SHELL_JS = r"""
 """
 
 
+# Spaceship and Studio are one long page, so the Save button sits at the very
+# bottom. This adds the same floating "unsaved changes" bar the screen-style
+# layouts have: it appears as soon as something is changed, saves the form, and
+# after saving brings you back to where you were with a short "Saved" note.
+_SAVEBAR_CSS = """
+.sv-bar { display:none; position:fixed; left:0; right:0; bottom:0; z-index:50; align-items:center; justify-content:center; gap:16px;
+  padding:12px 16px calc(12px + env(safe-area-inset-bottom)); background:var(--bg); border-top:1px solid var(--line-strong);
+  box-shadow:0 -10px 30px rgba(0,0,0,.20); font-family:var(--font); font-size:13px; color:var(--soft); }
+.sv-bar.show { display:flex; }
+.sv-bar.ok { color:var(--ok); }
+.sv-bar button { background:var(--accent); color:var(--on-accent); border:0; border-radius:var(--radius); padding:10px 22px; font-size:13px;
+  font-weight:600; cursor:pointer; font-family:var(--font); }
+body.sv-on { padding-bottom:84px !important; }
+body[data-layout=long] .sv-bar { font-size:11px; text-transform:uppercase; letter-spacing:.08em; }
+body[data-layout=long] .sv-bar button { font-size:11px; text-transform:uppercase; letter-spacing:.1em; font-weight:400; }
+@media (max-width:700px) { .sv-bar { gap:10px; padding-left:12px; padding-right:12px; } }
+"""
+
+_SAVEBAR_JS = r"""
+(function () {
+  var body = document.body, layout = body.getAttribute('data-layout') || 'long';
+  if (layout !== 'long' && layout !== 'toc') return;
+  var form = document.querySelector('form[action="/admin/dashboard"]');
+  if (!form) return;
+  var bar = document.createElement('div'); bar.className = 'sv-bar'; bar.setAttribute('role', 'status');
+  var msg = document.createElement('span'), btn = document.createElement('button');
+  btn.type = 'button'; btn.textContent = 'Save changes';
+  bar.appendChild(msg); bar.appendChild(btn); body.appendChild(bar);
+  var KEY = 'cp-scroll-before-save';
+  function dirty() {
+    bar.classList.remove('ok'); msg.textContent = 'You have unsaved changes.'; btn.style.display = '';
+    bar.classList.add('show'); body.classList.add('sv-on');
+  }
+  form.addEventListener('input', dirty); form.addEventListener('change', dirty);
+  form.addEventListener('submit', function () { try { sessionStorage.setItem(KEY, String(window.scrollY)); } catch (e) {} });
+  btn.addEventListener('click', function () { if (form.requestSubmit) form.requestSubmit(); else form.submit(); });
+  if (/[?&]saved=1/.test(location.search)) {
+    var y = null;
+    try { y = sessionStorage.getItem(KEY); sessionStorage.removeItem(KEY); } catch (e) {}
+    if (y !== null) {
+      window.addEventListener('load', function () {
+        window.scrollTo(0, parseInt(y, 10) || 0);
+        msg.textContent = 'Saved \u2713'; btn.style.display = 'none'; bar.classList.add('show', 'ok');
+        setTimeout(function () { bar.classList.remove('show', 'ok'); body.classList.remove('sv-on'); }, 2600);
+      });
+    }
+  }
+})();
+"""
+
+
 def shell_js(style):
     """The <script> that builds the layout (empty for the plain long layout)."""
-    if layout(style) == "long":
-        return ""
     import json
+    if layout(style) == "long":
+        return "<script>" + _SAVEBAR_JS.replace("</", "<\\/") + "</script>"
     js = _SHELL_JS.replace("__SETTINGS__", json.dumps([list(s) for s in SETTINGS_SCREENS])).replace("__ICONS__", json.dumps(_ICONS))
-    return "<script>" + js.replace("</", "<\\/") + "</script>"
+    extra = "<script>" + _SAVEBAR_JS.replace("</", "<\\/") + "</script>" if layout(style) == "toc" else ""
+    return "<script>" + js.replace("</", "<\\/") + "</script>" + extra
 
 
 def css(style, accent, kind="page"):
@@ -532,7 +584,7 @@ def css(style, accent, kind="page"):
     out = ":root { " + " ".join("--%s:%s;" % (k, val) for k, val in v.items()) + " color-scheme:%s; }\n" % (
         "dark" if _lum(_rgb(p["bg"])) < 0.4 else "light")
     if style == "spaceship" or (style == "spacelite" and kind == "login"):
-        return out
+        return out if kind == "login" else out + _SAVEBAR_CSS
     if style == "spacelite":
         return out + _APP_CSS + _LITE_EXTRA
     lay = layout(style)
@@ -541,7 +593,7 @@ def css(style, accent, kind="page"):
     extra = ""
     if kind == "wide":
         extra = "body { max-width:1200px; } td, th { padding:11px 12px !important; } th { border-bottom:1px solid var(--line); }\n"
-    shell = _APP_CSS if lay == "app" else (_TOC_CSS if lay == "toc" else "")
+    shell = _APP_CSS if lay == "app" else (_TOC_CSS + _SAVEBAR_CSS if lay == "toc" else "")
     return out + _MODERN + _MODERN_PAGE + extra + (_STUDIO_EXTRA if style == "studio" else "") + shell
 
 

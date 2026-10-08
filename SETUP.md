@@ -552,9 +552,12 @@ look five different ways. Open the dashboard and find **Dashboard style**
 The styles also differ in how the dashboard is laid out, not just how it
 looks:
 
-- **Spaceship** keeps the single long page you scroll through.
+- **Spaceship** keeps the single long page you scroll through. As soon as you
+  change something, a **Save changes** bar appears at the bottom of the screen,
+  so you never have to scroll down to find the button; after saving you land
+  back where you were.
 - **Studio** is also one long page, with a small contents list beside it on a
-  wide screen to jump between sections.
+  wide screen to jump between sections. It has the same Save changes bar.
 - **Spaceship lite**, **Daylight** and **Midnight** work like an app. On a computer there is a
   menu down the left (Home, Members, Content, Settings). On a phone the menu
   sits along the bottom, and Settings is a list of screens (Branding, Card looks, Widget
