@@ -88,6 +88,61 @@ def process_logo(raw: bytes) -> tuple:
         return "", "That picture couldn't be read, so it wasn't used."
 
 
+# A card background is bigger than a logo: it fills the whole card, which is
+# shown about 380 px wide (so ~760 px on a sharp phone screen). It is stored as
+# a JPEG, because every card file carries its own copy of the picture.
+BG_MAX_UPLOAD_BYTES = 10 * 1024 * 1024
+BG_MAX_SIDE         = 1000
+BG_MAX_BYTES_NO_PILLOW = 400 * 1024
+
+
+def process_background(raw: bytes) -> tuple:
+    """A card background upload -> (data: URI of a shrunk JPEG, "") or
+    ("", reason for the creator). Same checks as process_logo (the picture is
+    really decoded, never trusted by name), then it is turned the right way up
+    (phone photos), flattened onto black if it has transparency, shrunk to
+    BG_MAX_SIDE and saved as a JPEG."""
+    if not raw:
+        return "", ""
+    if len(raw) > BG_MAX_UPLOAD_BYTES:
+        return "", "That picture is too big (over 10 MB). Use a smaller one."
+    mime = _sniff(raw)
+    if mime is None:
+        return "", "That file isn't a PNG, JPG, GIF or WEBP picture, so it wasn't used."
+    try:
+        from PIL import Image, ImageOps
+    except ImportError:
+        if len(raw) > BG_MAX_BYTES_NO_PILLOW:
+            return "", "That picture is too big (over 400 KB). Use a smaller one."
+        return _data_uri(raw, mime), ""
+    try:
+        Image.MAX_IMAGE_PIXELS = MAX_PIXELS
+        img = Image.open(BytesIO(raw))
+        if img.size[0] * img.size[1] > MAX_PIXELS:
+            return "", "That picture is too large (too many pixels). Use a smaller one."
+        img.load()
+        try:
+            img = ImageOps.exif_transpose(img)
+        except Exception:
+            pass
+        if img.mode in ("RGBA", "LA", "PA") or "transparency" in img.info:
+            img = img.convert("RGBA")
+            base = Image.new("RGB", img.size, (0, 0, 0))
+            base.paste(img, mask=img.split()[-1])
+            img = base
+        else:
+            img = img.convert("RGB")
+        if max(img.size) > BG_MAX_SIDE:
+            img.thumbnail((BG_MAX_SIDE, BG_MAX_SIDE), Image.LANCZOS)
+        out = BytesIO()
+        img.save(out, "JPEG", quality=80, optimize=True, progressive=True)
+        return _data_uri(out.getvalue(), "image/jpeg"), ""
+    except Exception as e:
+        if "decompression" in type(e).__name__.lower() or "pixels" in str(e).lower():
+            return "", "That picture is too large (too many pixels). Use a smaller one."
+        return "", "That picture couldn't be read, so it wasn't used."
+
+
 def is_logo_data_uri(value) -> bool:
     """True for a data: URI of one of the allowed image types — used before
     a stored value is ever written into a page."""

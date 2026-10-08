@@ -38,9 +38,10 @@ LAYOUTS = {"spaceship": "long", "studio": "toc", "daylight": "app", "midnight": 
 # The dashboard's settings screens, in the order they are listed: (id, title, one line).
 # Each id matches a <section id="sec-<id>"> on the dashboard page.
 SETTINGS_SCREENS = [
-    ("branding", "Branding & cards", "Name, accent color, logo and card style"),
+    ("branding", "Branding & cards", "Name, accent color, logo and the default card look"),
+    ("looks",    "Card looks",       "Your saved card designs, one per kind of card"),
     ("widget",   "Widget look",      "Colors, lettering and wording of the member widget"),
-    ("tiers",    "Tiers & pricing",  "Passes, prices, limits and card designs"),
+    ("tiers",    "Tiers & pricing",  "Passes, prices, limits and which card look each uses"),
     ("payment",  "Payment",          "How paid tiers are fulfilled"),
     ("emails",   "Emails",           "Welcome email and expiry reminder"),
     ("style",    "Dashboard style",  "How these admin pages look"),

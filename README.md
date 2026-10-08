@@ -42,7 +42,7 @@ can revoke any of them at any time.
   adapts to your page's colors and font by itself; you can also set its colors,
   corners and wording in the dashboard.
 - An admin dashboard (four looks to choose from: Daylight, Studio, Midnight or the
-  original Spaceship): branding, tiers and pricing, per-tier card designs,
+  original Spaceship): branding, tiers and pricing, saved card looks (seven styles, logos, background pictures) you pick per tier,
   payment settings, a member list with one-click revoke, and a "copy link"
   button that gives you any member's personal access link.
 - Cards and credentials signed with ECDSA, with a private key generated for

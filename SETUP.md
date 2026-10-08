@@ -68,12 +68,12 @@ be reset every time you deployed. Two things follow from this:
   dashboard. (Running locally with no `DATA_DIR` set, both are the same
   file, so editing it by hand still works there.)
 
-This also holds the per-tier card designs and their uploaded logos. Your
+This also holds your saved card looks and their uploaded pictures. Your
 members-only content (step 4) is stored the same way.
 
 ### Limits per tier: spots and one card per email
 
-Each tier row has a **More ▾** button. Its first section is **limits**:
+Each tier row has a **Limits ▾** button. It opens the **limits**:
 
 - **Max members** — leave blank for no limit. With a number, the tier shows
   as "Sold out" in the signup widget once it's full, and anyone who still
@@ -664,20 +664,49 @@ multi-tenant or exposed more broadly.
 
 ## Your card's look
 
-Everything about how the member card looks is set in the dashboard under
-**Branding** (no files to upload to the server):
+Card designs are called **card looks**. They live in the dashboard (no files to
+upload to the server) in two places:
 
-- **Card logo:** upload a PNG, JPG, GIF or WEBP. It's shrunk automatically
-  to a sensible size (long side 600 px) and shown on every card. A tier can
-  have its own logo under **More ▾**, which wins over this one. Remove
-  the logo and cards simply have none.
-- **Card style:** *Distressed* (the worn keycard look, with film grain and
-  scratches) or *Clean* (the same card, smooth and unworn). A tier can pick
-  its own under **More ▾**.
-- **Card label:** the small line under the title, e.g. "Member Keycard".
-  A tier can override it too.
-- **Preview the card →** (under Branding, and inside each tier's More ▾ → Design
-  panel) shows the result using what's currently on screen, before you save.
+- **Branding** holds your **Default look**: the card title, accent color,
+  label, style, logo, barcode on/off and an optional background picture.
+- **Card looks** (its own screen) is where you keep extra, named looks: for
+  example "Monthly member", "Trial" or "VIP". It shows every look as a small
+  card preview. **+ New look** opens an editor with a live preview that updates
+  as you type. Each saved look has **Edit**, **Copy** (a quick way to make a
+  variation) and **Delete** (press twice). You can keep up to 12.
+
+Then open **Tiers & pricing**: every tier has a **Card look** menu. Pick
+which look that tier's members get. A tier left on "Default look" uses what's
+in Branding. If you delete a look that a tier uses, that tier goes back to
+the Default look (the dashboard tells you which).
+
+What you can set in a look:
+
+- **Title, label and color:** anything you leave blank follows the Default
+  look, so you only fill in what's different.
+- **Style** (seven built in): *Distressed* (worn keycard with film grain and
+  scratches), *Clean* (smooth and unworn), *Holographic* (rainbow sheen),
+  *Minimal* (light paper), *Ticket* (notches and a tear line), *Gradient*
+  (a wash of your color) and *Neon* (glowing outline).
+- **Logo:** PNG, JPG, GIF or WEBP, shrunk automatically (long side 600 px).
+  A look's own logo wins over the Default look's. Remove it and the look
+  falls back to the Default logo.
+- **Background picture:** optional, any PNG, JPG, GIF or WEBP up to 10 MB;
+  it's shrunk to 1000 px on the long side. **Darkening** (not at all, a little,
+  some, a lot) keeps the text readable on top of a busy picture. Unlike the
+  other fields, **a background picture is not inherited**: a look only shows
+  one if it has its own (or it is the Default look itself). The picture is
+  built into each card file, so keep pictures modest.
+- **Show barcode:** on or off.
+- **Preview:** both the Branding and the Card looks screens show the result
+  using what's currently on screen, before you save.
+
+If you used an earlier version that kept a design inside each tier, those
+designs are converted into looks automatically the first time you open the
+dashboard (named "<tier> look") and the cards look exactly the same.
+
+The **Minimal** style is light paper, so a light-colored logo can disappear on
+it; check the preview.
 
 Only cards issued after a change use the new look; cards members already
 have stay as they were.

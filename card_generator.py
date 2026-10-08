@@ -21,7 +21,15 @@ from pathlib import Path
 from datetime import datetime
 from html import escape as _esc
 
+import re
+
 from logo_utils import is_logo_data_uri
+
+# The built-in card styles. They all share one layout; only the look changes.
+STYLES = ("distressed", "clean", "holographic", "minimal", "ticket", "gradient", "neon")
+# How much a background picture is darkened so the card's text stays readable.
+DIM_ALPHA = {"none": 0.0, "soft": 0.25, "medium": 0.45, "strong": 0.65}
+DEFAULT_DIM = "medium"
 
 BASE_DIR = Path(__file__).resolve().parent
 
@@ -95,10 +103,14 @@ def generate_card(
     logo_data_uri: str = None,
     card_label: str = "",
     card_style: str = "distressed",
+    background_data_uri: str = None,
+    background_dim: str = DEFAULT_DIM,
+    save: bool = True,
 ) -> str:
     """
     Generate the HTML membership keycard.
-    Returns the path to the saved HTML file.
+    Returns the path to the saved HTML file — or, with `save=False` (dashboard
+    previews), the card's HTML itself, written nowhere.
 
     All branding (`card_title`, `creator_name`, `access_url`, `accent_color`)
     is expected to be passed in by the caller from config.json — nothing
@@ -127,6 +139,11 @@ def generate_card(
     worn-keycard look: film grain, scratches, vignette) or "clean" (the
     same card, smooth and unworn).
 
+    `background_data_uri` (optional) is the creator's own picture shown behind
+    the card's text; `background_dim` ("none", "soft", "medium", "strong")
+    darkens it so the text stays readable. See card_looks.py for the saved
+    "looks" these values come from.
+
     `show_barcode` and `logo_data_uri` exist so a specific tier/pass type
     can override the deployment's global look (see the per-tier "design"
     editor in /admin/dashboard) — `logo_data_uri`, when given, is used
@@ -134,7 +151,12 @@ def generate_card(
     """
 
     creator_name = creator_name or card_title or "MEMBER"
-    card_style   = card_style if card_style in ("distressed", "clean") else "distressed"
+    card_style   = card_style if card_style in STYLES else "distressed"
+    # The accent goes straight into the card's CSS, so only a plain color
+    # (#abc, #aabbcc, #aabbccdd or a color name) is accepted.
+    if not re.fullmatch(r"#[0-9a-fA-F]{3,8}|[A-Za-z]{3,20}", (accent_color or "").strip()):
+        accent_color = "#00e87a"
+    accent_color = accent_color.strip()
     label_text   = (card_label or "").strip()[:40] or "Member Keycard"
 
     sections = sections or []
@@ -182,6 +204,11 @@ def generate_card(
     accent_color = _esc(accent_color, quote=True)
     logo_html = f'<img class="card-logo" src="{_esc(logo_uri, quote=True)}" alt="{_esc(creator_name, quote=True)}">' if logo_uri else ""
     barcode_html = '<div class="card-barcode"></div>' if show_barcode else ''
+    has_bg = is_logo_data_uri(background_data_uri)
+    dim = DIM_ALPHA.get(background_dim, DIM_ALPHA[DEFAULT_DIM])
+    bg_html = (f'<img class="card-bg" src="{_esc(background_data_uri, quote=True)}" alt="">'
+               f'<div class="card-scrim" style="background:rgba(0,0,0,{dim})"></div>') if has_bg else ""
+    card_classes = "card" + (f" card--{card_style}" if card_style != "distressed" else "") + (" card--has-bg" if has_bg else "")
 
     html = f"""<!DOCTYPE html>
 <html lang="en">
@@ -374,11 +401,94 @@ def generate_card(
   }}
   .card--clean::before, .card--clean::after, .card--clean .card-vignette {{ display: none; }}
   .card--clean .card-logo {{ filter: none; }}
+
+  /* The creator's own picture behind the card, darkened for readability. */
+  .card-bg {{ position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; z-index: 0; }}
+  .card-scrim {{ position: absolute; inset: 0; z-index: 0; pointer-events: none; }}
+  /* Over a picture the small grey text needs more contrast. */
+  .card--has-bg .card-content {{ text-shadow: 0 1px 3px rgba(0,0,0,0.65); }}
+  .card--has-bg .card-meta {{ color: #e6dfd2; }}
+  .card--has-bg .card-meta b {{ color: #cfc7ba; }}
+  .card--has-bg .card-brand-block {{ color: #e6dfd2; }}
+  .card--has-bg .card-brand-block .dim {{ color: #cfc7ba; }}
+  .card--has-bg .card-qr-box {{ text-shadow: none; }}
+
+  /* ── More built-in styles. Same layout, different look. ── */
+
+  /* holographic: dark glass with a rainbow sheen */
+  .card--holographic {{
+    background: linear-gradient(135deg, #14131f, #08080f 62%);
+    box-shadow: 0 0 0 1px rgba(255,255,255,0.14), 0 30px 70px rgba(0,0,0,0.65), 0 0 46px {accent_color}33;
+  }}
+  .card--holographic::before {{ display: none; }}
+  .card--holographic::after {{
+    background:
+      linear-gradient(115deg, transparent 18%, rgba(255,0,200,0.20) 34%, rgba(0,225,255,0.22) 50%, rgba(255,235,0,0.17) 66%, transparent 82%);
+    mix-blend-mode: screen;
+  }}
+  .card--holographic .card-vignette {{ display: none; }}
+  .card--holographic .card-logo {{ filter: drop-shadow(0 0 8px rgba(255,255,255,0.25)); }}
+  .card--holographic .card-hr {{ background: linear-gradient(90deg, #ff00c8aa, #00e1ffaa, #ffeb00aa); height: 2px; }}
+
+  /* minimal: light paper, thin lines */
+  .card--minimal:not(.card--has-bg) {{ background: #f5f2eb; box-shadow: 0 0 0 1px rgba(0,0,0,0.10), 0 30px 70px rgba(0,0,0,0.5); }}
+  .card--minimal::before, .card--minimal::after, .card--minimal .card-vignette {{ display: none; }}
+  .card--minimal .card-logo {{ filter: none; }}
+  .card--minimal:not(.card--has-bg) .card-brand-title {{ color: #1d1b18; }}
+  .card--minimal:not(.card--has-bg) .card-kind {{ color: #5b564e; }}
+  .card--minimal:not(.card--has-bg) .card-hr {{ background: rgba(0,0,0,0.16); }}
+  .card--minimal:not(.card--has-bg) .card-meta {{ color: #6b655c; }}
+  .card--minimal:not(.card--has-bg) .card-meta b {{ color: #9a9388; }}
+  .card--minimal:not(.card--has-bg) .card-meta span {{ color: #1d1b18; }}
+  .card--minimal:not(.card--has-bg) .card-brand-block {{ color: #6b655c; }}
+  .card--minimal:not(.card--has-bg) .card-brand-block .dim {{ color: #9a9388; }}
+  .card--minimal:not(.card--has-bg) .card-qr-box {{ box-shadow: 0 0 0 1px rgba(0,0,0,0.18); }}
+  .card--minimal:not(.card--has-bg) .card-barcode {{ opacity: 0.8; background: repeating-linear-gradient(90deg, #1d1b18 0px, #1d1b18 2px, transparent 2px, transparent 5px, #1d1b18 5px, #1d1b18 7px, transparent 7px, transparent 9px, #1d1b18 9px, #1d1b18 13px, transparent 13px, transparent 17px); }}
+  .card--minimal.card--has-bg .card-kind {{ color: #fff; }}
+
+  /* ticket: notches at the sides, a dashed tear line, an accent stripe */
+  .card--ticket {{
+    background: linear-gradient(165deg, #17120f, #080605 70%);
+    box-shadow: inset 7px 0 0 {accent_color};
+    -webkit-mask-image: radial-gradient(circle at 0 60%, transparent 15px, #000 16px), radial-gradient(circle at 100% 60%, transparent 15px, #000 16px);
+    -webkit-mask-composite: source-in;
+    mask-image: radial-gradient(circle at 0 60%, transparent 15px, #000 16px), radial-gradient(circle at 100% 60%, transparent 15px, #000 16px);
+    mask-composite: intersect;
+  }}
+  .card--ticket::before, .card--ticket::after, .card--ticket .card-vignette {{ display: none; }}
+  .card--ticket .card-logo {{ filter: none; }}
+  .card--ticket .card-hr {{ height: 0; background: none; border-top: 2px dashed rgba(230,223,210,0.35); }}
+  .card--ticket .card-barcode {{ opacity: 0.85; }}
+
+  /* gradient: a darkened wash of your accent color */
+  .card--gradient {{
+    background: linear-gradient(160deg, #1b1b1b, #0b0a0f 80%);
+    background: linear-gradient(160deg, color-mix(in srgb, {accent_color} 58%, #000) 0%, color-mix(in srgb, {accent_color} 16%, #000) 52%, #0a090d 100%);
+    box-shadow: 0 0 0 1px rgba(255,255,255,0.10), 0 30px 70px rgba(0,0,0,0.6);
+  }}
+  .card--gradient::before, .card--gradient::after, .card--gradient .card-vignette {{ display: none; }}
+  .card--gradient .card-logo {{ filter: none; }}
+  .card--gradient .card-brand-title {{ color: #fff; }}
+  .card--gradient .card-kind {{ color: rgba(255,255,255,0.88); }}
+
+  /* neon: near-black with a glowing accent outline */
+  .card--neon {{
+    background: #04050a;
+    box-shadow: 0 0 0 2px {accent_color}, 0 0 26px {accent_color}99, inset 0 0 34px {accent_color}2b, 0 30px 70px rgba(0,0,0,0.7);
+  }}
+  .card--neon::before, .card--neon::after, .card--neon .card-vignette {{ display: none; }}
+  .card--neon .card-logo {{ filter: drop-shadow(0 0 7px {accent_color}); }}
+  .card--neon .card-brand-title {{ text-shadow: 0 0 10px {accent_color}cc; }}
+  .card--neon .card-kind {{ text-shadow: 0 0 8px {accent_color}; }}
+  .card--neon .card-hr {{ background: {accent_color}; box-shadow: 0 0 8px {accent_color}; }}
+  .card--neon .card-qr-box {{ box-shadow: 0 0 0 2px {accent_color}, 0 0 14px {accent_color}aa; }}
+  .card--neon .card-barcode {{ opacity: 0.9; background: repeating-linear-gradient(90deg, {accent_color} 0px, {accent_color} 2px, transparent 2px, transparent 5px, {accent_color} 5px, {accent_color} 7px, transparent 7px, transparent 9px, {accent_color} 9px, {accent_color} 13px, transparent 13px, transparent 17px); }}
 </style>
 </head>
 <body>
 
-<div class="card{' card--clean' if card_style == 'clean' else ''}">
+<div class="{card_classes}">
+  {bg_html}
   <div class="card-vignette"></div>
   <div class="card-content">
     {logo_html}
@@ -412,6 +522,9 @@ def generate_card(
 
 </body>
 </html>"""
+
+    if not save:
+        return html
 
     # Save card
     card_filename = f"card_{credential_id}.html"

@@ -78,8 +78,10 @@ import content_store
 import content_page
 import email_sender
 import backup
+import card_looks
 import limits
 import logo_utils
+import looks_page
 import member_registry
 import reminders
 import security
@@ -352,7 +354,7 @@ def _read_config_file() -> dict:
     # the repo's config.json as the first-boot default — see config_store.py.
     return config_store.read_config()
 
-CARD_STYLES = ("distressed", "clean")
+CARD_STYLES = card_looks.STYLES
 
 def load_config() -> dict:
     """
@@ -398,6 +400,11 @@ def load_config() -> dict:
         # none) and the style, "distressed" or "clean".
         "logo_data_uri": cfg.get("logo_data_uri", "") or "",
         "card_style":    cfg.get("card_style", "distressed") if cfg.get("card_style") in CARD_STYLES else "distressed",
+        # The Default look's optional background picture, and the saved
+        # "card looks" (card_looks.py) a tier can pick instead of the default.
+        "bg_data_uri":   cfg.get("bg_data_uri") if logo_utils.is_logo_data_uri(cfg.get("bg_data_uri")) else "",
+        "bg_dim":        cfg.get("bg_dim") if cfg.get("bg_dim") in card_looks.DIMS else card_looks.DEFAULT_DIM,
+        "card_looks":    card_looks.clean_looks(cfg.get("card_looks")),
         # How the member widget looks on the creator's site (widget_look.py).
         **widget_look.from_config(cfg),
         # How the admin pages look (admin_theme.py). A deployment that never
@@ -422,30 +429,67 @@ def get_tier(cfg: dict, tier_name: str) -> dict:
     manual/demo testing via /issue directly)."""
     return next((t for t in cfg.get("tiers", []) if t.get("name") == tier_name), None)
 
-def resolve_tier_design(cfg: dict, tier_name: str) -> dict:
+def resolve_look(cfg: dict, look: dict = None, legacy_design: dict = None) -> dict:
     """
-    A tier can optionally carry its own `design` block (set via the
-    per-tier "Edit design" panel in /admin/dashboard) that overrides the
-    deployment's global look for just that pass type — e.g. a "DAILY"
-    pass can look different from "VIP" without touching the others.
-    Anything the tier's design doesn't set falls back to the global
-    config.json values. This is the one place that fallback happens, so
-    /issue and the dashboard's live preview stay in sync.
+    The final values for drawing a card: one saved look (or, for a tier not
+    yet converted, its old-style `design` block, or neither = the Default look
+    from Branding). A blank field in a look follows the Default look. The
+    background picture does not follow: only the Default look itself, or a look
+    that has its own, shows one.
     """
-    tier_cfg = next((t for t in cfg.get("tiers", []) if t.get("name") == tier_name), None)
-    design = (tier_cfg or {}).get("design") or {}
-    style = design.get("card_style")
+    own = look if look is not None else (legacy_design or None)
+    d = own or {}
+    style = d.get("card_style")
     if style not in CARD_STYLES:
         style = cfg.get("card_style") if cfg.get("card_style") in CARD_STYLES else "distressed"
+    if own is None:
+        bg, dim = cfg.get("bg_data_uri") or "", cfg.get("bg_dim")
+    else:
+        bg = d.get("bg_data_uri") if logo_utils.is_logo_data_uri(d.get("bg_data_uri")) else ""
+        dim = d.get("bg_dim")
     return {
-        "card_title":    design.get("card_title") or cfg["card_title"],
-        "accent_color":  design.get("accent_color") or cfg["accent_color"],
-        "show_barcode":  design.get("show_barcode", True),
-        # tier's own logo, else the deployment's logo from Branding, else none
-        "logo_data_uri": design.get("logo_data_uri") or cfg.get("logo_data_uri") or None,
-        "card_label":    design.get("card_label") or cfg.get("card_subtitle") or "",
+        "card_title":    d.get("card_title") or cfg["card_title"],
+        "accent_color":  d.get("accent_color") or cfg["accent_color"],
+        "show_barcode":  d.get("show_barcode", True),
+        # the look's own logo, else the deployment's logo from Branding, else none
+        "logo_data_uri": d.get("logo_data_uri") or cfg.get("logo_data_uri") or None,
+        "card_label":    d.get("card_label") or cfg.get("card_subtitle") or "",
         "card_style":    style,
+        "background_data_uri": bg or None,
+        "background_dim":      dim if dim in card_looks.DIMS else card_looks.DEFAULT_DIM,
     }
+
+def resolve_tier_design(cfg: dict, tier_name: str) -> dict:
+    """
+    The card values for a tier: the look it picked on the dashboard (Tiers &
+    pricing -> Card look), else the Default look from Branding. A tier that
+    still carries an old-style `design` block (settings saved before card
+    looks existed, not opened on the dashboard since) keeps drawing exactly as
+    it did. This is the one place that choice happens, so /issue and every
+    preview stay in sync.
+    """
+    tier_cfg = next((t for t in cfg.get("tiers", []) if t.get("name") == tier_name), None) or {}
+    look = card_looks.get(cfg.get("card_looks") or [], tier_cfg.get("look"))
+    if look:
+        return resolve_look(cfg, look)
+    return resolve_look(cfg, None, tier_cfg.get("design"))
+
+def _migrate_card_looks() -> bool:
+    """Turn tiers' old per-tier designs into looks (once). Called whenever the
+    dashboard is opened or saved; cards look exactly the same before and after."""
+    raw = _read_config_file()
+    if card_looks.migrate_tier_designs(raw):
+        config_store.write_config(raw)
+        return True
+    return False
+
+def _encode_background_upload(file_storage) -> tuple:
+    """A card background upload -> (data: URI, "") or ("", reason it was not
+    used); ("", "") when no file was chosen."""
+    if not file_storage or not file_storage.filename:
+        return "", ""
+    raw = file_storage.read(logo_utils.BG_MAX_UPLOAD_BYTES + 1)
+    return logo_utils.process_background(raw)
 
 
 # ── Signup limits (see limits.py) ──
@@ -536,6 +580,8 @@ def _issue_and_fulfill(name: str, email: str, tier: str, days: int, sections: li
             logo_data_uri = design["logo_data_uri"],
             card_label    = design["card_label"],
             card_style    = design["card_style"],
+            background_data_uri = design["background_data_uri"],
+            background_dim      = design["background_dim"],
         )
 
         # 4 — Registry (payment_meta, if given, is recorded on the entry —
@@ -1698,6 +1744,7 @@ def admin_dashboard():
     redirect_resp = require_admin_page("/admin/dashboard")
     if redirect_resp:
         return redirect_resp
+    _migrate_card_looks()
     return _dashboard_page()
 
 def _encode_upload_as_data_uri(file_storage) -> tuple:
@@ -1725,20 +1772,16 @@ def admin_dashboard_save():
     tier_show_spots  = request.form.getlist("tier_show_spots")
     tier_per_email   = request.form.getlist("tier_per_email")
 
-    # Per-tier design overrides. Logos are matched POSITIONALLY against
-    # whatever was already saved at that row index — fine as long as tiers
-    # aren't reordered in the same save that also changes a logo; if a row
-    # was moved, just re-upload its logo. Good enough for a single-admin
-    # tool; not worth the complexity of id-based tracking for this.
-    old_tiers          = _read_config_file().get("tiers", [])
-    design_card_titles = request.form.getlist("tier_design_card_title")
-    design_accents     = request.form.getlist("tier_design_accent_color")
-    design_barcodes    = request.form.getlist("tier_design_barcode")
-    design_logo_clears = request.form.getlist("tier_design_logo_clear")
-    design_logo_files  = request.files.getlist("tier_design_logo")
-    design_labels      = request.form.getlist("tier_design_card_label")
-    design_styles      = request.form.getlist("tier_design_style")
-    logo_notes         = []   # reasons an uploaded logo wasn't used, shown after the save
+    # Each tier picks one of the saved card looks (or none = the Default look).
+    # Tiers are matched by name to what was saved before, so a tier keeps its
+    # look even if this save came from something that doesn't send the picker.
+    _migrate_card_looks()
+    saved_cfg  = _read_config_file()
+    looks_now  = card_looks.clean_looks(saved_cfg.get("card_looks"))
+    old_by_name = {str(t.get("name", "")).upper(): t for t in (saved_cfg.get("tiers") or []) if isinstance(t, dict)}
+    tier_looks = request.form.getlist("tier_look")
+    have_picker = "tier_look" in request.form
+    logo_notes = []   # reasons an uploaded picture wasn't used, shown after the save
 
     tiers = []
     for i in range(len(tier_names)):
@@ -1755,35 +1798,15 @@ def admin_dashboard_save():
             expiry_days = 31
         sections = [s.strip() for s in (tier_sections[i] if i < len(tier_sections) else "").split(",") if s.strip()]
 
-        design = {}
-        d_title  = (design_card_titles[i] if i < len(design_card_titles) else "").strip()
-        d_accent = (design_accents[i] if i < len(design_accents) else "").strip()
-        d_bar    = (design_barcodes[i] if i < len(design_barcodes) else "on").strip()
-        d_clear  = (design_logo_clears[i] if i < len(design_logo_clears) else "0") == "1"
-        d_label  = (design_labels[i] if i < len(design_labels) else "").strip()[:40]
-        d_style  = (design_styles[i] if i < len(design_styles) else "").strip()
-        new_logo, logo_err = _encode_upload_as_data_uri(design_logo_files[i]) if i < len(design_logo_files) else ("", "")
-        if logo_err:
-            logo_notes.append(f"Tier {name.upper()}: {logo_err}")
-
-        if d_title:
-            design["card_title"] = d_title
-        if d_accent:
-            design["accent_color"] = d_accent
-        if d_bar == "off":
-            design["show_barcode"] = False
-        if d_label:
-            design["card_label"] = d_label
-        if d_style in CARD_STYLES:
-            design["card_style"] = d_style
-
-        if new_logo:
-            design["logo_data_uri"] = new_logo
-        elif not d_clear and i < len(old_tiers):
-            old_logo = (old_tiers[i].get("design") or {}).get("logo_data_uri")
-            if old_logo:
-                design["logo_data_uri"] = old_logo
-        # else: cleared, or no previous logo — leave unset (inherits global)
+        old_t = old_by_name.get(name.upper()) or {}
+        if have_picker:
+            look_id = (tier_looks[i] if i < len(tier_looks) else "").strip()
+            if not card_looks.get(looks_now, look_id):
+                look_id = ""
+            legacy_design = None
+        else:
+            look_id = old_t.get("look") if card_looks.get(looks_now, old_t.get("look")) else ""
+            legacy_design = old_t.get("design") if not look_id else None
 
         # Limits: only stored when they differ from the defaults, so a tier
         # with no limits looks exactly like it always did in config.json.
@@ -1802,7 +1825,8 @@ def admin_dashboard_save():
             **({"max_members": max_members} if max_members else {}),
             **({"show_spots_left": False} if not show_spots else {}),
             **({"per_email": per_email} if per_email != limits.DEFAULT_PER_EMAIL else {}),
-            **({"design": design} if design else {}),
+            **({"look": look_id} if look_id else {}),
+            **({"design": legacy_design} if legacy_design else {}),
         })
 
     # Deployment-wide card logo: a new upload wins; otherwise "Remove" clears
@@ -1821,8 +1845,26 @@ def admin_dashboard_save():
     if card_style not in CARD_STYLES:
         card_style = "distressed"
 
+    # The Default look's background picture, same rules as the logo.
+    old_global_bg = saved_cfg.get("bg_data_uri", "") or ""
+    new_global_bg, bg_err = _encode_background_upload(request.files.get("global_bg"))
+    if bg_err:
+        logo_notes.append(f"Background picture: {bg_err}")
+    if new_global_bg:
+        global_bg = new_global_bg
+    elif request.form.get("global_bg_clear") == "1":
+        global_bg = ""
+    else:
+        global_bg = old_global_bg if logo_utils.is_logo_data_uri(old_global_bg) else ""
+    global_bg_dim = (request.form.get("global_bg_dim") or "").strip()
+    if global_bg_dim not in card_looks.DIMS:
+        old_dim = saved_cfg.get("bg_dim")
+        global_bg_dim = old_dim if old_dim in card_looks.DIMS else card_looks.DEFAULT_DIM
+
     save_config({
         "logo_data_uri": global_logo,
+        "bg_data_uri":   global_bg,
+        "bg_dim":        global_bg_dim,
         "card_style":    card_style,
         "creator_name":  (request.form.get("creator_name") or "").strip() or "Your Creator Name",
         "card_title":     (request.form.get("card_title") or "").strip() or "YOUR BRAND HERE",
@@ -2064,66 +2106,21 @@ def _dashboard_page() -> str:
 
     tier_rows = ""
     for t in cfg["tiers"]:
-        design = t.get("design") or {}
-        logo_uri = design.get("logo_data_uri") or ""
-        if not logo_utils.is_logo_data_uri(logo_uri):
-            logo_uri = ""
-        t_style = design.get("card_style", "")
-        logo_thumb = f'<img class="logo-thumb" src="{logo_uri}">' if logo_uri else '<span class="no-logo">none — uses the main logo</span>'
-        barcode_on = design.get("show_barcode", True)
+        look_sel = t.get("look") if card_looks.get(cfg["card_looks"], t.get("look")) else ""
         tier_rows += f"""
         <tr class="tier-row">
-          <td><input name="tier_name" value="{esc_html(t.get('name',''))}"></td>
-          <td><input name="tier_label" value="{esc_html(t.get('label',''))}"></td>
-          <td><input name="tier_price" type="number" step="0.01" value="{esc_html(str(t.get('price',0)))}"></td>
-          <td><input name="tier_expiry_days" type="number" value="{esc_html(str(t.get('expiry_days',31)))}"></td>
-          <td><input name="tier_sections" value="{esc_html(', '.join(t.get('sections',[])))}" placeholder="downloads, chat"></td>
-          <td><button type="button" class="design-toggle">More ▾</button></td>
-          <td><button type="button" class="remove-tier">×</button></td>
+          <td data-label="Name"><input name="tier_name" value="{esc_html(t.get('name',''))}"></td>
+          <td data-label="Label"><input name="tier_label" value="{esc_html(t.get('label',''))}"></td>
+          <td data-label="Price"><input name="tier_price" type="number" step="0.01" value="{esc_html(str(t.get('price',0)))}"></td>
+          <td data-label="Days of access"><input name="tier_expiry_days" type="number" value="{esc_html(str(t.get('expiry_days',31)))}"></td>
+          <td data-label="Sections (separated by commas)"><input name="tier_sections" value="{esc_html(', '.join(t.get('sections',[])))}" placeholder="downloads, chat"></td>
+          <td data-label="Card look"><select name="tier_look">{looks_page.picker_options(cfg, look_sel)}</select></td>
+          <td><button type="button" class="design-toggle">Limits ▾</button></td>
+          <td><button type="button" class="remove-tier" title="Remove this tier">×</button></td>
         </tr>
         <tr class="design-row" style="display:none">
-          <td colspan="7">
+          <td colspan="8">
             {_limits_panel(t)}
-            <div class="design-panel">
-              <div class="design-field">
-                <label>Card title</label>
-                <input name="tier_design_card_title" value="{esc_html(design.get('card_title',''))}" placeholder="blank = use global &quot;{esc_html(cfg['card_title'])}&quot;">
-              </div>
-              <div class="design-field">
-                <label>Accent color</label>
-                <input name="tier_design_accent_color" value="{esc_html(design.get('accent_color',''))}" placeholder="blank = use global {esc_html(cfg['accent_color'])}">
-              </div>
-              <div class="design-field">
-                <label>Small line under the title</label>
-                <input name="tier_design_card_label" value="{esc_html(design.get('card_label',''))}" maxlength="40" placeholder="blank = same as Branding">
-              </div>
-              <div class="design-field">
-                <label>Card style</label>
-                <select name="tier_design_style">
-                  <option value="" {"selected" if t_style not in CARD_STYLES else ""}>Same as Branding</option>
-                  <option value="distressed" {"selected" if t_style == "distressed" else ""}>Distressed</option>
-                  <option value="clean" {"selected" if t_style == "clean" else ""}>Clean</option>
-                </select>
-              </div>
-              <div class="design-field">
-                <label>Barcode strip</label>
-                <select name="tier_design_barcode">
-                  <option value="on" {"selected" if barcode_on else ""}>On</option>
-                  <option value="off" {"selected" if not barcode_on else ""}>Off</option>
-                </select>
-              </div>
-              <div class="design-field">
-                <label>Logo</label>
-                <div class="logo-row">
-                  {logo_thumb}
-                  <input type="file" name="tier_design_logo" accept="image/png,image/jpeg,image/gif,image/webp">
-                  <button type="button" class="remove-logo">Remove logo</button>
-                </div>
-                <input type="hidden" name="tier_design_logo_clear" value="0">
-              </div>
-              <button type="button" class="preview-btn">Preview this pass's card →</button>
-              <iframe class="preview-frame" style="display:none"></iframe>
-            </div>
           </td>
         </tr>"""
 
@@ -2183,6 +2180,11 @@ def _dashboard_page() -> str:
     global_logo_thumb = (f'<img class="logo-thumb" id="global-logo-thumb" src="{esc_html(g_logo)}">' if g_logo
                          else '<span class="no-logo">none — cards show no logo</span>')
     g_style = cfg.get("card_style", "distressed")
+    global_bg_state = ('<span class="no-logo" id="global-bg-state">&#10003; picture added</span>' if cfg.get("bg_data_uri")
+                       else '<span class="no-logo" id="global-bg-state">none</span>')
+    global_dim_options = "".join('<option value="%s"%s>%s</option>' % (d, " selected" if cfg.get("bg_dim") == d else "", esc_html(card_looks.DIM_NAMES[d]))
+                                 for d in card_looks.DIMS)
+    looks_section = looks_page.section_html(cfg)
 
     style_cards = ""
     for k in admin_theme.STYLES:
@@ -2241,6 +2243,7 @@ def _dashboard_page() -> str:
   table {{ width:100%; border-collapse:collapse; margin-top:8px; }}
   th {{ text-align:left; font-size:9px; letter-spacing:1px; color:var(--muted); text-transform:uppercase; padding:4px 6px; }}
   td {{ padding:4px 6px; }}
+  {looks_page.CSS}
   .remove-tier {{ background:transparent; border:1px solid var(--line); color:var(--soft); cursor:pointer; width:28px; height:28px; }}
   .add-tier, .save-btn {{ background:var(--accent); color:var(--on-accent); border:none; font-family:var(--font);
            font-size:11px; letter-spacing:1.5px; text-transform:uppercase; padding:10px 18px; cursor:pointer; margin-top:12px; }}
@@ -2282,6 +2285,28 @@ def _dashboard_page() -> str:
            font-size:12px; line-height:1.7; padding:12px 14px; margin:8px 0; white-space:pre-wrap; word-break:break-all; }}
   .copy-btn {{ background:var(--accent); color:var(--on-accent); border:none; font-family:var(--font);
            font-size:11px; letter-spacing:1.5px; text-transform:uppercase; padding:8px 16px; cursor:pointer; }}
+  /* Tiers on a phone: one card per tier instead of a table you have to scroll sideways. */
+  @media (max-width:899px) {{
+    #sec-tiers table, #sec-tiers tbody {{ display:block; width:100%; }}
+    #sec-tiers tr:has(> th) {{ display:none; }}
+    #sec-tiers tr.tier-row {{ display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:10px 12px; margin-top:12px; padding:14px;
+      background:var(--panel); border:1px solid var(--line); border-radius:var(--radius-lg, 8px); }}
+    #sec-tiers tr.tier-row > td {{ display:block; padding:0; min-width:0; }}
+    #sec-tiers tr.tier-row > td[data-label]::before {{ content:attr(data-label); display:block; font-size:12px; color:var(--muted); margin-bottom:4px; letter-spacing:0; text-transform:none; }}
+    #sec-tiers tr.tier-row > td:nth-child(5), #sec-tiers tr.tier-row > td:nth-child(6) {{ grid-column:1 / -1; }}
+    #sec-tiers tr.tier-row select {{ width:100%; box-sizing:border-box; padding:11px 12px; font-size:16px; }}
+    #sec-tiers tr.tier-row input {{ width:100%; box-sizing:border-box; padding:11px 12px; font-size:16px; }}
+    #sec-tiers .design-toggle, #sec-tiers .remove-tier {{ width:100%; height:auto; box-sizing:border-box; padding:11px 12px; font-size:13px; }}
+    #sec-tiers .remove-tier {{ font-size:0 !important; line-height:1; }}
+    #sec-tiers .remove-tier::after {{ content:"Remove tier"; font-size:13px; font-family:var(--font); }}
+    #sec-tiers tr.design-row {{ display:block; margin-top:6px; }}
+    #sec-tiers tr.design-row > td {{ display:block; padding:0; }}
+    #sec-tiers .design-panel {{ padding:14px; gap:14px; }}
+    #sec-tiers .design-field {{ flex:1 1 100%; min-width:0; }}
+    #sec-tiers .design-field input, #sec-tiers .design-field select {{ width:100%; max-width:100%; box-sizing:border-box; padding:11px 12px; font-size:16px; }}
+    #sec-tiers .design-field input[type=file] {{ font-size:13px; padding:8px 0; }}
+    #sec-tiers .preview-btn {{ padding:12px 14px; font-size:13px; }}
+  }}
 {theme_css}</style></head>
 <body {body_attrs}>
   <div class="nav"><a href="/admin/members">Members →</a><a href="/admin/content">Content →</a><a href="/admin/logout">Log out</a></div>
@@ -2315,6 +2340,7 @@ def _dashboard_page() -> str:
 
     <section class="dsec" id="sec-branding" data-title="Branding &amp; cards">
     <h2>Branding</h2>
+    <div class="hint" style="margin-bottom:6px;">This is the <b>default look</b> for your cards. To make other looks (like Trial or Monthly), open <b>Card looks</b>, then pick one for each tier under <b>Tiers &amp; pricing</b>.</div>
     <label>Creator name</label>
     <input name="creator_name" value="{esc_html(cfg['creator_name'])}">
     <label>Card title (the big name on cards and emails)</label>
@@ -2325,8 +2351,13 @@ def _dashboard_page() -> str:
     <input name="accent_color" type="color" value="{esc_html(cfg['accent_color'])}">
     <label>Card style</label>
     <select name="card_style">
-      <option value="distressed" {"selected" if g_style == "distressed" else ""}>Distressed — worn keycard look</option>
-      <option value="clean" {"selected" if g_style == "clean" else ""}>Clean — smooth and unworn</option>
+      <option value="distressed" {"selected" if g_style == "distressed" else ""}>{esc_html(card_looks.STYLE_NAMES["distressed"])}</option>
+      <option value="clean" {"selected" if g_style == "clean" else ""}>{esc_html(card_looks.STYLE_NAMES["clean"])}</option>
+      <option value="holographic" {"selected" if g_style == "holographic" else ""}>{esc_html(card_looks.STYLE_NAMES["holographic"])}</option>
+      <option value="minimal" {"selected" if g_style == "minimal" else ""}>{esc_html(card_looks.STYLE_NAMES["minimal"])}</option>
+      <option value="ticket" {"selected" if g_style == "ticket" else ""}>{esc_html(card_looks.STYLE_NAMES["ticket"])}</option>
+      <option value="gradient" {"selected" if g_style == "gradient" else ""}>{esc_html(card_looks.STYLE_NAMES["gradient"])}</option>
+      <option value="neon" {"selected" if g_style == "neon" else ""}>{esc_html(card_looks.STYLE_NAMES["neon"])}</option>
     </select>
     <label>Card logo (PNG, JPG, GIF or WEBP; shrunk automatically)</label>
     <div class="logo-row">
@@ -2335,6 +2366,15 @@ def _dashboard_page() -> str:
       <button type="button" class="remove-logo" id="remove-global-logo">Remove logo</button>
     </div>
     <input type="hidden" name="global_logo_clear" id="global-logo-clear" value="0">
+    <label>Background picture (optional, your own design)</label>
+    <div class="logo-row">
+      {global_bg_state}
+      <input type="file" name="global_bg" accept="image/png,image/jpeg,image/gif,image/webp">
+      <button type="button" class="remove-logo" id="remove-global-bg">Remove picture</button>
+    </div>
+    <input type="hidden" name="global_bg_clear" id="global-bg-clear" value="0">
+    <label>Darken the picture so the text is readable</label>
+    <select name="global_bg_dim">{global_dim_options}</select>
     <button type="button" class="preview-btn" id="global-preview-btn" style="display:block;margin-top:12px;max-width:260px;">Preview the card →</button>
     <iframe class="preview-frame" id="global-preview-frame" style="display:none"></iframe>
     <label>Members page address (the page of your site with the widget; member links point here)</label>
@@ -2401,9 +2441,9 @@ def _dashboard_page() -> str:
     <section class="dsec" id="sec-tiers" data-title="Tiers &amp; pricing">
     <h2>Tiers &amp; pricing</h2>
     {tier_sections_hint}
-    <div class="hint" style="margin-bottom:8px;">Each tier is a pass type. "More ▾" opens its limits (how many members, cards per email) and its own card design. Anything left blank uses the Branding settings.</div>
+    <div class="hint" style="margin-bottom:8px;">Each tier is its own kind of card (for example Monthly, Trial or VIP). Pick a <b>Card look</b> for each one; make and edit looks under <b>Card looks</b>. <b>Limits</b> opens how many members a tier can have and how many cards one email can get.</div>
     <table>
-      <tr><th>Name</th><th>Label</th><th>Price</th><th>Expiry (days)</th><th>Sections (separated by commas)</th><th></th><th></th></tr>
+      <tr><th>Name</th><th>Label</th><th>Price</th><th>Expiry (days)</th><th>Sections (separated by commas)</th><th>Card look</th><th></th><th></th></tr>
       <tbody id="tier-body">{tier_rows}</tbody>
     </table>
     <button type="button" class="add-tier" id="add-tier">+ Add tier</button>
@@ -2498,22 +2538,24 @@ def _dashboard_page() -> str:
     <h2></h2>
     <button type="submit" class="save-btn">Save changes</button>
   </form>
+  {looks_section}
   <section class="dsec" id="sec-backup" data-title="Backup &amp; restore">
   {backup_html}
   </section>
 
   <template id="tier-row-template">
     <tr class="tier-row">
-      <td><input name="tier_name" value=""></td>
-      <td><input name="tier_label" value=""></td>
-      <td><input name="tier_price" type="number" step="0.01" value="0"></td>
-      <td><input name="tier_expiry_days" type="number" value="31"></td>
-      <td><input name="tier_sections" value="" placeholder="downloads, chat"></td>
-      <td><button type="button" class="design-toggle">More ▾</button></td>
-      <td><button type="button" class="remove-tier">×</button></td>
+      <td data-label="Name"><input name="tier_name" value=""></td>
+      <td data-label="Label"><input name="tier_label" value=""></td>
+      <td data-label="Price"><input name="tier_price" type="number" step="0.01" value="0"></td>
+      <td data-label="Days of access"><input name="tier_expiry_days" type="number" value="31"></td>
+      <td data-label="Sections (separated by commas)"><input name="tier_sections" value="" placeholder="downloads, chat"></td>
+      <td data-label="Card look"><select name="tier_look">{looks_page.picker_options(cfg, "")}</select></td>
+      <td><button type="button" class="design-toggle">Limits ▾</button></td>
+      <td><button type="button" class="remove-tier" title="Remove this tier">×</button></td>
     </tr>
     <tr class="design-row" style="display:none">
-      <td colspan="7">
+      <td colspan="8">
         <div class="design-panel limits-panel">
           <div class="design-field">
             <label>Max members (blank = no limit)</label>
@@ -2534,46 +2576,6 @@ def _dashboard_page() -> str:
               <option value="unlimited">No limit</option>
             </select>
           </div>
-        </div>
-        <div class="design-panel">
-          <div class="design-field">
-            <label>Card title</label>
-            <input name="tier_design_card_title" value="" placeholder="blank = same as Branding">
-          </div>
-          <div class="design-field">
-            <label>Accent color</label>
-            <input name="tier_design_accent_color" value="" placeholder="blank = same as Branding">
-          </div>
-          <div class="design-field">
-            <label>Small line under the title</label>
-            <input name="tier_design_card_label" value="" maxlength="40" placeholder="blank = same as Branding">
-          </div>
-          <div class="design-field">
-            <label>Card style</label>
-            <select name="tier_design_style">
-              <option value="" selected>Same as Branding</option>
-              <option value="distressed">Distressed</option>
-              <option value="clean">Clean</option>
-            </select>
-          </div>
-          <div class="design-field">
-            <label>Barcode strip</label>
-            <select name="tier_design_barcode">
-              <option value="on" selected>On</option>
-              <option value="off">Off</option>
-            </select>
-          </div>
-          <div class="design-field">
-            <label>Logo</label>
-            <div class="logo-row">
-              <span class="no-logo">none — uses the main logo</span>
-              <input type="file" name="tier_design_logo" accept="image/png,image/jpeg,image/gif,image/webp">
-              <button type="button" class="remove-logo">Remove logo</button>
-            </div>
-            <input type="hidden" name="tier_design_logo_clear" value="0">
-          </div>
-          <button type="button" class="preview-btn">Preview this pass's card →</button>
-          <iframe class="preview-frame" style="display:none"></iframe>
         </div>
       </td>
     </tr>
@@ -2631,50 +2633,6 @@ def _dashboard_page() -> str:
         designRow.style.display = (designRow.style.display === 'none') ? '' : 'none';
         return;
       }}
-      if (e.target.classList.contains('remove-logo')) {{
-        const panel = e.target.closest('.design-panel');
-        panel.querySelector('input[name="tier_design_logo_clear"]').value = '1';
-        const thumb = panel.querySelector('.logo-thumb');
-        if (thumb) {{
-          const span = document.createElement('span');
-          span.className = 'no-logo';
-          span.textContent = 'removed — will use global on save';
-          thumb.replaceWith(span);
-        }}
-        return;
-      }}
-      if (e.target.classList.contains('preview-btn')) {{
-        const panel = e.target.closest('.design-panel');
-        const designRow = e.target.closest('tr');
-        const mainRow = designRow.previousElementSibling;
-        const frame = panel.querySelector('.preview-frame');
-
-        const fd = new FormData();
-        fd.append('name', mainRow.querySelector('input[name="tier_name"]').value || 'PREVIEW');
-        fd.append('card_title', panel.querySelector('input[name="tier_design_card_title"]').value || '');
-        fd.append('accent_color', panel.querySelector('input[name="tier_design_accent_color"]').value || '');
-        fd.append('barcode', panel.querySelector('select[name="tier_design_barcode"]').value);
-        fd.append('scope', 'tier');
-        fd.append('card_label', panel.querySelector('input[name="tier_design_card_label"]').value || '');
-        fd.append('card_style', panel.querySelector('select[name="tier_design_style"]').value || '');
-        fd.append('logo_clear', panel.querySelector('input[name="tier_design_logo_clear"]').value);
-        const fileInput = panel.querySelector('input[name="tier_design_logo"]');
-        if (fileInput.files[0]) fd.append('logo', fileInput.files[0]);
-
-        e.target.textContent = 'Loading preview...';
-        fetch('/admin/dashboard/preview-card', {{ method: 'POST', body: fd }})
-          .then(r => r.text())
-          .then(html => {{
-            frame.srcdoc = html;
-            frame.style.display = '';
-            e.target.textContent = "Preview this pass's card →";
-          }})
-          .catch(err => {{
-            alert('Preview failed: ' + err.message);
-            e.target.textContent = "Preview this pass's card →";
-          }});
-        return;
-      }}
     }});
 
     // Branding: card logo + preview of the deployment-wide card look. Uses what's
@@ -2684,6 +2642,14 @@ def _dashboard_page() -> str:
       const frame = document.getElementById('global-preview-frame');
       const clear = document.getElementById('global-logo-clear');
       const fileInput = document.querySelector('input[name="global_logo"]');
+      const bgInput = document.querySelector('input[name="global_bg"]');
+      const bgClear = document.getElementById('global-bg-clear');
+      document.getElementById('remove-global-bg').addEventListener('click', () => {{
+        bgClear.value = '1';
+        bgInput.value = '';
+        document.getElementById('global-bg-state').textContent = 'removed — takes effect when you save';
+      }});
+      bgInput.addEventListener('change', () => {{ if (bgInput.files[0]) {{ bgClear.value = '0'; document.getElementById('global-bg-state').textContent = 'new picture chosen'; }} }});
       document.getElementById('remove-global-logo').addEventListener('click', () => {{
         clear.value = '1';
         fileInput.value = '';
@@ -2703,6 +2669,9 @@ def _dashboard_page() -> str:
         }});
         fd.append('logo_clear', clear.value);
         if (fileInput.files[0]) fd.append('logo', fileInput.files[0]);
+        fd.append('bg_clear', bgClear.value);
+        fd.append('bg_dim', document.querySelector('[name="global_bg_dim"]').value);
+        if (bgInput.files[0]) fd.append('bg', bgInput.files[0]);
         const label = btn.textContent;
         btn.textContent = 'Loading preview...';
         fetch('/admin/dashboard/preview-card', {{ method: 'POST', body: fd, credentials: 'same-origin' }})
@@ -2933,83 +2902,221 @@ def admin_email_test():
     return jsonify({"success": ok_, "message": message}), (200 if ok_ else 502)
 
 
-# ── POST /admin/dashboard/preview-card ──
-# Renders a real card (via card_generator, same code path /issue uses) from
-# whatever is currently typed into a tier's design panel — nothing here is
-# saved. Dummy credential data only; never touches the registry.
+# ── Card previews ──
+# Every preview renders a real card through card_generator (the same code
+# /issue uses) with dummy member data; nothing is saved and the registry is
+# never touched.
+def _render_preview_card(cfg: dict, design: dict, tier_name: str = "MEMBER", creator_name: str = None) -> str:
+    from datetime import timedelta as _td
+    from card_generator import generate_card
+    now = datetime.now(timezone.utc)
+    return generate_card(
+        credential_id = "preview0000demo",
+        holder_name   = "Preview Member",
+        tier          = tier_name,
+        issued_at     = now.isoformat(),
+        expires_at    = (now + _td(days=31)).isoformat(),
+        bundle_hash   = "0" * 64,
+        signature_hex = "0" * 128,
+        sections      = [],
+        card_title    = design["card_title"],
+        card_subtitle = f"{tier_name} Card",
+        access_url    = cfg["members_page"] or "https://example.com/members.html",
+        creator_name  = creator_name or cfg["creator_name"],
+        accent_color  = design["accent_color"],
+        show_barcode  = design["show_barcode"],
+        logo_data_uri = design["logo_data_uri"],
+        card_label    = design["card_label"],
+        card_style    = design["card_style"],
+        background_data_uri = design.get("background_data_uri"),
+        background_dim      = design.get("background_dim", card_looks.DEFAULT_DIM),
+        save          = False,
+    )
+
+def _preview_error_page(message: str) -> str:
+    return ('<body style="background:#050403;color:#f0c674;font-family:monospace;padding:24px">'
+            f'⚠ {esc_html(message)}</body>')
+
+# POST /admin/dashboard/preview-card — the Default look, from what is typed in
+# Branding right now (saved or not).
 @app.route("/admin/dashboard/preview-card", methods=["POST"])
 def admin_dashboard_preview_card():
     if not is_admin_session():
         return err("Unauthorized", 401)
 
     cfg = load_config()
-    scope = (request.form.get("scope") or "tier").strip()
     typed_style = (request.form.get("card_style") or "").strip()
-    accent_override = (request.form.get("accent_color") or "").strip()
-    logo_clear = request.form.get("logo_clear") == "1"
     uploaded, logo_err = _encode_upload_as_data_uri(request.files.get("logo"))
     if logo_err:
-        return (f'<body style="background:#050403;color:#f0c674;font-family:monospace;padding:24px">'
-                f'⚠ {esc_html(logo_err)}</body>'), 400
+        return _preview_error_page(logo_err), 400
+    bg_up, bg_err = _encode_background_upload(request.files.get("bg"))
+    if bg_err:
+        return _preview_error_page(bg_err), 400
 
-    saved_global_logo = cfg.get("logo_data_uri") or None
     tiers = cfg.get("tiers") or []
-
-    if scope == "global":
-        # The deployment-wide look, from what's typed in Branding right now.
-        tier_name     = (tiers[0].get("name") if tiers else "") or "MEMBER"
-        card_title    = (request.form.get("card_title") or "").strip() or cfg["card_title"]
-        creator_name  = (request.form.get("creator_name") or "").strip() or cfg["creator_name"]
-        card_label    = (request.form.get("card_subtitle") or "").strip() or cfg["card_subtitle"]
-        accent        = accent_override or cfg["accent_color"]
-        card_style    = typed_style if typed_style in CARD_STYLES else cfg["card_style"]
-        show_barcode  = True
-        logo_data_uri = uploaded or (None if logo_clear else saved_global_logo)
-    else:
-        # One tier's design: blank fields inherit the SAVED deployment-wide look.
-        tier_name     = (request.form.get("name") or "PREVIEW").strip().upper()
-        saved_design  = (get_tier(cfg, tier_name) or {}).get("design") or {}
-        saved_tier_logo = saved_design.get("logo_data_uri") if logo_utils.is_logo_data_uri(saved_design.get("logo_data_uri")) else None
-        card_title    = (request.form.get("card_title") or "").strip() or cfg["card_title"]
-        creator_name  = cfg["creator_name"]
-        card_label    = (request.form.get("card_label") or "").strip() or cfg["card_subtitle"]
-        accent        = accent_override or cfg["accent_color"]
-        card_style    = typed_style if typed_style in CARD_STYLES else cfg["card_style"]
-        show_barcode  = (request.form.get("barcode") or "on") != "off"
-        # new upload > the tier's saved logo (unless "Remove" was pressed) > the deployment's logo
-        logo_data_uri = uploaded or (None if logo_clear else saved_tier_logo) or saved_global_logo
-
-    from datetime import timedelta as _td
-    now = datetime.now(timezone.utc)
-
+    bg = bg_up or ("" if request.form.get("bg_clear") == "1" else cfg.get("bg_data_uri") or "")
+    dim = (request.form.get("bg_dim") or "").strip()
+    design = {
+        "card_title":    (request.form.get("card_title") or "").strip() or cfg["card_title"],
+        "accent_color":  card_looks.clean_color(request.form.get("accent_color")) or cfg["accent_color"],
+        "show_barcode":  True,
+        "logo_data_uri": uploaded or (None if request.form.get("logo_clear") == "1" else (cfg.get("logo_data_uri") or None)),
+        "card_label":    (request.form.get("card_subtitle") or "").strip() or cfg["card_subtitle"],
+        "card_style":    typed_style if typed_style in CARD_STYLES else cfg["card_style"],
+        "background_data_uri": bg or None,
+        "background_dim": dim if dim in card_looks.DIMS else cfg["bg_dim"],
+    }
     try:
-        from card_generator import generate_card
-        card_path_str = generate_card(
-            credential_id = "preview0000demo",
-            holder_name   = "Preview Member",
-            tier          = tier_name,
-            issued_at     = now.isoformat(),
-            expires_at    = (now + _td(days=31)).isoformat(),
-            bundle_hash   = "0" * 64,
-            signature_hex = "0" * 128,
-            sections      = [],
-            card_title    = card_title,
-            card_subtitle = f"{tier_name} Card",
-            access_url    = cfg["members_page"] or "https://example.com/members.html",
-            creator_name  = creator_name,
-            accent_color  = accent,
-            show_barcode  = show_barcode,
-            logo_data_uri = logo_data_uri,
-            card_label    = card_label,
-            card_style    = card_style,
-        )
-        # generate_card() writes the card to disk (cards/) and returns that
-        # path — a preview has no real credential behind it, so read it
-        # back and delete the throwaway file immediately.
-        card_file = Path(card_path_str)
-        rendered = card_file.read_text(encoding="utf-8")
-        card_file.unlink(missing_ok=True)
-        return rendered
+        return _render_preview_card(cfg, design,
+                                    tier_name=(tiers[0].get("name") if tiers else "") or "MEMBER",
+                                    creator_name=(request.form.get("creator_name") or "").strip() or cfg["creator_name"])
+    except Exception as e:
+        return err(f"Preview failed: {str(e)}", 500)
+
+
+# ── Card looks ──
+# The "Card looks" screen (looks_page.py): a list of saved looks, each with a
+# name; a tier picks one. These routes save/copy/delete a look and render its
+# preview. Pictures arrive as uploads and are shrunk and re-encoded here.
+def _looks_payload(cfg: dict = None) -> dict:
+    cfg = cfg or load_config()
+    return {"looks": [card_looks.summary(l, cfg["tiers"]) for l in cfg["card_looks"]]}
+
+def _look_from_form(base: dict = None):
+    """The look typed in the editor -> (clean look, "" ) or (None, reason).
+    `base` is the saved look being edited (its pictures are kept unless
+    replaced or removed)."""
+    f = request.form
+    logo, e1 = _encode_upload_as_data_uri(request.files.get("logo"))
+    bg, e2 = _encode_background_upload(request.files.get("bg"))
+    if e1 or e2:
+        return None, e1 or e2
+    base = base or {}
+    return card_looks.clean_look({
+        "id":            base.get("id") or "000000000000",
+        "name":          f.get("name"),
+        "card_title":    f.get("card_title"),
+        "accent_color":  "" if f.get("accent_same") == "1" else f.get("accent_color"),
+        "card_label":    f.get("card_label"),
+        "card_style":    f.get("card_style"),
+        "show_barcode":  f.get("barcode", "on") != "off",
+        "logo_data_uri": logo or ("" if f.get("logo_clear") == "1" else base.get("logo_data_uri", "")),
+        "bg_data_uri":   bg or ("" if f.get("bg_clear") == "1" else base.get("bg_data_uri", "")),
+        "bg_dim":        f.get("bg_dim"),
+    }), ""
+
+def _looks_error(message: str, status: int = 400):
+    return jsonify({"success": False, "error": message}), status
+
+@app.route("/admin/looks/save", methods=["POST"])
+def admin_looks_save():
+    if not is_admin_session():
+        return _looks_error("Not logged in.", 401)
+    _migrate_card_looks()
+    raw = _read_config_file()
+    looks = card_looks.clean_looks(raw.get("card_looks"))
+    look_id = (request.form.get("id") or "").strip()
+    base = card_looks.get(looks, look_id) if look_id else None
+    if look_id and not base:
+        return _looks_error("That look no longer exists. Reload the page.", 404)
+    if not base and len(looks) >= card_looks.MAX_LOOKS:
+        return _looks_error(f"You can have up to {card_looks.MAX_LOOKS} looks. Delete one you don't use first.", 409)
+    look, problem = _look_from_form(base)
+    if problem:
+        return _looks_error(problem)
+    problem = card_looks.name_problem(looks, card_looks.clean_name(request.form.get("name")), own_id=base["id"] if base else None)
+    if problem:
+        return _looks_error(problem)
+    if base:
+        look["id"] = base["id"]
+        looks = [look if l["id"] == base["id"] else l for l in looks]
+    else:
+        look["id"] = card_looks.new_id(looks)
+        looks.append(look)
+    save_config({"card_looks": looks})
+    cfg = load_config()
+    payload = _looks_payload(cfg)
+    payload.update({"success": True, "id": look["id"]})
+    return jsonify(payload)
+
+@app.route("/admin/looks/copy", methods=["POST"])
+def admin_looks_copy():
+    if not is_admin_session():
+        return _looks_error("Not logged in.", 401)
+    _migrate_card_looks()
+    raw = _read_config_file()
+    looks = card_looks.clean_looks(raw.get("card_looks"))
+    src = card_looks.get(looks, (request.form.get("id") or "").strip())
+    if not src:
+        return _looks_error("That look no longer exists. Reload the page.", 404)
+    if len(looks) >= card_looks.MAX_LOOKS:
+        return _looks_error(f"You can have up to {card_looks.MAX_LOOKS} looks. Delete one you don't use first.", 409)
+    dup = dict(src)
+    dup["id"] = card_looks.new_id(looks)
+    dup["name"] = card_looks.unique_name(looks, f"{src['name']} copy")
+    looks.append(dup)
+    save_config({"card_looks": looks})
+    payload = _looks_payload()
+    payload.update({"success": True, "id": dup["id"]})
+    return jsonify(payload)
+
+@app.route("/admin/looks/delete", methods=["POST"])
+def admin_looks_delete():
+    if not is_admin_session():
+        return _looks_error("Not logged in.", 401)
+    _migrate_card_looks()
+    raw = _read_config_file()
+    looks = card_looks.clean_looks(raw.get("card_looks"))
+    look_id = (request.form.get("id") or "").strip()
+    if not card_looks.get(looks, look_id):
+        return _looks_error("That look no longer exists. Reload the page.", 404)
+    # Tiers that used it go back to the Default look (their cards already
+    # issued keep the look they were made with).
+    tiers = raw.get("tiers") if isinstance(raw.get("tiers"), list) else []
+    moved = []
+    for t in tiers:
+        if isinstance(t, dict) and t.get("look") == look_id:
+            t.pop("look", None)
+            moved.append(str(t.get("name", "")))
+    save_config({"card_looks": [l for l in looks if l["id"] != look_id], "tiers": tiers})
+    payload = _looks_payload()
+    payload.update({"success": True, "moved": moved})
+    return jsonify(payload)
+
+@app.route("/admin/looks/preview", methods=["POST"])
+def admin_looks_preview():
+    """A card drawn from what is typed in the editor (saved or not). Sends
+    `id` when editing, so pictures already saved are still shown."""
+    if not is_admin_session():
+        return err("Unauthorized", 401)
+    cfg = load_config()
+    base = card_looks.get(cfg["card_looks"], (request.form.get("id") or "").strip())
+    look, problem = _look_from_form(base)
+    if problem:
+        return _preview_error_page(problem), 400
+    tiers = cfg.get("tiers") or []
+    try:
+        return _render_preview_card(cfg, resolve_look(cfg, look),
+                                    tier_name=(tiers[0].get("name") if tiers else "") or "MEMBER")
+    except Exception as e:
+        return err(f"Preview failed: {str(e)}", 500)
+
+@app.route("/admin/looks/preview/<look_id>", methods=["GET"])
+def admin_looks_preview_saved(look_id):
+    """A saved look as a card ("default" = the Default look from Branding)."""
+    if not is_admin_session():
+        return err("Unauthorized", 401)
+    cfg = load_config()
+    tiers = cfg.get("tiers") or []
+    if look_id == "default":
+        design = resolve_look(cfg)
+    else:
+        look = card_looks.get(cfg["card_looks"], look_id)
+        if not look:
+            return err("Not found", 404)
+        design = resolve_look(cfg, look)
+    try:
+        return _render_preview_card(cfg, design, tier_name=(tiers[0].get("name") if tiers else "") or "MEMBER")
     except Exception as e:
         return err(f"Preview failed: {str(e)}", 500)
 
