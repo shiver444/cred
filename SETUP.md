@@ -46,7 +46,7 @@ existing key breaks verification for everything signed with the old one.
   "creator_name": "...",      // shown on cards, emails, admin page
   "card_title": "...",        // the headline brand name
   "accent_color": "#...",     // used on the card, email, admin page, and the member widget
-  "members_page": "https://your-domain.com/members.html",
+  "members_page": "",         // optional: leave empty to use the page this server makes (/members)
   "tiers": [ ... ]            // your actual pricing/tier structure
 }
 ```
@@ -167,7 +167,8 @@ host is usually the better choice.
 | `SESSION_SECRET_KEY` | Recommended | Signs the admin login session cookie. If unset, a random key is generated each time the app starts, which means every restart/redeploy logs the admin out. Set a fixed random value (e.g. `python -c "import secrets; print(secrets.token_hex(32))"`) so logins persist. |
 | `BREVO_API_KEY` | Yes (to send email) | Brevo transactional email API key. |
 | `GMAIL_ADDRESS` | Yes (to send email) | Your Brevo-verified sender address. |
-| `MEMBERS_PAGE` | Recommended | Overrides `config.json`'s `members_page` — the URL members land on (where `cp.js` is embedded). |
+| `MEMBERS_PAGE` | Optional | Overrides the Members page address from Branding. Leave it out to use the built-in page at `/members`. |
+| `PUBLIC_URL` | Optional | This server's public address (for example `https://club.example.org`), used in the links in emails when the address you browse differs from Railway's. Railway's own domain is used automatically. |
 | `DATA_DIR` | Recommended in production | Path to persistent storage (e.g. a Railway Volume) so issued credentials, your signing key, and your dashboard settings survive redeploys. On Railway it's picked up automatically from an attached Volume if you don't set it; setting it yourself (to the Volume's mount path) always wins. Falls back to the local folder, which is fine for local dev only. |
 | `STRIPE_SECRET_KEY` | Only if `payment_provider` is `"stripe"` | Your Stripe secret key (`sk_test_...` or `sk_live_...`). Not needed at all with the default `"manual"` provider — see step 6. |
 | `STRIPE_WEBHOOK_SECRET` | Only if `payment_provider` is `"stripe"` | The signing secret for your Stripe webhook endpoint (`whsec_...`). Without it, `/webhook/stripe` refuses everything — there is no default/fallback secret, same philosophy as `ADMIN_SECRET`. |
@@ -530,11 +531,13 @@ page as soon as you save — nothing to edit on your site.
 ### Dashboard style
 
 The pages only you see (dashboard, Members, Content and the login page) can
-look four different ways. Open the dashboard and find **Dashboard style**
+look five different ways. Open the dashboard and find **Dashboard style**
 (above Branding), click a card and press **Save changes**:
 
 - **Spaceship** — near-black with typewriter lettering and small capitals
   (the original look).
+- **Spaceship lite** — the same colors and typewriter lettering, but split
+  into screens with a menu (like Daylight and Midnight) instead of one long page.
 - **Daylight** — clean and light with friendly lettering and rounded cards.
   New installs start with this one, because it is the easiest to read.
 - **Studio** — warm ivory paper, serif headings and thin lines.
@@ -546,9 +549,9 @@ looks:
 - **Spaceship** keeps the single long page you scroll through.
 - **Studio** is also one long page, with a small contents list beside it on a
   wide screen to jump between sections.
-- **Daylight** and **Midnight** work like an app. On a computer there is a
+- **Spaceship lite**, **Daylight** and **Midnight** work like an app. On a computer there is a
   menu down the left (Home, Members, Content, Settings). On a phone the menu
-  sits along the bottom, and Settings is a list of screens (Branding, Widget
+  sits along the bottom, and Settings is a list of screens (Branding, Card looks, Widget
   look, Tiers, Payment, Emails, Dashboard style, Backup) that you open one at
   a time. When you change something, a **Save changes** bar appears; nothing is
   saved until you press it.
@@ -713,3 +716,15 @@ have stay as they were.
 
 (If you run the code by hand rather than through the dashboard, a
 `logo.png` in `assets/` is still used as a last-resort logo.)
+
+## The Members page
+
+Members open their personal access link on a **Members page**: a page with the
+widget on it. You don't need a website for this. The server makes one for you
+at `https://<your-address>/members`, and every link, email and checkout uses it
+automatically. You can also open it yourself to check what members see.
+
+If you have your own website, put the two embed lines (dashboard → Embed on
+your website) on a page of yours and type that page's address under
+**Branding → Members page address**. Leave it empty to go back to the built-in
+page. The old sample address from earlier versions is treated as empty.

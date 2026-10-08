@@ -18,6 +18,8 @@ CSS = """
   .looks-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(240px,1fr)); gap:14px; margin:14px 0 6px; }
   .look-tile { border:1px solid var(--line); background:var(--panel); border-radius:var(--radius-lg, 8px); padding:12px; display:flex; flex-direction:column; gap:10px; min-width:0; }
   .lk-thumb { position:relative; width:100%; overflow:hidden; border-radius:var(--radius, 6px); background:var(--frame-bg); }
+  .lk-thumb:not(.ready)::before { content:"Loading preview…"; position:absolute; inset:0; display:flex; align-items:center; justify-content:center; font-size:12px; color:var(--muted); }
+  .lk-thumb .lk-retry { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%); font-size:12px; padding:6px 10px; cursor:pointer; }
   .lk-thumb iframe { position:absolute; top:0; left:0; width:420px; height:600px; border:0; transform-origin:0 0; pointer-events:none; }
   .lk-name { font-weight:600; color:var(--fg); font-size:14px; overflow-wrap:anywhere; }
   .lk-sub { font-size:12px; color:var(--muted); line-height:1.5; }
@@ -143,15 +145,38 @@ _JS = r"""
 
   // ── the list ──
   var observer = null;
+  // Previews are fetched two at a time, retried if the server hiccups, and
+  // offer a Retry button if they still fail (a blank card with no explanation
+  // was the problem before).
+  var queue = [], active = 0;
+  function pump() {
+    while (active < 2 && queue.length) run(queue.shift());
+  }
+  function run(frame) {
+    active++;
+    frame._tries = (frame._tries || 0) + 1;
+    fetch('/admin/looks/preview/' + frame.getAttribute('data-look'), { credentials: 'same-origin' })
+      .then(function (r) { if (!r.ok) throw new Error('preview ' + r.status); return r.text(); })
+      .then(function (h) { frame.srcdoc = h; if (frame.parentNode) frame.parentNode.className = 'lk-thumb ready'; })
+      .catch(function () {
+        if (frame._tries < 3) { setTimeout(function () { queue.push(frame); pump(); }, 1000 * frame._tries); return; }
+        var box = frame.parentNode; if (!box) return;
+        var b = el('button', 'lk-retry', "Couldn't load. Try again"); b.type = 'button';
+        b.addEventListener('click', function () { box.removeChild(b); frame._tries = 0; queue.push(frame); pump(); });
+        box.appendChild(b);
+      })
+      .then(function () { active--; pump(); });
+  }
   function loadThumb(frame) {
     if (frame.getAttribute('data-loaded')) return;
     frame.setAttribute('data-loaded', '1');
-    fetch('/admin/looks/preview/' + frame.getAttribute('data-look'), { credentials: 'same-origin' })
-      .then(function (r) { return r.text(); }).then(function (h) { frame.srcdoc = h; }).catch(function () {});
+    queue.push(frame); pump();
   }
   function fit() {
     [].slice.call(grid.querySelectorAll('.lk-thumb')).forEach(function (t) {
       var w = t.clientWidth; if (!w) return;
+      var top = t.getBoundingClientRect().top;
+      if (top < (window.innerHeight || 800) + 400) loadThumb(t.firstChild);   // on screen (or nearly): make sure its preview is on the way
       var k = w / 420;
       t.style.height = Math.round(600 * k) + 'px';
       t.firstChild.style.transform = 'scale(' + k + ')';

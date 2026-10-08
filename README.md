@@ -41,8 +41,8 @@ can revoke any of them at any time.
 - A signup and access widget that works on any site (two lines of HTML) and
   adapts to your page's colors and font by itself; you can also set its colors,
   corners and wording in the dashboard.
-- An admin dashboard (four looks to choose from: Daylight, Studio, Midnight or the
-  original Spaceship): branding, tiers and pricing, saved card looks (seven styles, logos, background pictures) you pick per tier,
+- An admin dashboard (five looks to choose from: Daylight, Studio, Midnight, the original
+  Spaceship, or Spaceship lite, which has the same look in app-style screens): branding, tiers and pricing, saved card looks (seven styles, logos, background pictures) you pick per tier,
   payment settings, a member list with one-click revoke, and a "copy link"
   button that gives you any member's personal access link.
 - Cards and credentials signed with ECDSA, with a private key generated for
@@ -57,6 +57,7 @@ can revoke any of them at any time.
   picture thumbnails, a list or grid view, and a Buy button on single items.
 - Backup and restore: one downloadable file with your members, signing key,
   settings and content, and a restore that works on a brand-new server.
+- A built-in Members page at /members, so personal access links work from day one without a website of your own (use your own page by typing its address in Branding).
 - Send a card to anyone for free (a friend, a winner) from the Members page,
   emailed to them or copied as a link to send yourself.
 - Delete a member and their files when you need to (e.g. a data-removal

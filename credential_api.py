@@ -35,7 +35,7 @@ PayPal, a regional processor, or anything else. See SETUP.md before
 deploying.
 """
 
-from flask import Flask, request, jsonify, session, redirect
+from flask import Flask, request, jsonify, session, redirect, make_response
 from flask_cors import CORS
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
@@ -79,6 +79,7 @@ import content_page
 import email_sender
 import backup
 import card_looks
+import public_url
 import limits
 import logo_utils
 import looks_page
@@ -369,7 +370,10 @@ def load_config() -> dict:
         "card_title":    cfg.get("card_title", "YOUR BRAND HERE"),
         "card_subtitle": cfg.get("card_subtitle", "Member Card"),
         "accent_color":  cfg.get("accent_color", "#00e87a"),
-        "members_page":  os.environ.get("MEMBERS_PAGE", cfg.get("members_page", "")),
+        # What was typed in Branding (may be empty), and the address actually
+        # used: that, or this server's own built-in /members page.
+        "members_page_saved": os.environ.get("MEMBERS_PAGE", cfg.get("members_page", "")),
+        "members_page":  public_url.effective_members_page(os.environ.get("MEMBERS_PAGE", cfg.get("members_page", ""))),
         "api_base":      cfg.get("api_base", ""),
         "currency":      cfg.get("currency", "usd"),
         # Which payment plugin /checkout routes a paid tier through —
@@ -1257,7 +1261,7 @@ def admin_members():
     # the member's way in. "Members page address" must be set to the real page
     # where the widget is embedded, or the link goes nowhere useful.
     members_page = (cfg.get("members_page") or "").strip()
-    members_page_unset = (not members_page) or ("your-domain.com" in members_page)
+    members_page_unset = not members_page          # empty only if the server's own address is unknown
 
     # "Expiring soon" uses the reminder window when reminders are on, else a week.
     soon_days = cfg.get("reminder_days") or 7
@@ -1938,10 +1942,12 @@ def _setup_checklist_html(cfg: dict, provider: str) -> str:
         "Set a SESSION_SECRET_KEY variable (any long random text), or you will be logged out each time the app restarts.",
     ))
 
+    # Always satisfied: with no address of your own, the server's built-in
+    # /members page is used (see public_url.py), so links and emails work.
     items.append((
-        bool(members_page) and "your-domain.com" not in members_page,
-        "Set your Members page address",
-        "Under Branding, set the Members page address to the page of your site with the widget.",
+        bool(members_page),
+        "Members page",
+        "Members open their access link on this page. Leave Branding → Members page address empty to use the one built into this server.",
     ))
 
     if has_paid_tier:
@@ -2377,8 +2383,9 @@ def _dashboard_page() -> str:
     <select name="global_bg_dim">{global_dim_options}</select>
     <button type="button" class="preview-btn" id="global-preview-btn" style="display:block;margin-top:12px;max-width:260px;">Preview the card →</button>
     <iframe class="preview-frame" id="global-preview-frame" style="display:none"></iframe>
-    <label>Members page address (the page of your site with the widget; member links point here)</label>
-    <input name="members_page" value="{esc_html(cfg['members_page'])}">
+    <label>Members page address (optional)</label>
+    <input name="members_page" value="{esc_html(cfg['members_page_saved'] if public_url.is_real(cfg['members_page_saved']) else '')}" placeholder="{esc_html(cfg['members_page'])}">
+    <div class="hint">Leave this empty to use the page this server makes for you (shown above). Only fill it in if the widget sits on a page of your own website.</div>
     <label>This server's address (just for your notes)</label>
     <input name="api_base" value="{esc_html(cfg['api_base'])}">
 
@@ -3470,6 +3477,36 @@ def member_file(fid):
                      download_name=item["file"]["name"], conditional=True, max_age=0)
     resp.headers["Cache-Control"] = "private, no-store"
     resp.headers["X-Content-Type-Options"] = "nosniff"
+    return resp
+
+
+@app.route("/members", methods=["GET"])
+@app.route("/members.html", methods=["GET"])
+def members_page_builtin():
+    """The built-in Members page: the widget on a plain page, so links work
+    without a website of your own."""
+    cfg = load_config()
+    name = esc_html(cfg.get("creator_name") or "Members")
+    accent = cfg.get("accent_color") or "#00e87a"
+    accent = accent if re.fullmatch(r"#[0-9a-fA-F]{3,8}", accent) else "#00e87a"
+    html = f"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{name} - Members</title>
+<style>
+  :root {{ color-scheme: light dark; --bg:#f5f5f2; --fg:#1b1b1b; --accent:{accent}; }}
+  @media (prefers-color-scheme: dark) {{ :root {{ --bg:#101112; --fg:#ececec; }} }}
+  html,body {{ margin:0; background:var(--bg); color:var(--fg); font:16px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif; }}
+  main {{ max-width:560px; margin:0 auto; padding:32px 16px 64px; }}
+  h1 {{ font-size:1.4rem; margin:0 0 20px; }}
+</style></head>
+<body><main>
+<h1>{name}</h1>
+<div id="credential-widget"></div>
+<script src="/cp.js"></script>
+</main></body></html>"""
+    resp = make_response(html)
+    resp.headers["Content-Type"] = "text/html; charset=utf-8"
     return resp
 
 

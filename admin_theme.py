@@ -3,6 +3,8 @@ Dashboard styles: how the admin pages (dashboard, Members, Content, login)
 look. One setting, `admin_style` in config.json, chosen on the dashboard:
 
   spaceship  the original look: near-black, typewriter lettering, small caps
+  spacelite  Spaceship's colors and lettering, arranged as screens (sidebar,
+             tab bar on a phone) like Daylight and Midnight
   daylight   clean and light, friendly sans-serif, rounded cards (new default)
   studio     warm ivory paper, serif headings, thin lines: quiet and editorial
   midnight   modern dark blue-grey, readable sans-serif, soft depth
@@ -17,12 +19,13 @@ The creator's accent color is theirs and is kept in every style; for text and
 outlines it is nudged just enough to stay readable on the style's background.
 """
 
-STYLES = ("spaceship", "daylight", "studio", "midnight")
+STYLES = ("spaceship", "spacelite", "daylight", "studio", "midnight")
 DEFAULT_STYLE = "spaceship"      # a deployment that never chose one keeps today's look
 NEW_DEPLOYMENT_STYLE = "daylight"  # what the template's own config.json starts with
 
 LABELS = {
     "spaceship": ("Spaceship", "Near-black, typewriter lettering, small capitals. The original look."),
+    "spacelite": ("Spaceship lite", "The Spaceship look, split into screens with a sidebar (tabs on a phone). Easier to move around."),
     "daylight":  ("Daylight",  "Clean and light with friendly lettering and rounded cards. Easiest to read."),
     "studio":    ("Studio",    "Warm ivory paper with elegant serif headings and thin lines."),
     "midnight":  ("Midnight",  "Modern dark blue-grey with readable lettering and soft depth."),
@@ -33,7 +36,7 @@ LABELS = {
 #   toc   the same long page, with a small contents list beside it (Studio)
 #   app   screens: a sidebar on a computer, a tab bar and a Settings list on a
 #         phone, one settings screen at a time, a save bar (Daylight, Midnight)
-LAYOUTS = {"spaceship": "long", "studio": "toc", "daylight": "app", "midnight": "app"}
+LAYOUTS = {"spaceship": "long", "spacelite": "app", "studio": "toc", "daylight": "app", "midnight": "app"}
 
 # The dashboard's settings screens, in the order they are listed: (id, title, one line).
 # Each id matches a <section id="sec-<id>"> on the dashboard page.
@@ -72,6 +75,7 @@ _PALETTES = {
         line="#3a1210", line2="#5a4a42", dash="#2a1a18", panel="#13100f", field="#1a100e", hover="#1a100e",
         ok="#5fd98a", ok_bg="#13371f", warn="#f0c674", warn_bg="#3a2a10", bad="#e8232b", frame="#050403",
         font=_MONO, head=_MONO, radius="0px", radius_lg="0px", shadow="none", min_contrast=3.0),
+    "spacelite": None,      # same palette as spaceship, filled in below
     "daylight": dict(
         page="#eef1f6", bg="#ffffff", fg="#1d2330", soft="#4a5468", muted="#5f697b",
         line="#dde2ea", line2="#b9c1cf", dash="#e6eaf0", panel="#f6f8fb", field="#ffffff", hover="#f2f5f9",
@@ -91,6 +95,7 @@ _PALETTES = {
         font=_SANS, head=_SANS, radius="9px", radius_lg="16px",
         shadow="0 1px 2px rgba(0,0,0,.4), 0 14px 40px rgba(0,0,0,.45)", min_contrast=4.5),
 }
+_PALETTES["spacelite"] = dict(_PALETTES["spaceship"])
 
 
 def clean_style(value, default=DEFAULT_STYLE):
@@ -216,6 +221,29 @@ h2 { font-weight:500; font-size:21px !important; }
 .nav a { border-radius:2px; }
 """
 
+
+
+# Spaceship lite: the shell, lettered like the original (typewriter, small caps,
+# square corners). The page's own rules are left alone, so forms and tables look
+# exactly as they do in Spaceship.
+_LITE_EXTRA = """
+html { background:var(--page); }
+.app-brand { text-transform:uppercase; letter-spacing:.14em; font-size:13px; font-weight:400; color:var(--accent-text); }
+.app-title { font-size:18px !important; font-weight:400; text-transform:uppercase; letter-spacing:.14em; color:var(--accent-text); }
+.app-side a { font-size:12px; text-transform:uppercase; letter-spacing:.09em; }
+.app-side a.sub { font-size:11.5px; }
+.app-side .app-grp { letter-spacing:.14em; font-weight:400; }
+.app-side a.on { font-weight:400; border-left:2px solid var(--accent-text); }
+.app-list .t { font-size:13px; font-weight:400; text-transform:uppercase; letter-spacing:.08em; }
+.app-list .s { font-size:12px; }
+.app-tabs a { font-size:10px; text-transform:uppercase; letter-spacing:.08em; border-radius:0; }
+.app-tabs a.on { font-weight:400; }
+.app-back { font-size:12px; text-transform:uppercase; letter-spacing:.08em; }
+.app-savebar { font-size:12px; text-transform:uppercase; letter-spacing:.06em; box-shadow:none; }
+.app-savebar button { font-size:12px; text-transform:uppercase; letter-spacing:.1em; font-weight:400; }
+.app-ready .dsec.on { box-shadow:none; }
+@media (max-width:899px) { .app-title { font-size:16px !important; } }
+"""
 
 
 _ICONS = {
@@ -503,8 +531,10 @@ def css(style, accent, kind="page"):
     }
     out = ":root { " + " ".join("--%s:%s;" % (k, val) for k, val in v.items()) + " color-scheme:%s; }\n" % (
         "dark" if _lum(_rgb(p["bg"])) < 0.4 else "light")
-    if style == "spaceship":
+    if style == "spaceship" or (style == "spacelite" and kind == "login"):
         return out
+    if style == "spacelite":
+        return out + _APP_CSS + _LITE_EXTRA
     lay = layout(style)
     if kind == "login":
         return out + _MODERN + _MODERN_LOGIN + (_STUDIO_EXTRA if style == "studio" else "")

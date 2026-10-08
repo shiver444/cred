@@ -26,6 +26,7 @@ from html import escape as _esc
 from pathlib import Path
 
 import config_store
+import public_url
 
 BASE_DIR = Path(__file__).resolve().parent
 
@@ -45,7 +46,7 @@ CREATOR_NAME  = _cfg.get("creator_name", "Your Creator Name")
 CARD_TITLE    = _cfg.get("card_title", "YOUR BRAND HERE")
 ACCENT_COLOR  = _cfg.get("accent_color", "#00e87a")
 FROM_NAME     = CARD_TITLE
-MEMBERS_PAGE  = os.environ.get("MEMBERS_PAGE", _cfg.get("members_page", ""))
+MEMBERS_PAGE  = os.environ.get("MEMBERS_PAGE", _cfg.get("members_page", ""))   # refreshed (and defaulted) per send
 
 BREVO_URL = "https://api.brevo.com/v3/smtp/email"
 
@@ -91,7 +92,7 @@ def _refresh_branding():
     CARD_TITLE   = cfg.get("card_title", "YOUR BRAND HERE")
     ACCENT_COLOR = cfg.get("accent_color", "#00e87a")
     FROM_NAME    = CARD_TITLE
-    MEMBERS_PAGE = os.environ.get("MEMBERS_PAGE", cfg.get("members_page", ""))
+    MEMBERS_PAGE = public_url.effective_members_page(os.environ.get("MEMBERS_PAGE", cfg.get("members_page", "")))
 
 
 def build_email(
