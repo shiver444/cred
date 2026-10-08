@@ -57,6 +57,8 @@ can revoke any of them at any time.
   picture thumbnails, a list or grid view, and a Buy button on single items.
 - Backup and restore: one downloadable file with your members, signing key,
   settings and content, and a restore that works on a brand-new server.
+- Members see their own card (with a download button) when they open their link, and you can make the QR code on cards solid, blended into a background picture, or hidden.
+- A practice payment page, so you can try the whole paid sign-up flow without a real payment service.
 - A built-in Members page at /members, so personal access links work from day one without a website of your own (use your own page by typing its address in Branding).
 - Send a card to anyone for free (a friend, a winner) from the Members page,
   emailed to them or copied as a link to send yourself.

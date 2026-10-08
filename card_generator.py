@@ -29,6 +29,7 @@ from logo_utils import is_logo_data_uri
 STYLES = ("distressed", "clean", "holographic", "minimal", "ticket", "gradient", "neon")
 # How much a background picture is darkened so the card's text stays readable.
 DIM_ALPHA = {"none": 0.0, "soft": 0.25, "medium": 0.45, "strong": 0.65}
+QR_STYLES = ("solid", "blend", "off")
 DEFAULT_DIM = "medium"
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -105,6 +106,7 @@ def generate_card(
     card_style: str = "distressed",
     background_data_uri: str = None,
     background_dim: str = DEFAULT_DIM,
+    qr_style: str = "solid",
     save: bool = True,
 ) -> str:
     """
@@ -208,7 +210,9 @@ def generate_card(
     dim = DIM_ALPHA.get(background_dim, DIM_ALPHA[DEFAULT_DIM])
     bg_html = (f'<img class="card-bg" src="{_esc(background_data_uri, quote=True)}" alt="">'
                f'<div class="card-scrim" style="background:rgba(0,0,0,{dim})"></div>') if has_bg else ""
-    card_classes = "card" + (f" card--{card_style}" if card_style != "distressed" else "") + (" card--has-bg" if has_bg else "")
+    qr_style = qr_style if qr_style in QR_STYLES else "solid"
+    card_classes = ("card" + (f" card--{card_style}" if card_style != "distressed" else "") + (" card--has-bg" if has_bg else "")
+                    + ("" if qr_style == "solid" else f" card--qr-{qr_style}"))
 
     html = f"""<!DOCTYPE html>
 <html lang="en">
@@ -378,6 +382,15 @@ def generate_card(
     width: 100% !important;
     height: 100% !important;
   }}
+
+  /* QR code: "solid" is the white box above. "blend" drops the white box and draws the
+     code as see-through light squares on a very faint dark patch (the patch is
+     what keeps it readable over busy pictures; tested with a decoder). "off" hides it; the link stays in the
+     page so a dropped card file still works. */
+  .card--qr-off .card-qr-link {{ display: none; }}
+  .card--qr-blend .card-qr-box {{ background: rgba(0, 0, 0, 0.3) !important; box-shadow: none !important; }}
+  .card--qr-blend .card-qr-box svg path {{ fill: #ffffff; fill-opacity: 0.6; }}
+  .card--minimal:not(.card--has-bg).card--qr-blend .card-qr-box svg path {{ fill: #000000; fill-opacity: 0.45; }}
 
   .card-barcode {{
     width: 100%;

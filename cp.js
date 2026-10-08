@@ -418,6 +418,11 @@
       transition: all .15s;
     }
     .ca-dl-btn:hover { background: ${accent}; color: var(--ca-on-accent); }
+    .ca-mycard { margin-top: 16px; position: relative; }
+    .ca-mycard-label { font-size: 8px; letter-spacing: 2px; text-transform: uppercase; color: var(--ca-ash); margin-bottom: 8px; }
+    .ca-mycard-frame { position: relative; width: 100%; max-width: 340px; overflow: hidden; border-radius: 12px; }
+    .ca-mycard-frame iframe { position: absolute; top: 0; left: 0; width: 420px; height: 600px; border: 0; transform-origin: 0 0; background: transparent; }
+    .ca-mycard-dl { display: inline-block; margin-top: 12px; }
     .ca-video-grid {
       display: grid;
       grid-template-columns: 1fr 1fr;
@@ -1190,7 +1195,36 @@
     if (res.status === 403) return null
     const body = await res.json()
     if (!body || !body.success) return null
-    return body.sections || []
+    return { sections: body.sections || [], card: body.card || null }
+  }
+
+  // The member's own card: shown (scaled to fit) with a download button.
+  // Only paths of the exact shape the server hands out are used.
+  function renderMyCard(card) {
+    const holder = document.getElementById('ca-member-header')
+    if (!holder || !card) return
+    const ok = u => typeof u === 'string' && /^\/member-card\/[A-Za-z0-9_-]+\?t=[A-Za-z0-9_.=-]+(&dl=1)?$/.test(u)
+    if (!ok(card.view) || !ok(card.download)) return
+    const box = document.createElement('div')
+    box.className = 'ca-mycard'
+    box.innerHTML = `
+      <div class="ca-mycard-label">Your card</div>
+      <div class="ca-mycard-frame"><iframe title="Your membership card" loading="lazy" sandbox="allow-scripts allow-popups allow-popups-to-escape-sandbox"></iframe></div>
+      <a class="ca-dl-btn ca-mycard-dl" rel="noopener">\u2193 Download your card</a>`
+    const frame = box.querySelector('iframe'), wrap = box.querySelector('.ca-mycard-frame')
+    frame.src = API_BASE + card.view
+    box.querySelector('a').href = API_BASE + card.download
+    holder.appendChild(box)
+    const fit = () => {
+      const w = wrap.clientWidth
+      if (!w) return
+      const k = w / 420
+      wrap.style.height = Math.round(600 * k) + 'px'
+      frame.style.transform = 'scale(' + k + ')'
+    }
+    fit()
+    window.addEventListener('resize', fit)
+    if (window.ResizeObserver) new ResizeObserver(fit).observe(wrap)
   }
 
   // ── GRANT ACCESS ──
@@ -1219,9 +1253,11 @@
       '<div class="ca-panel active"><p style="color:#6b6058;font-size:10px;position:relative;">Loading your content…</p></div>'
 
     let sections = null
+    let myCard = null
     let unreachable = false
     try {
-      sections = await loadMemberContent(data)
+      const got = await loadMemberContent(data)
+      if (got) { sections = got.sections; myCard = got.card }
     } catch(e) {
       unreachable = true
     }
@@ -1238,6 +1274,7 @@
       showResult('invalid', '✗ This access is no longer valid. Contact ' + name + ' if you think that\'s a mistake.')
       return
     } else {
+      renderMyCard(myCard)
       buildMemberArea(sections)
     }
 

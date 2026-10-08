@@ -36,6 +36,12 @@ STYLE_NAMES = {
     "gradient":    "Gradient: wash of your color",
     "neon":        "Neon: glowing outline",
 }
+QR_STYLES   = ("solid", "blend", "off")
+QR_NAMES    = {
+    "solid": "Solid: white square (easiest to scan)",
+    "blend": "Blended: see-through, melts into the picture",
+    "off":   "Hidden: no QR code on the card",
+}
 DIMS        = ("none", "soft", "medium", "strong")
 DIM_NAMES   = {"none": "Not at all", "soft": "A little", "medium": "Some (recommended)", "strong": "A lot"}
 DEFAULT_DIM = "medium"
@@ -81,6 +87,7 @@ def clean_look(raw):
         "accent_color":  clean_color(raw.get("accent_color")),
         "card_label":    " ".join(str(raw.get("card_label") or "").split())[:MAX_LABEL],
         "card_style":    style if style in STYLES else "",
+        "qr_style":      raw.get("qr_style") if raw.get("qr_style") in QR_STYLES else "",
         "show_barcode":  raw.get("show_barcode", True) is not False,
         "logo_data_uri": raw.get("logo_data_uri") if is_logo_data_uri(raw.get("logo_data_uri")) else "",
         "bg_data_uri":   raw.get("bg_data_uri") if is_logo_data_uri(raw.get("bg_data_uri")) else "",
@@ -149,6 +156,7 @@ def summary(look, tiers) -> dict:
         "accent_color": look["accent_color"],
         "card_label":   look["card_label"],
         "card_style":   look["card_style"],
+        "qr_style":     look["qr_style"],
         "show_barcode": look["show_barcode"],
         "has_logo":     bool(look["logo_data_uri"]),
         "has_bg":       bool(look["bg_data_uri"]),

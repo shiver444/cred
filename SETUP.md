@@ -366,6 +366,12 @@ payment yourself. A link can't tell this app that the money arrived, so when
 you see the payment in that service you press **Approve** and the member gets
 their card.
 
+**Want to try it first?** Under the link field, press **Use the practice
+page**, then **Save**. It fills in a pretend payment page on your own server
+(no money moves). Sign up for a paid tier on your Members page, press the Pay
+button, and the practice page shows your reference and what to press next:
+**Approve** in the waiting list.
+
 Under **More options** (you can skip it): a different link for one tier (one
 per line, like `MEMBER = https://ko-fi.com/s/abc123`), and fill-in words you
 can write inside any link: `{amount}`, `{currency}`, `{tier}`, `{email}`,
@@ -700,6 +706,13 @@ What you can set in a look:
   other fields, **a background picture is not inherited**: a look only shows
   one if it has its own (or it is the Default look itself). The picture is
   built into each card file, so keep pictures modest.
+- **QR code:** *Solid* (the white square, easiest to scan), *Blended* (the code
+  is drawn see-through so it melts into a background picture; it sits on a very
+  faint dark patch and was tested to still scan, but a solid code is always the
+  most reliable) or *Hidden* (no QR code drawn). Members can always use their
+  personal link, and a hidden code is still inside the card file, so dropping
+  the card file into the widget keeps working. Set it for the Default look under
+  Branding, and per look in the editor ("Same as the default look" by default).
 - **Show barcode:** on or off.
 - **Preview:** both the Branding and the Card looks screens show the result
   using what's currently on screen, before you save.
@@ -723,6 +736,10 @@ Members open their personal access link on a **Members page**: a page with the
 widget on it. You don't need a website for this. The server makes one for you
 at `https://<your-address>/members`, and every link, email and checkout uses it
 automatically. You can also open it yourself to check what members see.
+
+When a member opens their link, the page shows their card (scaled to fit the
+screen) with a **Download your card** button, above their members-only content.
+The card stops showing the moment you revoke them.
 
 If you have your own website, put the two embed lines (dashboard → Embed on
 your website) on a page of yours and type that page's address under

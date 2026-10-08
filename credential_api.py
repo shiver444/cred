@@ -190,6 +190,7 @@ _PUBLIC_RULES = [
     ("/verify",         "check",  120, 60),
     ("/member-content", "check",  120, 60),
     ("/member-file/",   "file",   60,  60),
+    ("/member-card/",   "file",   60,  60),
     ("/member-preview/","thumb",  600, 60),     # a grid of pictures loads many at once
 ]
 
@@ -404,6 +405,7 @@ def load_config() -> dict:
         # none) and the style, "distressed" or "clean".
         "logo_data_uri": cfg.get("logo_data_uri", "") or "",
         "card_style":    cfg.get("card_style", "distressed") if cfg.get("card_style") in CARD_STYLES else "distressed",
+        "qr_style":      cfg.get("qr_style") if cfg.get("qr_style") in card_looks.QR_STYLES else "solid",
         # The Default look's optional background picture, and the saved
         # "card looks" (card_looks.py) a tier can pick instead of the default.
         "bg_data_uri":   cfg.get("bg_data_uri") if logo_utils.is_logo_data_uri(cfg.get("bg_data_uri")) else "",
@@ -459,6 +461,7 @@ def resolve_look(cfg: dict, look: dict = None, legacy_design: dict = None) -> di
         "logo_data_uri": d.get("logo_data_uri") or cfg.get("logo_data_uri") or None,
         "card_label":    d.get("card_label") or cfg.get("card_subtitle") or "",
         "card_style":    style,
+        "qr_style":      d.get("qr_style") if d.get("qr_style") in card_looks.QR_STYLES else cfg.get("qr_style", "solid"),
         "background_data_uri": bg or None,
         "background_dim":      dim if dim in card_looks.DIMS else card_looks.DEFAULT_DIM,
     }
@@ -584,6 +587,7 @@ def _issue_and_fulfill(name: str, email: str, tier: str, days: int, sections: li
             logo_data_uri = design["logo_data_uri"],
             card_label    = design["card_label"],
             card_style    = design["card_style"],
+            qr_style      = design["qr_style"],
             background_data_uri = design["background_data_uri"],
             background_dim      = design["background_dim"],
         )
@@ -1848,6 +1852,9 @@ def admin_dashboard_save():
     card_style = (request.form.get("card_style") or "").strip()
     if card_style not in CARD_STYLES:
         card_style = "distressed"
+    qr_style = (request.form.get("qr_style") or "").strip()
+    if qr_style not in card_looks.QR_STYLES:
+        qr_style = load_config().get("qr_style", "solid")      # field absent: keep what was saved
 
     # The Default look's background picture, same rules as the logo.
     old_global_bg = saved_cfg.get("bg_data_uri", "") or ""
@@ -1870,6 +1877,7 @@ def admin_dashboard_save():
         "bg_data_uri":   global_bg,
         "bg_dim":        global_bg_dim,
         "card_style":    card_style,
+        "qr_style":      qr_style,
         "creator_name":  (request.form.get("creator_name") or "").strip() or "Your Creator Name",
         "card_title":     (request.form.get("card_title") or "").strip() or "YOUR BRAND HERE",
         "card_subtitle":  (request.form.get("card_subtitle") or "").strip() or "Member Card",
@@ -2188,6 +2196,8 @@ def _dashboard_page() -> str:
     g_style = cfg.get("card_style", "distressed")
     global_bg_state = ('<span class="no-logo" id="global-bg-state">&#10003; picture added</span>' if cfg.get("bg_data_uri")
                        else '<span class="no-logo" id="global-bg-state">none</span>')
+    global_qr_options = "".join('<option value="%s"%s>%s</option>' % (q, " selected" if cfg.get("qr_style") == q else "", esc_html(card_looks.QR_NAMES[q]))
+                                for q in card_looks.QR_STYLES)
     global_dim_options = "".join('<option value="%s"%s>%s</option>' % (d, " selected" if cfg.get("bg_dim") == d else "", esc_html(card_looks.DIM_NAMES[d]))
                                  for d in card_looks.DIMS)
     looks_section = looks_page.section_html(cfg)
@@ -2365,6 +2375,9 @@ def _dashboard_page() -> str:
       <option value="gradient" {"selected" if g_style == "gradient" else ""}>{esc_html(card_looks.STYLE_NAMES["gradient"])}</option>
       <option value="neon" {"selected" if g_style == "neon" else ""}>{esc_html(card_looks.STYLE_NAMES["neon"])}</option>
     </select>
+    <label>QR code on the card</label>
+    <select name="qr_style">{global_qr_options}</select>
+    <div class="hint">Blended keeps the QR code on the card but makes it blend into a background picture. Members can still use their link or drop the card file.</div>
     <label>Card logo (PNG, JPG, GIF or WEBP; shrunk automatically)</label>
     <div class="logo-row">
       {global_logo_thumb}
@@ -2478,6 +2491,7 @@ def _dashboard_page() -> str:
       <label>Payment link</label>
       <input name="custom_payment_url" value="{esc_html(cfg.get('custom_payment_url',''))}" maxlength="{custom_payment.MAX_URL}" placeholder="https://paypal.me/yourname">
       <div class="hint" style="margin-top:4px;">Paste the link where members pay. It has to start with https://</div>
+      <div class="hint" style="margin-top:8px;">Just trying it out? <button type="button" class="mini" id="use-practice-link" data-link="{esc_html(public_url.base_url())}/practice-pay?ref={{reference}}&amp;amount={{amount}}">Use the practice page</button> A pretend payment page on this server: no money moves, and it tells you what to press next.</div>
       <details class="adv-box" style="margin-top:10px;">
         <summary>More options (you can skip this)</summary>
         <label>A different link for one tier</label>
@@ -2486,6 +2500,7 @@ def _dashboard_page() -> str:
         <div class="hint" style="margin-top:8px;">In any link you can write <b>{{amount}}</b>, <b>{{currency}}</b>, <b>{{tier}}</b>, <b>{{email}}</b>, <b>{{name}}</b> or <b>{{reference}}</b> and it is filled in for each member (for example <code>https://paypal.me/yourname/{{amount}}{{currency}}</code>). <b>{{reference}}</b> is a short code that also appears in the list at the bottom, so you can match a payment to a request.</div>
       </details>
     </div>
+
 
     <label>Message to the member (optional)</label>
     <textarea name="manual_payment_instructions" rows="3" placeholder="e.g. Send $9.99 to you@example.com, then I'll approve your access within a day.">{esc_html(cfg.get('manual_payment_instructions',''))}</textarea>
@@ -2642,6 +2657,19 @@ def _dashboard_page() -> str:
       }}
     }});
 
+    // Payment: "Use the practice page" fills in the pretend payment link.
+    (function() {{
+      var b = document.getElementById('use-practice-link');
+      if (!b) return;
+      b.addEventListener('click', function () {{
+        var u = document.querySelector('[name="custom_payment_url"]'), n = document.querySelector('[name="custom_provider_name"]');
+        u.value = b.getAttribute('data-link'); if (!n.value) n.value = 'Practice page';
+        // tell the page something changed, so the Save bar shows up
+        [u, n].forEach(function (f) {{ f.dispatchEvent(new Event('input', {{ bubbles: true }})); f.dispatchEvent(new Event('change', {{ bubbles: true }})); }});
+        b.textContent = 'Added. Now press Save';
+      }});
+    }})();
+
     // Branding: card logo + preview of the deployment-wide card look. Uses what's
     // typed/picked right now (saved or not).
     (function() {{
@@ -2671,7 +2699,7 @@ def _dashboard_page() -> str:
       btn.addEventListener('click', () => {{
         const fd = new FormData();
         fd.append('scope', 'global');
-        ['creator_name', 'card_title', 'card_subtitle', 'accent_color', 'card_style'].forEach(n => {{
+        ['creator_name', 'card_title', 'card_subtitle', 'accent_color', 'card_style', 'qr_style'].forEach(n => {{
           fd.append(n, document.querySelector('[name="' + n + '"]').value);
         }});
         fd.append('logo_clear', clear.value);
@@ -2935,6 +2963,7 @@ def _render_preview_card(cfg: dict, design: dict, tier_name: str = "MEMBER", cre
         logo_data_uri = design["logo_data_uri"],
         card_label    = design["card_label"],
         card_style    = design["card_style"],
+        qr_style      = design["qr_style"],
         background_data_uri = design.get("background_data_uri"),
         background_dim      = design.get("background_dim", card_looks.DEFAULT_DIM),
         save          = False,
@@ -2970,6 +2999,7 @@ def admin_dashboard_preview_card():
         "logo_data_uri": uploaded or (None if request.form.get("logo_clear") == "1" else (cfg.get("logo_data_uri") or None)),
         "card_label":    (request.form.get("card_subtitle") or "").strip() or cfg["card_subtitle"],
         "card_style":    typed_style if typed_style in CARD_STYLES else cfg["card_style"],
+        "qr_style":      (request.form.get("qr_style") or "").strip() if (request.form.get("qr_style") or "").strip() in card_looks.QR_STYLES else cfg["qr_style"],
         "background_data_uri": bg or None,
         "background_dim": dim if dim in card_looks.DIMS else cfg["bg_dim"],
     }
@@ -3006,6 +3036,7 @@ def _look_from_form(base: dict = None):
         "accent_color":  "" if f.get("accent_same") == "1" else f.get("accent_color"),
         "card_label":    f.get("card_label"),
         "card_style":    f.get("card_style"),
+        "qr_style":      f.get("qr_style"),
         "show_barcode":  f.get("barcode", "on") != "off",
         "logo_data_uri": logo or ("" if f.get("logo_clear") == "1" else base.get("logo_data_uri", "")),
         "bg_data_uri":   bg or ("" if f.get("bg_clear") == "1" else base.get("bg_data_uri", "")),
@@ -3429,11 +3460,49 @@ def member_content():
                     items.append(it)
                 sec["items"] = items
             sections.append(sec)
-        resp = jsonify({"success": True, "sections": sections})
+        out = {"success": True, "sections": sections}
+        if _card_path(cid).is_file():
+            t = _file_token(cid, "card")
+            out["card"] = {"view": f"/member-card/{cid}?t={t}", "download": f"/member-card/{cid}?t={t}&dl=1"}
+        resp = jsonify(out)
         resp.headers["Cache-Control"] = "no-store"
         return resp
     except Exception:
         return denied()
+
+
+def _card_path(cid: str):
+    """Where a member's card page is kept (the file need not exist)."""
+    from card_generator import CARDS_DIR
+    safe = re.sub(r"[^A-Za-z0-9_-]", "", str(cid))[:64]
+    return CARDS_DIR / f"card_{safe}.html"
+
+
+# ── GET /member-card/<credential id>?t=<ticket>[&dl=1] ──
+# The member's own card, shown in the widget once they have proved their
+# credential (the ticket comes from /member-content) and offered as a
+# download. Re-checks that the credential is still good, like /member-file.
+# Shown inside a sandbox so nothing on the page can reach the rest of the site.
+@app.route("/member-card/<cid>", methods=["GET"])
+def member_card(cid):
+    from flask import send_file
+    def denied():
+        r = app.response_class("Access denied.", status=403, mimetype="text/plain")
+        r.headers["Cache-Control"] = "no-store"
+        return r
+    if _check_file_token(request.args.get("t", ""), "card") != cid or not _member_entry(cid):
+        return denied()
+    path = _card_path(cid)
+    if not path.is_file():
+        return denied()
+    download = request.args.get("dl") == "1"
+    resp = send_file(path, mimetype="text/html", as_attachment=download,
+                     download_name="membership-card.html", conditional=False, max_age=0)
+    resp.headers["Cache-Control"] = "private, no-store"
+    resp.headers["X-Content-Type-Options"] = "nosniff"
+    if not download:
+        resp.headers["Content-Security-Policy"] = "sandbox allow-scripts allow-popups allow-popups-to-escape-sandbox"
+    return resp
 
 
 # ── GET /member-preview/<id>?t=<ticket> ──
@@ -3477,6 +3546,41 @@ def member_file(fid):
                      download_name=item["file"]["name"], conditional=True, max_age=0)
     resp.headers["Cache-Control"] = "private, no-store"
     resp.headers["X-Content-Type-Options"] = "nosniff"
+    return resp
+
+
+@app.route("/practice-pay", methods=["GET"])
+def practice_pay():
+    """A pretend payment page, for trying "Custom payment link" without a real
+    service. Nothing is stored and no money moves; it only shows what it was
+    given and says what to press next."""
+    def clip(v, n=60):
+        return esc_html("".join(ch for ch in str(v or "") if ch >= " " and ch != "\x7f")[:n])
+    ref, amount, cur = clip(request.args.get("ref")), clip(request.args.get("amount"), 20), clip(request.args.get("currency"), 5)
+    html = f"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex"><title>Practice payment page</title>
+<style>
+  :root {{ color-scheme: light dark; --bg:#f5f5f2; --fg:#1b1b1b; --panel:#fff; --line:#d8d8d2; }}
+  @media (prefers-color-scheme: dark) {{ :root {{ --bg:#101112; --fg:#ececec; --panel:#1a1c1e; --line:#33363a; }} }}
+  html,body {{ margin:0; background:var(--bg); color:var(--fg); font:16px/1.55 system-ui,-apple-system,"Segoe UI",sans-serif; }}
+  main {{ max-width:480px; margin:0 auto; padding:40px 16px; }}
+  .box {{ background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:24px; }}
+  h1 {{ font-size:1.2rem; margin:0 0 6px; }}
+  .tag {{ display:inline-block; font-size:.75rem; padding:2px 8px; border:1px solid var(--line); border-radius:99px; margin-bottom:14px; }}
+  code {{ background:rgba(128,128,128,.18); padding:2px 6px; border-radius:4px; word-break:break-all; }}
+  ol {{ padding-left:20px; }}
+</style></head><body><main><div class="box">
+<span class="tag">PRACTICE: no real payment</span>
+<h1>This is a pretend payment page</h1>
+<p>Nothing here takes money. It only shows that the "Pay" button sent you to the right place{(" with your details filled in" if (ref or amount) else "")}.</p>
+{f'<p>Your reference: <code>{ref}</code></p>' if ref else ''}{f'<p>Amount: <code>{amount} {cur}</code></p>' if amount else ''}
+<p><b>Now, as the creator:</b></p>
+<ol><li>Open your dashboard and the <b>Payment</b> screen.</li><li>Find this request under <b>Payments waiting for your OK</b>.</li><li>Press <b>Approve</b>. That sends the member their card.</li></ol>
+</div></main></body></html>"""
+    resp = make_response(html)
+    resp.headers["Content-Type"] = "text/html; charset=utf-8"
+    resp.headers["Cache-Control"] = "no-store"
     return resp
 
 
