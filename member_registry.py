@@ -310,6 +310,96 @@ def mark_reminded(credential_id: str, expires_at: str, now=None) -> bool:
     return False
 
 
+def claim_event_reminder(credential_id: str, now=None) -> bool:
+    """Ask for the right to send this ticket's event reminder. True means "go
+    ahead": none has gone out yet and no attempt was made in the last few
+    hours (the attempt is recorded straight away, so the same email is never
+    sent twice). Follow with mark_event_reminded() once it really went out."""
+    now = now or datetime.now(timezone.utc)
+    with _lock:
+        registry = _load()
+        for entry in registry:
+            if entry["credential_id"] != credential_id:
+                continue
+            if entry.get("revoked") or entry.get("used_at") or entry.get("event_reminded_at"):
+                return False
+            last = _parse(entry.get("event_reminder_attempt_at"))
+            if last and now - last < timedelta(hours=RETRY_REMINDER_HOURS):
+                return False
+            entry["event_reminder_attempt_at"] = now.isoformat()
+            _save(registry)
+            return True
+    return False
+
+
+def mark_event_reminded(credential_id: str, now=None) -> bool:
+    """Record that the event reminder for this ticket was sent."""
+    now = now or datetime.now(timezone.utc)
+    with _lock:
+        registry = _load()
+        for entry in registry:
+            if entry["credential_id"] == credential_id:
+                entry["event_reminded_at"] = now.isoformat()
+                _save(registry)
+                return True
+    return False
+
+
+def claim_followup(credential_id: str, step: int, now=None) -> bool:
+    """Ask for the right to send follow-up number `step` to this member. True
+    means "go ahead": it hasn't gone out, they haven't opted out, and no attempt
+    was made in the last few hours (the attempt is recorded straight away).
+    Follow with mark_followed_up() once it really went out."""
+    now = now or datetime.now(timezone.utc)
+    key = str(int(step))
+    with _lock:
+        registry = _load()
+        for entry in registry:
+            if entry["credential_id"] != credential_id:
+                continue
+            if entry.get("revoked") or entry.get("followups_off") or key in (entry.get("followups_sent") or {}):
+                return False
+            last = _parse((entry.get("followup_attempts") or {}).get(key))
+            if last and now - last < timedelta(hours=RETRY_REMINDER_HOURS):
+                return False
+            entry.setdefault("followup_attempts", {})[key] = now.isoformat()
+            _save(registry)
+            return True
+    return False
+
+
+def mark_followed_up(credential_id: str, step: int, now=None) -> bool:
+    """Record that follow-up number `step` was sent to this member."""
+    now = now or datetime.now(timezone.utc)
+    with _lock:
+        registry = _load()
+        for entry in registry:
+            if entry["credential_id"] == credential_id:
+                entry.setdefault("followups_sent", {})[str(int(step))] = now.isoformat()
+                _save(registry)
+                return True
+    return False
+
+
+def set_followups_off(credential_id: str, off: bool = True) -> bool:
+    """The member pressed "stop these emails" (or turned them back on). It
+    covers every card held with the same email address."""
+    with _lock:
+        registry = _load()
+        me = next((e for e in registry if e["credential_id"] == credential_id), None)
+        if me is None:
+            return False
+        addr = str(me.get("holder_email") or "").strip().lower()
+        for entry in registry:
+            if entry is me or (addr and str(entry.get("holder_email") or "").strip().lower() == addr):
+                if off:
+                    entry["followups_off"] = True
+                else:
+                    entry.pop("followups_off", None)
+        _save(registry)
+        return True
+
+
 def is_revoked(credential_id: str) -> bool:
     entry = get_by_id(credential_id)
     return entry["revoked"] if entry else False

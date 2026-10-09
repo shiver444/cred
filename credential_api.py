@@ -77,6 +77,7 @@ import config_store
 import content_store
 import content_page
 import email_sender
+import email_templates
 import backup
 import announcements
 import card_kinds
@@ -85,6 +86,7 @@ import public_url
 import limits
 import logo_utils
 import looks_page
+import emails_page
 import member_registry
 import reminders
 import security
@@ -189,6 +191,8 @@ _rate = security.SlidingLimiter()
 _PUBLIC_RULES = [
     ("/issue",          "signup", 10,  600),
     ("/checkout",       "signup", 10,  600),
+    ("/resend-link",    "link",   5,   3600),
+    ("/unsubscribe",    "unsub",  30,  3600),
     ("/verify",         "check",  120, 60),
     ("/member-content", "check",  120, 60),
     ("/member-file/",   "file",   60,  60),
@@ -405,6 +409,8 @@ def load_config() -> dict:
         "reminder_renew_url": cfg.get("reminder_renew_url", ""),
         "extended_subject": cfg.get("extended_subject", email_sender.DEFAULT_EXTENDED_SUBJECT),
         "extended_text":    cfg.get("extended_text", email_sender.DEFAULT_EXTENDED_TEXT),
+        # The newer emails (ticket, collectible, how to pay, declined, event reminder, alert to the creator).
+        **email_templates.new_values(cfg),
         # Card look: the logo (a data: URI saved from the dashboard — "" for
         # none) and the style, "distressed" or "clean".
         "logo_data_uri": cfg.get("logo_data_uri", "") or "",
@@ -546,6 +552,66 @@ def _blocked_response(reason: str, message: str):
     resp.status_code = 409
     return resp
 
+def _bg(fn, *args):
+    """Run a slow side job (an email) without keeping the visitor waiting.
+    Tests replace this with a plain call."""
+    threading.Thread(target=fn, args=args, daemon=True).start()
+
+
+def _price_text(price, currency) -> str:
+    try:
+        p = float(price or 0)
+    except (TypeError, ValueError):
+        p = 0
+    return ("%.2f %s" % (p, str(currency or "usd").upper())) if p > 0 else ""
+
+
+def _payment_request_emails(cfg: dict, req: dict, pay_url: str = "", pay_label: str = "") -> None:
+    """After someone asks for a paid card (hand-paid or own-link): the "How to
+    pay" email to them and the "payment waiting" alert to the creator, each
+    only if switched on. Best effort: a failure is only logged."""
+    try:
+        if not email_sender.is_configured():
+            return
+        price_text = _price_text(req.get("price"), req.get("currency"))
+        if email_templates.clean_on(cfg.get("howtopay_on"), True) == "1" and req.get("holder_email"):
+            instructions = (cfg.get("manual_payment_instructions") or "").strip()
+            if not instructions and not pay_url:     # same fallback the sign-up box shows
+                instructions = "Contact the creator to arrange payment. Your access will be issued once payment is confirmed."
+            email_sender.send_howtopay_email(
+                req.get("holder_name", ""), req["holder_email"], req.get("tier", ""), price_text,
+                req.get("request_id", ""), instructions, pay_url, pay_label)
+        alert_to = email_templates.clean_alert_email(cfg.get("alert_email"))
+        if alert_to:
+            email_sender.send_payment_alert(alert_to, req.get("holder_name", ""), req.get("holder_email", ""),
+                                            req.get("tier", ""), price_text, req.get("request_id", ""))
+    except Exception as e:
+        print(f"❌ Payment request emails failed: {e}")
+
+
+def _ended_email(cfg: dict, entry: dict) -> None:
+    """After the creator revokes a card: the "Access ended" note, only if switched on."""
+    try:
+        if not email_sender.is_configured() or email_templates.clean_on(cfg.get("ended_on"), False) != "1":
+            return
+        if entry.get("holder_email"):
+            email_sender.send_ended_email(entry.get("holder_name", ""), entry["holder_email"], entry.get("tier", ""))
+    except Exception as e:
+        print(f"❌ Access-ended email failed: {e}")
+
+
+def _declined_email(cfg: dict, req: dict) -> None:
+    """After the creator rejects a payment request: tell the person, if that email is on."""
+    try:
+        if not email_sender.is_configured() or email_templates.clean_on(cfg.get("declined_on"), True) != "1":
+            return
+        if req.get("holder_email"):
+            email_sender.send_declined_email(req.get("holder_name", ""), req["holder_email"], req.get("tier", ""),
+                                             _price_text(req.get("price"), req.get("currency")), req.get("request_id", ""))
+    except Exception as e:
+        print(f"❌ Declined email failed: {e}")
+
+
 def _issue_and_fulfill(name: str, email: str, tier: str, days: int, sections: list,
                         cfg: dict = None, payment_meta: dict = None, check=None,
                         send_email: bool = True) -> dict:
@@ -676,6 +742,9 @@ def _issue_and_fulfill(name: str, email: str, tier: str, days: int, sections: li
             bundle_path   = bundle["bundle_path"],
             card_path     = card_path,
             expires_at    = result["entry"]["expires_at"],
+            kind          = kind,
+            event         = event,
+            drop          = drop,
         )
 
     return {
@@ -855,6 +924,7 @@ def checkout():
         "request_id":   req["request_id"],
         "instructions": instructions,
     }
+    pay_url, pay_label = "", ""
     if provider == "custom":
         # Same queue as manual approval, plus a "Pay with <name>" link for the
         # member (opened in a new tab by the widget). No link set up for this
@@ -864,7 +934,11 @@ def checkout():
         pay_url = custom_payment.link_for(cfg, tier, name, email, price, currency, req["request_id"])
         if pay_url:
             reply["pay_url"] = pay_url
-            reply["pay_label"] = custom_payment.button_label(cfg)
+            reply["pay_label"] = pay_label = custom_payment.button_label(cfg)
+    # The "How to pay" email to them and the "payment waiting" alert to the creator.
+    reply["emailed"] = bool(email_sender.is_configured()
+                            and email_templates.clean_on(cfg.get("howtopay_on"), True) == "1")
+    _bg(_payment_request_emails, cfg, req, pay_url, pay_label)
     return ok(reply)
 
 
@@ -998,7 +1072,109 @@ def admin_reject_payment_request(request_id):
         return err(f"Request already {req['status']}", 400)
 
     mark_decided(request_id, "rejected")
+    _bg(_declined_email, load_config(), req)
     return ok({"rejected": True})
+
+
+# ── POST /resend-link ──
+# "Lost your link? Email it to me" in the widget. Whatever the address, the
+# answer is always the same ("if that address has a card, we've emailed it"),
+# so nobody can use this to find out who is a member. The email only goes out
+# if email is set up, the switch is on, and the address has a card that still
+# works. Each address can ask for it only a few times an hour, and the whole
+# site has a cap, so it can't be used to flood someone's inbox.
+LINK_ASKED_MSG = "If that address has a card, we've just emailed the link. Check your inbox (and spam)."
+
+def _resend_link_job(cfg: dict, email: str) -> None:
+    try:
+        from member_registry import get_by_email
+        now = datetime.now(timezone.utc)
+        cards = []
+        for e in sorted(get_by_email(email), key=lambda x: str(x.get("issued_at") or ""), reverse=True):
+            if e.get("revoked"):
+                continue
+            exp = e.get("expires_at") or ""
+            try:
+                dead = (not card_kinds.is_never(exp)) and datetime.fromisoformat(exp) <= now
+            except (ValueError, TypeError):
+                dead = False
+            if dead:
+                continue
+            cards.append((e.get("tier", ""), e["credential_id"], e.get("bundle_hash", "")))
+        if cards:
+            first = get_by_email(email)[0]
+            email_sender.send_lostlink_email(first.get("holder_name", ""), email, cards)
+    except Exception as ex:
+        print(f"❌ Link email failed: {ex}")
+
+@app.route("/resend-link", methods=["POST"])
+def resend_link():
+    data = request.get_json(silent=True) or {}
+    email = str(data.get("email") or "").strip().lower()
+    if not email or "@" not in email[1:] or len(email) > 254 or any(ch in email for ch in " \r\n<>,;"):
+        return err("Enter a valid email.")
+    allowed, wait = _rate.hit(("link-all",), 300, 3600)
+    if not allowed:
+        return _too_many(wait, "We're getting a lot of requests right now. Please try again in a little while.")
+    cfg = load_config()
+    on = email_sender.is_configured() and email_templates.clean_on(cfg.get("lostlink_on"), True) == "1"
+    one_ok, _w = _rate.hit(("link-email", email), 3, 3600)
+    if on and one_ok:
+        _bg(_resend_link_job, cfg, email)
+    return ok({"message": LINK_ASKED_MSG})
+
+
+# ── Follow-up emails: "stop these emails" ──
+# The link in every follow-up email opens a small page that asks to confirm
+# (so a mail scanner that opens links can't unsubscribe anyone by accident);
+# the button on it, or a mail program's one-click unsubscribe, does the POST.
+def _unsub_member():
+    cid = (request.values.get("id") or "").strip()[:64]
+    h = (request.values.get("h") or "").strip()[:64]
+    m = member_registry.get_by_id(cid) if cid else None
+    if not m or not h or not security.same_secret(h, str(m.get("bundle_hash") or "")[:32]):
+        return None
+    return m
+
+def _unsub_page(title: str, body: str, form: str = "") -> "Response":
+    cfg = load_config()
+    name = esc_html(str(cfg.get("creator_name") or "")) or "Members"
+    accent = esc_html(str(cfg.get("accent_color") or "#00e87a"))
+    html = f"""<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>{esc_html(title)}</title>
+<style>
+  :root {{ color-scheme: light dark; --bg:#f5f5f2; --fg:#1b1b1b; --accent:{accent}; }}
+  @media (prefers-color-scheme: dark) {{ :root {{ --bg:#101112; --fg:#ececec; }} }}
+  html,body {{ margin:0; background:var(--bg); color:var(--fg); font:16px/1.5 system-ui,-apple-system,"Segoe UI",sans-serif; }}
+  main {{ max-width:480px; margin:0 auto; padding:48px 16px; }}
+  h1 {{ font-size:1.3rem; margin:0 0 12px; }}
+  button {{ font:inherit; padding:12px 20px; border:0; border-radius:8px; background:var(--accent); color:#000; cursor:pointer; }}
+</style></head><body><main>
+<h1>{esc_html(title)}</h1><p>{body}</p>{form}
+<p style="opacity:.6;font-size:.85rem;">{name}</p>
+</main></body></html>"""
+    resp = make_response(html)
+    resp.headers["Content-Type"] = "text/html; charset=utf-8"
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
+
+@app.route("/unsubscribe", methods=["GET", "POST"])
+def unsubscribe_followups():
+    m = _unsub_member()
+    if m is None:
+        resp = _unsub_page("This link isn't valid", "It may be incomplete. If you keep getting emails you don't want, reply to one of them.")
+        resp.status_code = 400
+        return resp
+    if request.method == "POST":
+        member_registry.set_followups_off(m["credential_id"], True)
+        return _unsub_page("Done", "You won't get these follow-up emails any more. Your card and member area are not affected.")
+    form = ('<form method="post"><input type="hidden" name="id" value="%s"><input type="hidden" name="h" value="%s">'
+            '<button type="submit">Stop these emails</button></form>'
+            % (esc_html(m["credential_id"]), esc_html(request.values.get("h", "")[:64])))
+    return _unsub_page("Stop these emails?", "You will no longer get the follow-up emails. Your card and member area are not affected.", form)
 
 
 # ── POST /verify ──
@@ -1064,11 +1240,17 @@ def revoke():
         return err("credential_id is required")
 
     try:
-        from member_registry import revoke as reg_revoke
+        from member_registry import revoke as reg_revoke, get_by_id as reg_get
+        before = reg_get(credential_id)
+        was_revoked = bool(before and before.get("revoked"))
         success = reg_revoke(credential_id)
 
         # Also write to revocation list file
         _add_to_revocation_list(credential_id)
+
+        # Optional note to the member (the "Access ended" email, off unless switched on).
+        if success and before and not was_revoked:
+            _bg(_ended_email, load_config(), before)
 
         return ok({"revoked": success, "credential_id": credential_id})
 
@@ -2307,6 +2489,7 @@ def admin_dashboard_save():
         "reminder_renew_url": email_sender.safe_renew_url(request.form.get("reminder_renew_url")),
         "extended_subject": (request.form.get("extended_subject") or "").strip()[:email_sender.MAX_EXTENDED_SUBJECT],
         "extended_text":    (request.form.get("extended_text") or "").strip()[:email_sender.MAX_EXTENDED_TEXT],
+        **email_templates.clean_new_from_form(request.form, saved_cfg),
         **widget_look.from_form(request.form),
         "admin_style":    admin_theme.clean_style(request.form.get("admin_style"), load_config()["admin_style"]),
         "tiers":          tiers,
@@ -2737,6 +2920,7 @@ def _dashboard_page() -> str:
     global_dim_options = "".join('<option value="%s"%s>%s</option>' % (d, " selected" if cfg.get("bg_dim") == d else "", esc_html(card_looks.DIM_NAMES[d]))
                                  for d in card_looks.DIMS)
     looks_section = looks_page.section_html(cfg)
+    emails_section = emails_page.section_html(cfg, email_sender.is_configured())
 
     style_cards = ""
     for k in admin_theme.STYLES:
@@ -3085,58 +3269,7 @@ def _dashboard_page() -> str:
 
     </section>
 
-    <section class="dsec" id="sec-emails" data-title="Emails">
-    <h2>Welcome email</h2>
-    <div class="hint" style="margin-bottom:8px;">The email a member gets with their card and access link (those are always included). You can write <b>{{name}}</b>, <b>{{tier}}</b>, <b>{{creator}}</b>, <b>{{brand}}</b> and <b>{{expires}}</b>, and they are filled in for each member. Leave a box empty to use the standard words.</div>
-    <label>Subject</label>
-    <input name="email_subject" id="email-subject" maxlength="150" value="{esc_html(cfg['email_subject'])}">
-    <label>Welcome text</label>
-    <textarea name="email_intro" id="email-intro" rows="3" maxlength="1000">{esc_html(cfg['email_intro'])}</textarea>
-    <label>Sign-off (optional, like "See you inside. — {{creator}}")</label>
-    <textarea name="email_signoff" id="email-signoff" rows="2" maxlength="600">{esc_html(cfg['email_signoff'])}</textarea>
-    <div style="margin-top:12px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
-      <button type="button" class="add-tier" id="email-preview-btn" style="margin-top:0;">Preview email →</button>
-      <input id="email-test-to" type="email" placeholder="send a test to this address" style="max-width:260px;">
-      <button type="button" class="add-tier" id="email-test-btn" style="margin-top:0;">Send test</button>
-    </div>
-    <div class="hint" id="email-status" style="margin-top:8px;min-height:14px;"></div>
-    <div class="hint">Preview and test use what is typed above, even before you save. Sending a test needs email set up (see SETUP.md).</div>
-    <iframe id="email-preview-frame" sandbox="" style="display:none;width:100%;height:620px;border:1px solid var(--line);margin-top:10px;background:var(--frame-bg);"></iframe>
-
-    <h2>Expiry reminder</h2>
-    <div class="hint" style="margin-bottom:8px;">Emails a member a few days before their access ends, once per end date. Needs email set up (see SETUP.md). Turning it on also reminds members who are already inside the window. You can write <b>{{name}}</b>, <b>{{tier}}</b>, <b>{{creator}}</b>, <b>{{brand}}</b>, <b>{{expires}}</b> and <b>{{days}}</b>. The member's access link is always included.</div>
-    <label>Days before access ends to send it (0 = off)</label>
-    <input name="reminder_days" id="reminder-days" type="number" min="0" max="{reminders.MAX_REMINDER_DAYS}" step="1" value="{cfg['reminder_days']}" style="max-width:100px;">
-    <div class="hint" style="margin-top:4px;">Passes that last no longer than this are not reminded.</div>
-    <label>Subject</label>
-    <input name="reminder_subject" id="reminder-subject" maxlength="150" value="{esc_html(cfg['reminder_subject'])}">
-    <label>Reminder text</label>
-    <textarea name="reminder_text" id="reminder-text" rows="3" maxlength="1000">{esc_html(cfg['reminder_text'])}</textarea>
-    <label>Renew link (optional, adds a "Renew" button)</label>
-    <input name="reminder_renew_url" id="reminder-renew" type="url" maxlength="500" placeholder="https://..." value="{esc_html(cfg['reminder_renew_url'])}">
-    <div style="margin-top:12px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
-      <button type="button" class="add-tier" id="reminder-preview-btn" style="margin-top:0;">Preview reminder →</button>
-      <input id="reminder-test-to" type="email" placeholder="send a test to this address" style="max-width:260px;">
-      <button type="button" class="add-tier" id="reminder-test-btn" style="margin-top:0;">Send test</button>
-    </div>
-    <div class="hint" id="reminder-status" style="margin-top:8px;min-height:14px;"></div>
-    <iframe id="reminder-preview-frame" sandbox="" style="display:none;width:100%;height:520px;border:1px solid var(--line);margin-top:10px;background:var(--frame-bg);"></iframe>
-
-    <h2>Access extended email</h2>
-    <div class="hint" style="margin-bottom:8px;">What a member gets when you press Extend on the Members page and leave "email them" ticked. You can write <b>{{name}}</b>, <b>{{tier}}</b>, <b>{{creator}}</b>, <b>{{brand}}</b>, <b>{{expires}}</b> and <b>{{days}}</b> (how many days were added). The member's access link is always included. Leave a box empty to use the standard words.</div>
-    <label>Subject</label>
-    <input name="extended_subject" id="extended-subject" maxlength="150" value="{esc_html(cfg['extended_subject'])}">
-    <label>Message</label>
-    <textarea name="extended_text" id="extended-text" rows="3" maxlength="1000">{esc_html(cfg['extended_text'])}</textarea>
-    <div style="margin-top:12px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
-      <button type="button" class="add-tier" id="extended-preview-btn" style="margin-top:0;">Preview email →</button>
-      <input id="extended-test-to" type="email" placeholder="send a test to this address" style="max-width:260px;">
-      <button type="button" class="add-tier" id="extended-test-btn" style="margin-top:0;">Send test</button>
-    </div>
-    <div class="hint" id="extended-status" style="margin-top:8px;min-height:14px;"></div>
-    <iframe id="extended-preview-frame" sandbox="" style="display:none;width:100%;height:520px;border:1px solid var(--line);margin-top:10px;background:var(--frame-bg);"></iframe>
-
-    </section>
+    {emails_section}
 
     <h2></h2>
     <button type="submit" class="save-btn">Save changes</button>
@@ -3297,122 +3430,6 @@ def _dashboard_page() -> str:
       }});
     }})();
 
-    // Welcome email: preview and test-send use whatever is typed in the
-    // three fields right now (saved or not).
-    (function() {{
-      const subj = document.getElementById('email-subject');
-      const intro = document.getElementById('email-intro');
-      const sign = document.getElementById('email-signoff');
-      const frame = document.getElementById('email-preview-frame');
-      const status = document.getElementById('email-status');
-      const pbtn = document.getElementById('email-preview-btn');
-      const tbtn = document.getElementById('email-test-btn');
-      const to = document.getElementById('email-test-to');
-      function fields() {{
-        return {{ email_subject: subj.value, email_intro: intro.value, email_signoff: sign.value }};
-      }}
-      function say(text, good) {{
-        status.textContent = text;
-        status.style.color = good ? 'var(--ok)' : 'var(--bad)';
-      }}
-      function post(url, body) {{
-        return fetch(url, {{ method: 'POST', credentials: 'same-origin',
-                            headers: {{ 'Content-Type': 'application/json' }},
-                            body: JSON.stringify(body) }})
-          .then(r => r.json().then(j => ({{ status: r.status, body: j }})));
-      }}
-      pbtn.addEventListener('click', () => {{
-        pbtn.disabled = true; say('Loading preview…', true);
-        post('/admin/email/preview', fields()).then(res => {{
-          pbtn.disabled = false;
-          if (!res.body.success) {{ say(res.body.error || 'Preview failed.', false); return; }}
-          frame.srcdoc = res.body.html; frame.style.display = '';
-          say('Subject: ' + res.body.subject, true);
-        }}).catch(() => {{ pbtn.disabled = false; say('Could not reach the server.', false); }});
-      }});
-      tbtn.addEventListener('click', () => {{
-        const addr = to.value.trim();
-        if (!addr || addr.indexOf('@') < 1) {{ say('Type the address to send the test to.', false); return; }}
-        tbtn.disabled = true; say('Sending…', true);
-        post('/admin/email/test', Object.assign({{ to: addr }}, fields())).then(res => {{
-          tbtn.disabled = false;
-          say(res.body.message || res.body.error || 'Failed.', !!res.body.success);
-        }}).catch(() => {{ tbtn.disabled = false; say('Could not reach the server.', false); }});
-      }});
-    }})();
-
-    // Expiry reminder: same preview/test routes, kind = "reminder".
-    (function() {{
-      const f = id => document.getElementById(id);
-      const frame = f('reminder-preview-frame'), status = f('reminder-status');
-      const pbtn = f('reminder-preview-btn'), tbtn = f('reminder-test-btn'), to = f('reminder-test-to');
-      function fields() {{
-        return {{ kind: 'reminder', reminder_subject: f('reminder-subject').value,
-                 reminder_text: f('reminder-text').value, reminder_renew_url: f('reminder-renew').value }};
-      }}
-      function say(text, good) {{ status.textContent = text; status.style.color = good ? 'var(--ok)' : 'var(--bad)'; }}
-      function post(url, body) {{
-        return fetch(url, {{ method: 'POST', credentials: 'same-origin',
-                            headers: {{ 'Content-Type': 'application/json' }},
-                            body: JSON.stringify(body) }})
-          .then(r => r.json().then(j => ({{ status: r.status, body: j }})));
-      }}
-      pbtn.addEventListener('click', () => {{
-        pbtn.disabled = true; say('Loading preview…', true);
-        post('/admin/email/preview', fields()).then(res => {{
-          pbtn.disabled = false;
-          if (!res.body.success) {{ say(res.body.error || 'Preview failed.', false); return; }}
-          frame.srcdoc = res.body.html; frame.style.display = '';
-          say('Subject: ' + res.body.subject, true);
-        }}).catch(() => {{ pbtn.disabled = false; say('Could not reach the server.', false); }});
-      }});
-      tbtn.addEventListener('click', () => {{
-        const addr = to.value.trim();
-        if (!addr || addr.indexOf('@') < 1) {{ say('Type the address to send the test to.', false); return; }}
-        tbtn.disabled = true; say('Sending…', true);
-        post('/admin/email/test', Object.assign({{ to: addr }}, fields())).then(res => {{
-          tbtn.disabled = false;
-          say(res.body.message || res.body.error || 'Failed.', !!res.body.success);
-        }}).catch(() => {{ tbtn.disabled = false; say('Could not reach the server.', false); }});
-      }});
-    }})();
-
-    // Access extended: same preview/test routes, kind = "extended".
-    (function() {{
-      const f = id => document.getElementById(id);
-      const frame = f('extended-preview-frame'), status = f('extended-status');
-      const pbtn = f('extended-preview-btn'), tbtn = f('extended-test-btn'), to = f('extended-test-to');
-      function fields() {{
-        return {{ kind: 'extended', extended_subject: f('extended-subject').value,
-                 extended_text: f('extended-text').value }};
-      }}
-      function say(text, good) {{ status.textContent = text; status.style.color = good ? 'var(--ok)' : 'var(--bad)'; }}
-      function post(url, body) {{
-        return fetch(url, {{ method: 'POST', credentials: 'same-origin',
-                            headers: {{ 'Content-Type': 'application/json' }},
-                            body: JSON.stringify(body) }})
-          .then(r => r.json().then(j => ({{ status: r.status, body: j }})));
-      }}
-      pbtn.addEventListener('click', () => {{
-        pbtn.disabled = true; say('Loading preview…', true);
-        post('/admin/email/preview', fields()).then(res => {{
-          pbtn.disabled = false;
-          if (!res.body.success) {{ say(res.body.error || 'Preview failed.', false); return; }}
-          frame.srcdoc = res.body.html; frame.style.display = '';
-          say('Subject: ' + res.body.subject, true);
-        }}).catch(() => {{ pbtn.disabled = false; say('Could not reach the server.', false); }});
-      }});
-      tbtn.addEventListener('click', () => {{
-        const addr = to.value.trim();
-        if (!addr || addr.indexOf('@') < 1) {{ say('Type the address to send the test to.', false); return; }}
-        tbtn.disabled = true; say('Sending…', true);
-        post('/admin/email/test', Object.assign({{ to: addr }}, fields())).then(res => {{
-          tbtn.disabled = false;
-          say(res.body.message || res.body.error || 'Failed.', !!res.body.success);
-        }}).catch(() => {{ tbtn.disabled = false; say('Could not reach the server.', false); }});
-      }});
-    }})();
-
     // Widget look: two live previews (dark page / light page). Each is the
     // real /cp.js running in a sandboxed frame with the unsaved form values
     // handed to it, so what you see is what a visitor will get once saved.
@@ -3511,25 +3528,10 @@ def _dashboard_page() -> str:
 # fields as currently typed (saved or not). Preview renders the email for a
 # made-up member and sends nothing; test sends that same sample to one
 # address (no attachments). Neither touches the registry.
-def _email_overrides(data: dict) -> dict:
-    return {
-        "email_subject": str(data.get("email_subject") or "")[:email_sender.MAX_SUBJECT * 2],
-        "email_intro":   str(data.get("email_intro") or "")[:email_sender.MAX_INTRO * 2],
-        "email_signoff": str(data.get("email_signoff") or "")[:email_sender.MAX_SIGNOFF * 2],
-    }
-
-def _reminder_overrides(data: dict) -> dict:
-    return {
-        "reminder_subject": str(data.get("reminder_subject") or "")[:email_sender.MAX_REMINDER_SUBJECT * 2],
-        "reminder_text":    str(data.get("reminder_text") or "")[:email_sender.MAX_REMINDER_TEXT * 2],
-        "reminder_renew_url": str(data.get("reminder_renew_url") or ""),
-    }
-
-def _extended_overrides(data: dict) -> dict:
-    return {
-        "extended_subject": str(data.get("extended_subject") or "")[:email_sender.MAX_EXTENDED_SUBJECT * 2],
-        "extended_text":    str(data.get("extended_text") or "")[:email_sender.MAX_EXTENDED_TEXT * 2],
-    }
+def _email_kind(data: dict) -> str:
+    """Which email a preview/test request is about (unknown -> the Welcome email)."""
+    k = str(data.get("kind") or "welcome")
+    return k if email_templates.kind_of(k) else "welcome"
 
 def _sample_tier() -> str:
     tiers = load_config().get("tiers") or []
@@ -3540,12 +3542,8 @@ def admin_email_preview():
     if not check_admin(request):
         return jsonify({"success": False, "error": "Not logged in."}), 401
     data = request.get_json(silent=True) or {}
-    if data.get("kind") == "reminder":
-        msg = email_sender.preview_reminder(_sample_tier(), _reminder_overrides(data))
-    elif data.get("kind") == "extended":
-        msg = email_sender.preview_extended(_sample_tier(), _extended_overrides(data))
-    else:
-        msg = email_sender.preview_email(_sample_tier(), _email_overrides(data))
+    kind = _email_kind(data)
+    msg = email_sender.preview_kind(kind, _sample_tier(), email_templates.overrides_from_data(kind, data))
     return jsonify({"success": True, "subject": msg["subject"], "html": msg["html"]})
 
 @app.route("/admin/email/test", methods=["POST"])
@@ -3556,12 +3554,8 @@ def admin_email_test():
     to = str(data.get("to") or "").strip()
     if len(to) > 254 or "@" not in to[1:] or any(c in to for c in " \r\n<>,;"):
         return jsonify({"success": False, "message": "That doesn't look like an email address."}), 400
-    if data.get("kind") == "reminder":
-        ok_, message = email_sender.send_test_email(to, _sample_tier(), _reminder_overrides(data), kind="reminder")
-    elif data.get("kind") == "extended":
-        ok_, message = email_sender.send_test_email(to, _sample_tier(), _extended_overrides(data), kind="extended")
-    else:
-        ok_, message = email_sender.send_test_email(to, _sample_tier(), _email_overrides(data))
+    kind = _email_kind(data)
+    ok_, message = email_sender.send_test_email(to, _sample_tier(), email_templates.overrides_from_data(kind, data), kind=kind)
     return jsonify({"success": ok_, "message": message}), (200 if ok_ else 502)
 
 
@@ -3979,6 +3973,8 @@ def get_config():
                                   "currency", "payment_provider", "members_page", "api_base") if k in cfg}
     # The widget's look (colors/wording choices) is public by nature too.
     public.update(widget_look.from_config(cfg))
+    # Whether to offer "Lost your link? Email it to me" (needs email set up and the switch on).
+    public["lost_link"] = bool(email_sender.is_configured() and email_templates.clean_on(cfg.get("lostlink_on"), True) == "1")
     tiers = [t for t in (cfg.get("tiers") or []) if isinstance(t, dict)]
     public["tiers"] = [{**{k: t[k] for k in ("name", "label", "price", "expiry_days", "sections") if k in t},
                         **({"kind": "ticket", "event": card_kinds.public_event(t)} if card_kinds.is_ticket(t) else {}),
@@ -4284,12 +4280,36 @@ def _send_reminder(entry: dict, days_left: int) -> bool:
         entry.get("holder_name", ""), entry.get("holder_email", ""), entry.get("tier", ""),
         entry["credential_id"], entry.get("bundle_hash", ""), entry["expires_at"], days_left)
 
+def _send_event_reminder(entry: dict) -> bool:
+    return email_sender.send_event_reminder_email(
+        entry.get("holder_name", ""), entry.get("holder_email", ""), entry.get("tier", ""),
+        entry["credential_id"], entry.get("bundle_hash", ""), entry.get("event") or {})
+
+def _send_followup(entry: dict, step: dict) -> bool:
+    return email_sender.send_followup_email(
+        step["n"], entry.get("holder_name", ""), entry.get("holder_email", ""), entry.get("tier", ""),
+        entry["credential_id"], entry.get("bundle_hash", ""))
+
 def run_reminders_now(now=None) -> dict:
-    """One pass of the reminder job; returns {"sent": n, "failed": n}."""
-    window = load_config().get("reminder_days") or 0
-    if not window or not email_sender.is_configured():
-        return {"sent": 0, "failed": 0}
-    return reminders.run_once(window, _send_reminder, now)
+    """One pass of the reminder jobs (access ending, event starting soon, follow-ups);
+    returns {"sent": n, "failed": n} for both together."""
+    cfg = load_config()
+    out = {"sent": 0, "failed": 0}
+    if not email_sender.is_configured():
+        return out
+    window = cfg.get("reminder_days") or 0
+    if window:
+        r = reminders.run_once(window, _send_reminder, now)
+        out["sent"] += r["sent"]; out["failed"] += r["failed"]
+    hours = email_templates.clean_evremind_hours(cfg.get("evremind_hours", email_templates.DEFAULT_EVREMIND_HOURS))
+    if hours:
+        r = reminders.run_events_once(hours, _send_event_reminder, now)
+        out["sent"] += r["sent"]; out["failed"] += r["failed"]
+    steps = email_templates.follow_steps(cfg)
+    if steps:
+        r = reminders.run_followups_once(steps, _send_followup, now)
+        out["sent"] += r["sent"]; out["failed"] += r["failed"]
+    return out
 
 def _reminder_loop(first_delay: float, interval: float):
     time.sleep(first_delay)

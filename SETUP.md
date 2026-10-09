@@ -260,17 +260,96 @@ host is usually the better choice.
 | `PORT` | No | Defaults to 5001. |
 | `FLASK_DEBUG` | No — leave unset in production | Set to `1` for local testing to get Flask's debugger/auto-reload back. Off by default on purpose — leaving it on in a public deployment can expose that interactive debugger to anyone who triggers an unhandled error. Never set this on Railway. |
 
-### The welcome email
+### Emails (Settings → Emails)
 
-Once `BREVO_API_KEY` and `GMAIL_ADDRESS` are set, every new member is emailed
-their card, bundle and personal access link. You can change the wording in
-the dashboard under **Welcome email**: the subject, the welcome text, and an
-optional sign-off. `{name}`, `{tier}`, `{creator}`, `{brand}` and `{expires}`
-are filled in for each member. **Preview email** shows exactly what a member
-would get (using a made-up member) and **Send test** emails that sample to
-any address you type, both using whatever is in the boxes right now, even
-before you save. With email not set up, members can still get in: copy their
-link from **Members → Copy link** and send it yourself.
+Once `BREVO_API_KEY` and `GMAIL_ADDRESS` are set, your server sends the emails
+below. The **Emails** screen is one short list: each row names an email, says
+when it is sent and whether it is on. Press **Edit** to open just that one:
+subject, message, and clickable chips (`{name}`, `{tier}`...) that drop the right
+placeholder into the text where your cursor is. **Preview** shows exactly what a
+member would get (using a made-up member), **Send test** emails that sample to
+the address you typed at the top of the screen, both using whatever is in the
+boxes right now, even before you save, and **Reset to standard words** puts the
+built-in text back. A leave-it-alone email keeps the standard words. A row tagged
+*Edited* has your own wording. Press **Save changes** to keep your edits. With email
+not set up, members can still get in: copy their link from **Members → Copy link**
+and send it yourself.
+
+*When someone gets a card:*
+
+- **Welcome (membership):** the card, the signed bundle and their personal access
+  link. Placeholders: `{name}`, `{tier}`, `{creator}`, `{brand}`, `{expires}`.
+- **Ticket confirmation:** sent instead of the Welcome email for an event ticket,
+  with the event, time and place. Extra placeholders: `{event}`, `{when}`, `{place}`.
+- **Collectible claimed:** sent instead for a collectible; `{drop}` is the drop's
+  name and `{edition}` the number ("#37 of 100").
+
+*Payments:*
+
+- **How to pay:** when someone asks for a paid card and you take payment by hand
+  or with your own link, they get an email at once with your "Message to the
+  member" from Payment, the pay button (if you set a link) and their reference,
+  so nothing is lost when the browser tab closes. `{price}` and `{reference}` are
+  available. You can switch it off.
+- **Payment not confirmed:** sent when you press **Reject** on a payment waiting for
+  your OK. You can switch it off. (When you **Approve**, they get the Welcome,
+  ticket or collectible email as usual.) Stripe sends its own receipt, so Stripe
+  buyers just get the card email once they have paid.
+- **New payment waiting (to you):** type your own address and you get a short note
+  with the person, card, amount and reference each time someone asks for a paid
+  card, with a link to the dashboard. Empty = off. Its wording is fixed.
+
+*Reminders:*
+
+- **Access ends soon:** see the next section.
+- **Event reminder:** ticket holders get "see you soon" shortly before the event.
+  Choose when (3 hours, 12 hours, 1 day or 2 days before) or Off. Tickets already
+  checked in, revoked tickets, and tickets bought after the reminder time had
+  already passed don't get one. One per ticket. The server checks about once an hour.
+- **Access extended:** see the next section.
+
+*Follow-up emails (automatic):*
+
+Up to five notes that go out by themselves some days after someone joins. Think of
+it as a short email sequence: day 1 "welcome again", day 7 "how's it going?", day 30
+"thank you". They are all **off** until you switch one on under **Settings > Emails >
+Follow-up emails**.
+
+- For each one choose **Send this follow-up? Yes**, **when** (1, 2, 3, 5, 7, 10, 14,
+  21, 30, 45, 60 or 90 days after they join), and **who** (everyone, or only one of
+  your cards). Then write the subject and message; the usual placeholders work
+  (`{name}`, `{tier}`, `{creator}`, `{brand}`). Preview and Send test work like the
+  others.
+- Each person gets each follow-up once, counted from their own join date. Nothing is
+  sent to someone whose card is revoked or has ended, or who has no email.
+- Switching one on does **not** email your whole old list. A follow-up only goes to
+  people for whom it fell due in the last 3 days, so only recent joiners get it.
+- Every follow-up has a **Stop these emails** link (and a one-click unsubscribe for
+  mail programs). It asks first, and stops all follow-ups for that email address.
+  Their card and member area are not affected.
+- The server checks once an hour and sends at most 40 follow-ups per check, so a big
+  batch is spread out. Your email service (Brevo) has its own daily limit on the free
+  plan, so for a large list switch them on gradually.
+- This is not a newsletter: it is a few set notes after joining. For a one-off note to
+  members, use **News**.
+
+*Other:*
+
+- **Link again (lost link):** under the sign-up box the member area shows "Lost your
+  link? Email me my card". The visitor types their address and, if that address has a
+  card that still works, we email the link. The answer on screen is always the same
+  ("If that address has a card, we've just emailed the link"), so nobody can use it to
+  find out who is a member. It is limited (a few asks per address and per visitor per
+  hour) and only shows when email is set up; switch it off here and the button
+  disappears. `{name}`, `{creator}`, `{brand}` are available.
+- **Access ended:** an optional note to a member when you revoke their card. **Off by
+  default**; switch it on here. It is sent once, only when a card is newly revoked.
+  `{name}`, `{tier}`, `{creator}`, `{brand}` are available.
+
+When you take payment by hand, the sign-up box also tells the person "We've also
+emailed you how to pay" (only when that email was really sent).
+
+News emails (a note to some or all members) are written on the **News** page.
 
 ### Renewing a member (Extend) and the expiry reminder
 
@@ -281,7 +360,7 @@ and personal access link they already have keep working. A card that is still
 running gets the days added to its current end date (renewing early loses
 nothing); a card that already ran out restarts from today. Tick **email them**
 (shown when email is set up) to send a short "your access has been extended"
-note. You can change its wording under **Emails → Access extended email**
+note. You can change its wording under **Emails → Access extended**
 (subject and message; `{name}`, `{tier}`, `{creator}`, `{brand}`, `{expires}` and
 `{days}`, which is how many days were added), with Preview and **Send test** like
 the other emails. A revoked member can't be extended, and an ended card in a tier that is
@@ -289,7 +368,7 @@ now full can't be brought back until there's room. The date printed on the
 member's original card file doesn't change; the live check always uses the
 date kept on your server.
 
-**Expiry reminder.** On the Dashboard, **Expiry reminder** emails a member
+**Expiry reminder.** Under **Emails → Access ends soon**, this emails a member
 a few days before their access ends, once per end date (extending a member
 starts a fresh reminder for the new date). Set "days before" to 0 to keep it
 off (the default). It needs email set up on the server (`BREVO_API_KEY` and

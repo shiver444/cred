@@ -27,6 +27,7 @@ from pathlib import Path
 
 import card_kinds
 import config_store
+import email_templates
 import public_url
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -79,7 +80,9 @@ def _fill(text: str, values: dict) -> str:
     are touched (no str.format), so stray braces in a creator's text are
     safe — and {days} stays as typed in the welcome email, where it means
     nothing."""
-    names = [k for k in (*PLACEHOLDERS, "days") if k in values]
+    names = [re.escape(k) for k in values]
+    if not names:
+        return text or ""
     return re.sub(r"\{(%s)\}" % "|".join(names),
                   lambda m: str(values.get(m.group(1), "")), text or "")
 
@@ -376,14 +379,22 @@ def send_credential_email(
     bundle_path:   str,
     card_path:     str,
     expires_at:    str,
+    kind:          str = "pass",
+    event:         dict = None,
+    drop:          dict = None,
 ) -> bool:
     """
-    Send the credential welcome email via Brevo's HTTP API.
-    Attaches the card HTML and bundle ZIP.
-    Includes personal access link.
-    Returns True on success.
+    Send the credential email via Brevo's HTTP API: the Welcome email for a
+    membership, the ticket confirmation for a ticket, the collectible one for
+    a collectible. Attaches the card HTML and bundle ZIP and includes the
+    personal access link. Returns True on success.
     """
-    msg = build_email(to_name, tier, credential_id, bundle_hash, expires_at)
+    if kind == "ticket" and event:
+        msg = build_ticket_email(to_name, tier, credential_id, bundle_hash, event)
+    elif kind == "collectible" and drop:
+        msg = build_collectible_email(to_name, tier, credential_id, bundle_hash, drop)
+    else:
+        msg = build_email(to_name, tier, credential_id, bundle_hash, expires_at)
 
     try:
         if not BREVO_API_KEY:
@@ -445,9 +456,7 @@ def send_test_email(to_email: str, tier: str, overrides: dict = None, kind: str 
     if not BREVO_API_KEY:
         return False, ("Email isn't set up on this server yet, so nothing can be sent. "
                        "Set BREVO_API_KEY and GMAIL_ADDRESS (see SETUP.md), then try again.")
-    msg = (preview_reminder(tier, overrides) if kind == "reminder"
-           else preview_extended(tier, overrides) if kind == "extended"
-           else preview_email(tier, overrides))
+    msg = preview_kind(kind, tier, overrides)
     ok, detail = _post_to_brevo({
         "sender": {"name": FROM_NAME, "email": FROM_EMAIL},
         "to": [{"email": to_email}],
@@ -462,13 +471,21 @@ def send_test_email(to_email: str, tier: str, overrides: dict = None, kind: str 
 
 
 # ── Renewal emails: "access extended" and "expiry reminder" ──
-def _shell(heading: str, intro: str, rows, link: str, link_label: str, extra_html: str = "", footer_note: str = "") -> str:
-    """The shared look of the two short emails below. `rows` is a list of
-    (label, value) pairs; everything is escaped here."""
+def _shell(heading: str, intro: str, rows, link: str, link_label: str, extra_html: str = "", footer_note: str = "",
+           blocks=None) -> str:
+    """The shared look of the short emails below. `rows` is a list of
+    (label, value) pairs; `blocks` is a list of (label, text) paragraphs shown
+    before the rows; with no `link` there is no button. Everything is escaped here."""
     acc = _esc(ACCENT_COLOR, quote=True)
     rows_html = "".join(
         f'<div class="row"><span class="row-label">{_esc(a)}</span><span class="row-val">{_esc(b)}</span></div>'
         for a, b in rows)
+    blocks_html = "".join(
+        f'<div class="label" style="margin-top:6px;">{_esc(a)}</div>'
+        f'<div class="value">{_esc(b).replace(chr(10), "<br>")}</div>' for a, b in (blocks or []) if b)
+    button_html = (f'<a href="{_esc(link, quote=True)}" class="btn">{_esc(link_label)}</a>\n  {extra_html}\n'
+                   f'  <div style="font-size:9px;color:#6b6058;letter-spacing:1px;word-break:break-all;margin-top:8px;">{_esc(link)}</div>'
+                   if link else extra_html)
     return f"""<!DOCTYPE html>
 <html><head><meta charset="UTF-8">
 <style>
@@ -491,11 +508,10 @@ def _shell(heading: str, intro: str, rows, link: str, link_label: str, extra_htm
   <hr class="line">
   <div class="label">{_esc(heading)}</div>
   <div class="value">{_esc(intro).replace(chr(10), "<br>")}</div>
+  {blocks_html}
   {rows_html}
   <hr class="line">
-  <a href="{_esc(link, quote=True)}" class="btn">{_esc(link_label)}</a>
-  {extra_html}
-  <div style="font-size:9px;color:#6b6058;letter-spacing:1px;word-break:break-all;margin-top:8px;">{_esc(link)}</div>
+  {button_html}
   <hr class="line">
   {('<div style="font-size:11px;line-height:1.6;color:#8a8176;margin-top:4px;">' + _esc(footer_note) + '</div>') if footer_note else ""}
   <div class="footer">{_esc(CARD_TITLE)}</div>
@@ -584,6 +600,355 @@ def build_reminder_email(to_name, tier, credential_id, bundle_hash, expires_at, 
     text = (f"{CREATOR_NAME.upper()} — {CARD_TITLE.upper()}\n\n{body}\n{renew_text}\n"
             f"Your access link:\n{link}\n\n{CARD_TITLE}\n")
     return {"subject": subject, "html": html_body, "text": text, "link": link}
+
+
+# ── The newer emails: ticket, collectible, how to pay, declined, event reminder, alert ──
+# Each has an editable subject and message (settings keys in email_templates.py);
+# blank means the standard words. They share the look of the short emails above.
+def _tpl(prefix: str, overrides, default_subject: str, default_text: str):
+    """The subject and message wording for one of the newer emails: what was
+    typed (preview) or saved, or the standard words."""
+    cfg = _load_config()
+    ov = overrides or {}
+
+    def pick(key):
+        return ov[key] if key in ov else cfg.get(key, "")
+
+    subj = (str(pick(prefix + "_subject") or "").strip() or default_subject)[:email_templates.MAX_SUBJECT]
+    text = (str(pick(prefix + "_text") or "").strip() or default_text)[:email_templates.MAX_TEXT]
+    return subj, text
+
+
+def _one_line(text: str) -> str:
+    return re.sub(r"[\r\n]+", " ", text or "").strip()
+
+
+def _plain(heading_line: str, body: str, extra_lines: str, link: str) -> str:
+    return (f"{CREATOR_NAME.upper()} — {CARD_TITLE.upper()}\n\n{body}\n{extra_lines}\n"
+            + (f"Your access link:\n{link}\n\n" if link else "") + f"{CARD_TITLE}\n")
+
+
+def _event_values(to_name, tier, event):
+    ev = event or {}
+    return {"name": to_name, "tier": tier, "creator": CREATOR_NAME, "brand": CARD_TITLE,
+            "event": ev.get("name") or "the event", "when": ev.get("when") or "soon",
+            "place": ev.get("place") or "the venue"}
+
+
+def _event_rows(to_name, tier, event):
+    ev = event or {}
+    rows = [("MEMBER", to_name.upper()), ("EVENT", ev.get("name") or "")]
+    if ev.get("when"):
+        rows.append(("WHEN", ev["when"]))
+    if ev.get("place"):
+        rows.append(("WHERE", ev["place"]))
+    rows.append(("TICKET", tier))
+    return [r for r in rows if r[1]]
+
+
+def build_ticket_email(to_name, tier, credential_id, bundle_hash, event, overrides: dict = None, link_base=None) -> dict:
+    """The confirmation a ticket holder gets with their ticket."""
+    _refresh_branding()
+    subj_t, text_t = _tpl("ticket", overrides, email_templates.DEFAULT_TICKET_SUBJECT, email_templates.DEFAULT_TICKET_TEXT)
+    values = _event_values(to_name, tier, event)
+    link = _personal_link(credential_id, bundle_hash, link_base)
+    intro = _fill(text_t, values)
+    html_body = _shell("Your ticket", intro, _event_rows(to_name, tier, event), link, "◈ Open my ticket",
+                       footer_note="Keep this email. Your ticket is attached; show its QR code at the door, or open the button above.")
+    ev = event or {}
+    extra = "".join(f"{a}: {b}\n" for a, b in _event_rows(to_name, tier, ev))
+    return {"subject": _one_line(_fill(subj_t, values)), "html": html_body,
+            "text": _plain("Your ticket", intro, "\n" + extra, link), "link": link}
+
+
+def _edition_text(drop) -> str:
+    d = drop or {}
+    try:
+        n, of = int(d.get("edition") or 0), int(d.get("of") or 0)
+    except (TypeError, ValueError):
+        n, of = 0, 0
+    if not n:
+        return ""
+    return f"#{n} of {of}" if of else f"#{n}"
+
+
+def build_collectible_email(to_name, tier, credential_id, bundle_hash, drop, overrides: dict = None, link_base=None) -> dict:
+    """What a collector gets with their numbered collectible."""
+    _refresh_branding()
+    subj_t, text_t = _tpl("collectible", overrides, email_templates.DEFAULT_COLLECTIBLE_SUBJECT,
+                          email_templates.DEFAULT_COLLECTIBLE_TEXT)
+    d = drop or {}
+    values = {"name": to_name, "tier": tier, "creator": CREATOR_NAME, "brand": CARD_TITLE,
+              "drop": d.get("name") or tier, "edition": _edition_text(d)}
+    link = _personal_link(credential_id, bundle_hash, link_base)
+    intro = _fill(text_t, values)
+    rows = [("COLLECTOR", to_name.upper()), ("DROP", d.get("name") or tier)]
+    if values["edition"]:
+        rows.append(("EDITION", values["edition"]))
+    if d.get("note"):
+        rows.append(("NOTE", d["note"]))
+    rows.append(("VALID", "forever"))
+    html_body = _shell("Collectible claimed", intro, rows, link, "◈ Open my collectible",
+                       footer_note="Keep this email. Your collectible is attached; the button above opens what it unlocks.")
+    extra = "".join(f"{a}: {b}\n" for a, b in rows)
+    return {"subject": _one_line(_fill(subj_t, values)), "html": html_body,
+            "text": _plain("Collectible", intro, "\n" + extra, link), "link": link}
+
+
+def _pay_values(to_name, tier, price_text, reference):
+    return {"name": to_name, "tier": tier, "creator": CREATOR_NAME, "brand": CARD_TITLE,
+            "price": price_text or "the price", "reference": reference or ""}
+
+
+def build_howtopay_email(to_name, tier, price_text="", reference="", instructions="", pay_url="", pay_label="",
+                         overrides: dict = None) -> dict:
+    """Sent when someone asks for a paid card and pays by hand or with the
+    creator's own link: the creator's instructions, the pay button and the
+    reference, so nothing is lost when the browser tab closes."""
+    _refresh_branding()
+    subj_t, text_t = _tpl("howtopay", overrides, email_templates.DEFAULT_HOWTOPAY_SUBJECT,
+                          email_templates.DEFAULT_HOWTOPAY_TEXT)
+    values = _pay_values(to_name, tier, price_text, reference)
+    intro = _fill(text_t, values)
+    instructions = str(instructions or "").strip()[:2000]
+    pay_url = safe_renew_url(pay_url)
+    rows = [("CARD", tier)]
+    if price_text:
+        rows.append(("AMOUNT", price_text))
+    if reference:
+        rows.append(("REFERENCE", reference))
+    label = ("◈ " + (str(pay_label or "").strip()[:40] or "Pay now")) if pay_url else ""
+    html_body = _shell("How to pay", intro, rows, pay_url, label,
+                       footer_note="Keep this email: quote your reference if you write to us about this payment.",
+                       blocks=[("What to do", instructions)])
+    extra = "".join(f"{a}: {b}\n" for a, b in rows)
+    plain = (f"{CREATOR_NAME.upper()} — {CARD_TITLE.upper()}\n\n{intro}\n\n"
+             + (f"{instructions}\n\n" if instructions else "") + extra
+             + (f"\nPay here: {pay_url}\n" if pay_url else "") + f"\n{CARD_TITLE}\n")
+    return {"subject": _one_line(_fill(subj_t, values)), "html": html_body, "text": plain, "link": pay_url}
+
+
+def build_declined_email(to_name, tier, price_text="", reference="", overrides: dict = None) -> dict:
+    """Sent when the creator rejects a payment request."""
+    _refresh_branding()
+    subj_t, text_t = _tpl("declined", overrides, email_templates.DEFAULT_DECLINED_SUBJECT,
+                          email_templates.DEFAULT_DECLINED_TEXT)
+    values = _pay_values(to_name, tier, price_text, reference)
+    intro = _fill(text_t, values)
+    rows = [("CARD", tier)] + ([("REFERENCE", reference)] if reference else [])
+    html_body = _shell("Payment not confirmed", intro, rows, "", "")
+    extra = "".join(f"{a}: {b}\n" for a, b in rows)
+    return {"subject": _one_line(_fill(subj_t, values)), "html": html_body,
+            "text": _plain("Declined", intro, "\n" + extra, ""), "link": ""}
+
+
+def build_event_reminder_email(to_name, tier, credential_id, bundle_hash, event, overrides: dict = None,
+                               link_base=None) -> dict:
+    """The "see you soon" note a ticket holder gets before the event."""
+    _refresh_branding()
+    subj_t, text_t = _tpl("evremind", overrides, email_templates.DEFAULT_EVREMIND_SUBJECT,
+                          email_templates.DEFAULT_EVREMIND_TEXT)
+    values = _event_values(to_name, tier, event)
+    link = _personal_link(credential_id, bundle_hash, link_base)
+    intro = _fill(text_t, values)
+    html_body = _shell("Event reminder", intro, _event_rows(to_name, tier, event), link, "◈ Open my ticket")
+    extra = "".join(f"{a}: {b}\n" for a, b in _event_rows(to_name, tier, event))
+    return {"subject": _one_line(_fill(subj_t, values)), "html": html_body,
+            "text": _plain("Reminder", intro, "\n" + extra, link), "link": link}
+
+
+def build_alert_email(who_name, who_email, tier, price_text="", reference="") -> dict:
+    """The note the creator gets when a payment request comes in. Fixed wording."""
+    _refresh_branding()
+    base = public_url.base_url() or ""
+    link = (base.rstrip("/") + "/admin/dashboard") if base else ""
+    who = who_name or who_email or "Someone"
+    subject = _one_line(f"New payment waiting: {who} wants {tier}")[:150]
+    intro = (f"{who} asked for {tier}" + (f" ({price_text})" if price_text else "") + ".\n"
+             "Check that the money arrived, then approve or reject the request on your dashboard.")
+    rows = [("FROM", who_name or "—"), ("EMAIL", who_email or "—"), ("CARD", tier)]
+    if price_text:
+        rows.append(("AMOUNT", price_text))
+    if reference:
+        rows.append(("REFERENCE", reference))
+    html_body = _shell("Payment waiting for your OK", intro, rows, link, "◈ Open dashboard")
+    extra = "".join(f"{a}: {b}\n" for a, b in rows)
+    return {"subject": subject, "html": html_body,
+            "text": _plain("Payment", intro, "\n" + extra, "") + (f"Dashboard: {link}\n" if link else ""), "link": link}
+
+
+def send_howtopay_email(to_name, to_email, tier, price_text, reference, instructions, pay_url="", pay_label="") -> tuple:
+    if not BREVO_API_KEY:
+        return False, "Email isn't set up on this server."
+    msg = build_howtopay_email(to_name, tier, price_text, reference, instructions, pay_url, pay_label)
+    ok, detail = _send_simple(to_name, to_email, msg)
+    print(f"{'✔ How-to-pay email sent to' if ok else '❌ How-to-pay email failed for'} {to_email}" + ("" if ok else f": {detail}"))
+    return ok, detail
+
+
+def send_declined_email(to_name, to_email, tier, price_text="", reference="") -> tuple:
+    if not BREVO_API_KEY:
+        return False, "Email isn't set up on this server."
+    msg = build_declined_email(to_name, tier, price_text, reference)
+    ok, detail = _send_simple(to_name, to_email, msg)
+    print(f"{'✔ Declined email sent to' if ok else '❌ Declined email failed for'} {to_email}" + ("" if ok else f": {detail}"))
+    return ok, detail
+
+
+def send_event_reminder_email(to_name, to_email, tier, credential_id, bundle_hash, event) -> bool:
+    if not BREVO_API_KEY:
+        return False
+    msg = build_event_reminder_email(to_name, tier, credential_id, bundle_hash, event)
+    ok, detail = _send_simple(to_name, to_email, msg)
+    print(f"{'✔ Event reminder sent to' if ok else '❌ Event reminder failed for'} {to_email}" + ("" if ok else f": {detail}"))
+    return ok
+
+
+def send_payment_alert(to_email, who_name, who_email, tier, price_text="", reference="") -> tuple:
+    if not BREVO_API_KEY:
+        return False, "Email isn't set up on this server."
+    msg = build_alert_email(who_name, who_email, tier, price_text, reference)
+    ok, detail = _post_to_brevo({
+        "sender": {"name": FROM_NAME, "email": FROM_EMAIL},
+        "to": [{"email": to_email}],
+        "subject": msg["subject"], "htmlContent": msg["html"], "textContent": msg["text"],
+    })
+    print(f"{'✔ Payment alert sent to' if ok else '❌ Payment alert failed for'} {to_email}" + ("" if ok else f": {detail}"))
+    return ok, detail
+
+
+def build_lostlink_email(to_name, cards, overrides: dict = None, link_base=None) -> dict:
+    """The "here's your link again" email. `cards` is a list of
+    (tier, credential_id, bundle_hash); with several, each gets its own line."""
+    _refresh_branding()
+    subj_t, text_t = _tpl("lostlink", overrides, email_templates.DEFAULT_LOSTLINK_SUBJECT,
+                          email_templates.DEFAULT_LOSTLINK_TEXT)
+    values = {"name": to_name, "creator": CREATOR_NAME, "brand": CARD_TITLE}
+    intro = _fill(text_t, values)
+    cards = list(cards or [])[:5]
+    links = [(t, _personal_link(cid, h, link_base)) for t, cid, h in cards]
+    first = links[0][1] if links else ""
+    blocks = [(t, l) for t, l in links] if len(links) > 1 else None
+    rows = [("MEMBER", to_name.upper())] + ([("CARD", links[0][0])] if len(links) == 1 else [])
+    html_body = _shell("Your access link", intro, rows, first, "◈ Open member area", blocks=blocks,
+                       footer_note="You get this because someone asked for the link to be sent to this address.")
+    plain = (f"{CREATOR_NAME.upper()} — {CARD_TITLE.upper()}\n\n{intro}\n\n"
+             + "".join(f"{t}: {l}\n" for t, l in links) + f"\n{CARD_TITLE}\n")
+    return {"subject": _one_line(_fill(subj_t, values)), "html": html_body, "text": plain, "link": first}
+
+
+def unsubscribe_link(credential_id: str, bundle_hash: str, base=None) -> str:
+    """The "stop these emails" page for one member (it asks them to confirm)."""
+    base = (public_url.base_url() if base is None else base) or ""
+    return f"{base.rstrip('/')}/unsubscribe?id={credential_id}&h={bundle_hash[:32]}"
+
+
+def build_followup_email(step, to_name, tier, credential_id, bundle_hash, overrides: dict = None,
+                         link_base=None, unsub_base=None) -> dict:
+    """Follow-up email number `step` (1 to 5): the creator's own wording, a button
+    to the member area, and a "stop these emails" link."""
+    _refresh_branding()
+    step = max(1, min(email_templates.FOLLOW_STEPS, int(step)))
+    dsub, dtext = email_templates.FOLLOW_DEFAULTS[step - 1]
+    subj_t, text_t = _tpl("follow%d" % step, overrides, dsub, dtext)
+    values = {"name": to_name, "tier": tier, "creator": CREATOR_NAME, "brand": CARD_TITLE}
+    intro = _fill(text_t, values)
+    link = _personal_link(credential_id, bundle_hash, link_base)
+    stop = unsubscribe_link(credential_id, bundle_hash, unsub_base)
+    stop_html = (f'<div style="font-size:11px;line-height:1.6;color:#8a8176;margin-top:12px;">'
+                 f'You get this because you joined {_esc(CARD_TITLE)}. '
+                 f'<a href="{_esc(stop, quote=True)}" style="color:#8a8176;">Stop these emails</a></div>')
+    html_body = _shell("A note from " + CREATOR_NAME, intro, [], link, "◈ Open member area", extra_html=stop_html)
+    plain = (f"{CREATOR_NAME.upper()} — {CARD_TITLE.upper()}\n\n{intro}\n\n{link}\n\n"
+             f"Stop these emails: {stop}\n")
+    return {"subject": _one_line(_fill(subj_t, values)), "html": html_body, "text": plain,
+            "link": link, "unsubscribe": stop}
+
+
+def send_followup_email(step, to_name, to_email, tier, credential_id, bundle_hash) -> bool:
+    if not BREVO_API_KEY:
+        return False
+    msg = build_followup_email(step, to_name, tier, credential_id, bundle_hash)
+    payload = {
+        "sender": {"name": FROM_NAME, "email": FROM_EMAIL},
+        "to": [{"email": to_email, "name": to_name}],
+        "subject": msg["subject"], "htmlContent": msg["html"], "textContent": msg["text"],
+    }
+    if msg["unsubscribe"].startswith("http"):
+        payload["headers"] = {"List-Unsubscribe": f"<{msg['unsubscribe']}>",
+                              "List-Unsubscribe-Post": "List-Unsubscribe=One-Click"}
+    ok, detail = _post_to_brevo(payload)
+    print(f"{'✔ Follow-up ' + str(step) + ' sent to' if ok else '❌ Follow-up ' + str(step) + ' failed for'} {to_email}"
+          + ("" if ok else f": {detail}"))
+    return ok
+
+
+def build_ended_email(to_name, tier, overrides: dict = None) -> dict:
+    """The note a member gets when the creator revokes their card."""
+    _refresh_branding()
+    subj_t, text_t = _tpl("ended", overrides, email_templates.DEFAULT_ENDED_SUBJECT,
+                          email_templates.DEFAULT_ENDED_TEXT)
+    values = {"name": to_name, "tier": tier, "creator": CREATOR_NAME, "brand": CARD_TITLE}
+    intro = _fill(text_t, values)
+    html_body = _shell("Access ended", intro, [("MEMBER", to_name.upper()), ("CARD", tier)], "", "")
+    return {"subject": _one_line(_fill(subj_t, values)), "html": html_body,
+            "text": _plain("Ended", intro, f"\nCARD: {tier}\n", ""), "link": ""}
+
+
+def send_lostlink_email(to_name, to_email, cards) -> tuple:
+    if not BREVO_API_KEY:
+        return False, "Email isn't set up on this server."
+    msg = build_lostlink_email(to_name, cards)
+    ok, detail = _send_simple(to_name, to_email, msg)
+    print(f"{'✔ Link email sent to' if ok else '❌ Link email failed for'} {to_email}" + ("" if ok else f": {detail}"))
+    return ok, detail
+
+
+def send_ended_email(to_name, to_email, tier) -> tuple:
+    if not BREVO_API_KEY:
+        return False, "Email isn't set up on this server."
+    msg = build_ended_email(to_name, tier)
+    ok, detail = _send_simple(to_name, to_email, msg)
+    print(f"{'✔ Access-ended email sent to' if ok else '❌ Access-ended email failed for'} {to_email}" + ("" if ok else f": {detail}"))
+    return ok, detail
+
+
+def preview_kind(kind: str, tier: str, overrides: dict = None) -> dict:
+    """Any editable email for a made-up member, from wording that may not be
+    saved yet (what Preview shows and Send test sends). Nothing else happens."""
+    _refresh_branding()
+    base = MEMBERS_PAGE or "https://your-site.example/members"
+    tier = tier or "MEMBER"
+    sample_event = card_kinds.sample_event()
+    d = dict(_SAMPLE)
+    if kind == "reminder":
+        return preview_reminder(tier, overrides)
+    if kind == "extended":
+        return preview_extended(tier, overrides)
+    if kind == "ticket":
+        return build_ticket_email(d["to_name"], tier, d["credential_id"], d["bundle_hash"], sample_event, overrides, base)
+    if kind == "collectible":
+        return build_collectible_email(d["to_name"], tier, d["credential_id"], d["bundle_hash"],
+                                       card_kinds.sample_drop(), overrides, base)
+    if kind == "evremind":
+        return build_event_reminder_email(d["to_name"], tier, d["credential_id"], d["bundle_hash"], sample_event, overrides, base)
+    cfg = _load_config()
+    if kind == "howtopay":
+        return build_howtopay_email(d["to_name"], tier, "9.99 USD", "A1B2C3",
+                                    (cfg.get("manual_payment_instructions") or "Send 9.99 USD to you@example.com.").strip(),
+                                    "https://pay.example/checkout", "Pay now", overrides)
+    if kind == "declined":
+        return build_declined_email(d["to_name"], tier, "9.99 USD", "A1B2C3", overrides)
+    if kind == "alert":
+        return build_alert_email(d["to_name"], "member@example.com", tier, "9.99 USD", "A1B2C3")
+    if kind == "lostlink":
+        return build_lostlink_email(d["to_name"], [(tier, d["credential_id"], d["bundle_hash"])], overrides, base)
+    if kind == "ended":
+        return build_ended_email(d["to_name"], tier, overrides)
+    if kind.startswith("follow") and kind[6:].isdigit():
+        return build_followup_email(int(kind[6:]), d["to_name"], tier, d["credential_id"], d["bundle_hash"], overrides, base,
+                                    (public_url.base_url() or "https://your-site.example"))
+    return preview_email(tier, overrides)
 
 
 # ── Announcements ──

@@ -885,6 +885,11 @@
       <button class="ca-scan-link" id="ca-scan-link">◈ Or scan your card's QR code</button>
     </div>
 
+    <!-- LOST LINK (only shown when the creator has email set up) -->
+    <div class="ca-scan-row ca-lost-row" id="ca-lost-row" style="display:none;margin-top:-14px;">
+      <button class="ca-scan-link" id="ca-lost-link">✉ Lost your link? Email it to me</button>
+    </div>
+
     <!-- RESULT -->
     <div class="ca-result" id="ca-result"></div>
 
@@ -911,6 +916,21 @@
 
       <div class="ca-tabs" id="ca-tabs"></div>
       <div id="ca-panels"></div>
+    </div>
+
+    <!-- LOST LINK MODAL -->
+    <div class="ca-modal-overlay" id="ca-lost-modal">
+      <div class="ca-modal">
+        <div class="ca-modal-title">Get your link again</div>
+        <div class="ca-modal-sub">Type the email address you signed up with. If it has a card, we'll email the link to it.</div>
+        <input type="email" class="ca-field" id="ca-lost-email" placeholder="The email you signed up with">
+        <div class="ca-msg-err" id="ca-lost-err"></div>
+        <div class="ca-msg-ok"  id="ca-lost-ok"></div>
+        <div class="ca-submit-row">
+          <button class="ca-submit" id="ca-lost-send">Email me my link</button>
+          <button class="ca-close"  id="ca-lost-close">✕</button>
+        </div>
+      </div>
     </div>
 
     <!-- MODAL -->
@@ -985,6 +1005,42 @@
 
   document.getElementById('ca-scan-link').onclick = startQRScan
   document.getElementById('ca-qr-cancel').onclick = stopQRScan
+
+  // "Lost your link?": the server says whether to offer it (email set up and switched on).
+  if (config.lost_link === true) {
+    document.getElementById('ca-lost-row').style.display = ''
+    const lostModal = document.getElementById('ca-lost-modal')
+    document.getElementById('ca-lost-link').onclick = () => {
+      document.getElementById('ca-lost-err').style.display = 'none'
+      document.getElementById('ca-lost-ok').style.display = 'none'
+      lostModal.classList.add('open')
+    }
+    document.getElementById('ca-lost-close').onclick = () => lostModal.classList.remove('open')
+    document.getElementById('ca-lost-send').onclick = async () => {
+      const em = document.getElementById('ca-lost-email').value.trim()
+      const errEl = document.getElementById('ca-lost-err'), okEl = document.getElementById('ca-lost-ok')
+      const btn = document.getElementById('ca-lost-send')
+      errEl.style.display = 'none'; okEl.style.display = 'none'
+      if (!em || !em.includes('@')) { errEl.textContent = 'Enter a valid email.'; errEl.style.display = 'block'; return }
+      btn.disabled = true; btn.textContent = 'Sending...'
+      try {
+        const res = await fetch(`${API_BASE}/resend-link`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: em }),
+        })
+        const data = await res.json()
+        if (data.success) {
+          okEl.textContent = String(data.message || 'If that address has a card, we have emailed the link.')
+          okEl.style.display = 'block'; btn.textContent = '\u2714 Done'
+        } else {
+          errEl.textContent = data.error || 'Something went wrong.'; errEl.style.display = 'block'
+          btn.textContent = 'Email me my link'; btn.disabled = false
+        }
+      } catch (e) {
+        errEl.textContent = 'Could not reach server. Try again shortly.'; errEl.style.display = 'block'
+        btn.textContent = 'Email me my link'; btn.disabled = false
+      }
+    }
+  }
 
   // ── Auto-verify from URL ──
   if (urlId) {
@@ -1585,6 +1641,8 @@
             if (data.reference) msg += '<br><br>Your reference: <b>' + esc(String(data.reference)) + '</b>'
             msg += '<br><br>Once your payment is received, your card is sent to you.'
           }
+          // The server also emails them these instructions (when "How to pay" is on).
+          if (data.emailed === true) msg += '<br><br>We\'ve also emailed this to <b>' + esc(emailVal) + '</b>.'
           okEl.innerHTML = msg
           okEl.style.display = 'block'
           if (payUrl) {

@@ -75,8 +75,11 @@ can revoke any of them at any time.
   optional locked preview of your content for visitors, and optional terms/privacy links
   in the sign-up box.
 - Announcements: write one note, pin it at the top of every member's page and/or email it
-  to everyone, one tier, or one event's ticket holders. The welcome, reminder and
-  "access extended" emails are all editable.
+  to everyone, one tier, or one event's ticket holders. Every email is editable in
+  one short list (welcome, ticket confirmation, collectible, how to pay, payment not confirmed,
+  event reminder, access-ending reminder, access extended, lost link, access ended), plus an alert to you when a payment is waiting.
+- Follow-up emails: up to five automatic notes some days after someone joins (like a short
+  welcome sequence), each limited to one card if you like, with a "stop these emails" link.
 - Limits per tier: cap how many members a tier can have (it shows as
   "Sold out" when full) and allow one card per email address.
 - Built-in protections: admin login lockout, forged-request protection and
