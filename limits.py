@@ -64,8 +64,9 @@ def is_numbered(tier_cfg) -> bool:
 
 def per_email_mode(tier_cfg) -> str:
     m = (tier_cfg or {}).get("per_email")
-    # one copy per person is the natural rule for a collectible
-    return m if m in PER_EMAIL_MODES else ("one_ever" if is_numbered(tier_cfg) else DEFAULT_PER_EMAIL)
+    # one copy per person is the natural rule for a collectible, a voucher and a certificate
+    one_each = is_numbered(tier_cfg) or (tier_cfg or {}).get("kind") in ("voucher", "certificate")
+    return m if m in PER_EMAIL_MODES else ("one_ever" if one_each else DEFAULT_PER_EMAIL)
 
 
 def _now(now):

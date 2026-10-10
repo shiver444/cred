@@ -14,6 +14,8 @@ Every email the creator edits lives under its own settings keys in config.json:
   extended     extended_subject, extended_text
   ticket       ticket_subject, ticket_text
   collectible  collectible_subject, collectible_text
+  voucher      voucher_subject, voucher_text
+  certificate  certificate_subject, certificate_text
   howtopay     howtopay_on, howtopay_subject, howtopay_text
   declined     declined_on, declined_subject, declined_text
   evremind     evremind_hours, evremind_subject, evremind_text
@@ -35,6 +37,14 @@ DEFAULT_TICKET_TEXT = ("{name} — you're in! Your ticket for {event} is attache
 DEFAULT_COLLECTIBLE_SUBJECT = "You now own {drop} {edition}"
 DEFAULT_COLLECTIBLE_TEXT = ("{name} — {drop} {edition} is yours. It never expires, "
                             "and it opens whatever is listed on the card.")
+
+DEFAULT_VOUCHER_SUBJECT = "Your voucher: {offer}"
+DEFAULT_VOUCHER_TEXT = ("{name} — here's your voucher: {offer}.\n"
+                        "Show the QR code on it when you redeem it. It can be used once.")
+
+DEFAULT_CERT_SUBJECT = "Your certificate: {title}"
+DEFAULT_CERT_TEXT = ("{name} — congratulations! Your certificate is attached: {title}.\n"
+                     "Anyone can check that it is real by scanning its QR code.")
 
 DEFAULT_HOWTOPAY_SUBJECT = "How to pay for {tier}"
 DEFAULT_HOWTOPAY_TEXT = ("{name} — thanks for asking for {tier} ({price}).\n"
@@ -188,6 +198,22 @@ def registry() -> list:
              _f("collectible_text", "Message", "area", MAX_TEXT, DEFAULT_COLLECTIBLE_TEXT),
          ],
          "note": "{edition} becomes the number, like “#37 of 100”."},
+        {"key": "voucher", "group": "cards", "title": "Voucher",
+         "when": "Sent with the voucher instead of the Welcome email.",
+         "chips": CHIPS_MEMBER + ("offer", "until"), "state": None,
+         "fields": [
+             _f("voucher_subject", "Subject", "text", MAX_SUBJECT, DEFAULT_VOUCHER_SUBJECT),
+             _f("voucher_text", "Message", "area", MAX_TEXT, DEFAULT_VOUCHER_TEXT),
+         ],
+         "note": "The voucher and its offer are always included. {until} is the date it stops working (empty if it has no end date)."},
+        {"key": "certificate", "group": "cards", "title": "Certificate",
+         "when": "Sent with the certificate instead of the Welcome email.",
+         "chips": CHIPS_MEMBER + ("title",), "state": None,
+         "fields": [
+             _f("certificate_subject", "Subject", "text", MAX_SUBJECT, DEFAULT_CERT_SUBJECT),
+             _f("certificate_text", "Message", "area", MAX_TEXT, DEFAULT_CERT_TEXT),
+         ],
+         "note": "The certificate is attached and the button opens it."},
         {"key": "howtopay", "group": "payments", "title": "How to pay",
          "when": "Sent the moment someone asks for a paid card and pays by hand or with your own link.",
          "chips": CHIPS_MEMBER + ("price", "reference"), "state": "on",
@@ -300,7 +326,7 @@ def kind_of(key):
 
 
 # Newer emails only: their settings are saved by clean_new_from_form().
-NEW_KEYS = ("ticket", "collectible", "howtopay", "declined", "evremind", "alert", "lostlink", "ended") + tuple(
+NEW_KEYS = ("ticket", "collectible", "voucher", "certificate", "howtopay", "declined", "evremind", "alert", "lostlink", "ended") + tuple(
     "follow%d" % n for n in range(1, FOLLOW_STEPS + 1))
 
 

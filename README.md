@@ -67,16 +67,19 @@ can revoke any of them at any time.
 - Renewals: one click on the Members page extends a member (same card, same
   link), and an optional email reminds members shortly before their access
   ends.
-- Three kinds of card: an access pass (a membership with members-only content), an
+- Five kinds of card: an access pass (a membership with members-only content), an
   event ticket (event, time, place and note on the card, valid until the event ends,
   with a Check-in page for the door that scans the QR code), or a collectible (a
-  numbered limited-edition drop, "#37 of 100", with a claim window; it never expires).
+  numbered limited-edition drop, "#37 of 100", with a claim window; it never expires), a voucher
+  (a one-time offer such as "One free coffee", redeemed on the same Check-in page), or a
+  certificate (a named badge that never expires and anyone can verify). Any card can be
+  marked "only I give it out", so it stays out of the sign-up list.
 - Small touches: a welcome box on a fresh dashboard, automatic YouTube thumbnails, an
   optional locked preview of your content for visitors, and optional terms/privacy links
   in the sign-up box.
 - Announcements: write one note, pin it at the top of every member's page and/or email it
   to everyone, one tier, or one event's ticket holders. Every email is editable in
-  one short list (welcome, ticket confirmation, collectible, how to pay, payment not confirmed,
+  one short list (welcome, ticket confirmation, collectible, voucher, certificate, how to pay, payment not confirmed,
   event reminder, access-ending reminder, access extended, lost link, access ended), plus an alert to you when a payment is waiting.
 - Follow-up emails: up to five automatic notes some days after someone joins (like a short
   welcome sequence), each limited to one card if you like, with a "stop these emails" link.

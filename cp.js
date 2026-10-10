@@ -162,15 +162,20 @@
   let selectedTier = tiers.find(t => !t.sold_out) || tiers[0]
   const isTicket = t => !!t && t.kind === 'ticket'
   const isCollectible = t => !!t && t.kind === 'collectible'
+  const isVoucher = t => !!t && t.kind === 'voucher'
+  const isCert = t => !!t && t.kind === 'certificate'
+  // A voucher whose offer has ended can't be picked.
+  tiers.forEach(t => { if (t && t.kind === 'voucher' && t.voucher && t.voucher.over) t.sold_out = true })
   // The right-hand label of a tier in the sign-up list.
   function tierBadge(t) {
     if (t.sold_out) {
       if (isTicket(t) && t.event && t.event.over) return 'Event over'
+      if (isVoucher(t) && t.voucher && t.voucher.over) return 'Offer ended'
       if (isCollectible(t) && t.drop && t.drop.state === 'soon') return t.drop.opens ? 'Opens ' + t.drop.opens : 'Not open yet'
       if (isCollectible(t) && t.drop && t.drop.state === 'closed') return 'Drop closed'
       return 'Sold out'
     }
-    const price = t.price ? '$' + t.price + ((isTicket(t) || isCollectible(t)) ? '' : '/mo') : 'Free'
+    const price = t.price ? '$' + t.price + ((isTicket(t) || isCollectible(t) || isVoucher(t) || isCert(t)) ? '' : '/mo') : 'Free'
     return price + (typeof t.spots_left === 'number' ? ' \u00b7 ' + Math.max(0, Math.floor(t.spots_left)) + ' left' : '')
   }
 
@@ -957,7 +962,7 @@
     const el = document.getElementById('ca-tier-picker')
     el.innerHTML = tiers.map((t, i) => `
       <div class="ca-tier-option${t === selectedTier ? ' selected' : ''}${t.sold_out ? ' sold-out' : ''}" data-i="${i}">
-        <span class="ca-tier-name">${esc(t.name)}${t.label ? ' — ' + esc(t.label) : ''}${isTicket(t) && t.event && (t.event.name || t.event.when) ? '<small class="ca-tier-ev">' + esc([t.event.name, t.event.when].filter(Boolean).join(' \u00b7 ')) + '</small>' : ''}${isCollectible(t) && t.drop && ((t.drop.name && t.drop.name.toLowerCase() !== String(t.label || '').toLowerCase()) || t.drop.closes) ? '<small class="ca-tier-ev">' + esc([(t.drop.name && t.drop.name.toLowerCase() !== String(t.label || '').toLowerCase()) ? t.drop.name : '', t.drop.closes ? 'until ' + t.drop.closes : ''].filter(Boolean).join(' \u00b7 ')) + '</small>' : ''}</span>
+        <span class="ca-tier-name">${esc(t.name)}${t.label ? ' — ' + esc(t.label) : ''}${isTicket(t) && t.event && (t.event.name || t.event.when) ? '<small class="ca-tier-ev">' + esc([t.event.name, t.event.when].filter(Boolean).join(' \u00b7 ')) + '</small>' : ''}${isCollectible(t) && t.drop && ((t.drop.name && t.drop.name.toLowerCase() !== String(t.label || '').toLowerCase()) || t.drop.closes) ? '<small class="ca-tier-ev">' + esc([(t.drop.name && t.drop.name.toLowerCase() !== String(t.label || '').toLowerCase()) ? t.drop.name : '', t.drop.closes ? 'until ' + t.drop.closes : ''].filter(Boolean).join(' \u00b7 ')) + '</small>' : ''}${isVoucher(t) && t.voucher && (t.voucher.name || t.voucher.until) ? '<small class="ca-tier-ev">' + esc([t.voucher.name, t.voucher.until ? 'until ' + t.voucher.until : ''].filter(Boolean).join(' \u00b7 ')) + '</small>' : ''}${isCert(t) && t.cert && t.cert.title ? '<small class="ca-tier-ev">' + esc(t.cert.title) + '</small>' : ''}</span>
         <span class="ca-tier-price">${esc(tierBadge(t))}</span>
       </div>`).join('')
     el.querySelectorAll('.ca-tier-option').forEach(opt => {
@@ -1374,9 +1379,15 @@
 
     const ev = (data.kind === 'ticket' && data.event) ? data.event : null
     const dr = (data.kind === 'collectible' && data.drop) ? data.drop : null
+    const vc = (data.kind === 'voucher' && data.detail) ? data.detail : null
+    const ct = (data.kind === 'certificate' && data.detail) ? data.detail : null
     const edText = dr && dr.edition ? '#' + dr.edition + (dr.of ? ' of ' + dr.of : '') : ''
     showResult('valid', ev
       ? `✔ Welcome, ${memberName}. Your ticket: ${[ev.name, ev.when].filter(Boolean).join(' · ') || data.tier}`
+      : vc
+        ? `✔ Welcome, ${memberName}. Your voucher: ${vc.name || data.tier} · valid until ${expiry}`
+      : ct
+        ? `✔ ${memberName}: ${ct.title || data.tier}. This certificate is genuine.`
       : dr
         ? `✔ Welcome, ${memberName}. Your collectible: ${[dr.name, edText].filter(Boolean).join(' · ') || data.tier}`
         : `✔ Welcome, ${memberName}. ${data.tier} access · valid until ${expiry}`)
@@ -1391,6 +1402,13 @@
         ${ev.place ? `<div><b>WHERE</b> // <span>${esc(ev.place)}</span></div>` : ''}
         ${ev.note ? `<div><b>NOTE</b> // <span>${esc(ev.note)}</span></div>` : ''}
         <div><b>ADMIT</b> // <span>${esc(data.tier)}</span></div>`
+        : vc ? `${vc.name ? `<div><b>OFFER</b> // <span>${esc(vc.name)}</span></div>` : ''}
+        ${vc.terms ? `<div><b>TERMS</b> // <span>${esc(vc.terms)}</span></div>` : ''}
+        <div><b>VALID UNTIL</b> // <span>${esc(expiry)}</span></div>`
+        : ct ? `${ct.title ? `<div><b>CERTIFICATE</b> // <span>${esc(ct.title)}</span></div>` : ''}
+        <div><b>AWARDED TO</b> // <span>${esc(memberName)}</span></div>
+        ${ct.note ? `<div><b>NOTE</b> // <span>${esc(ct.note)}</span></div>` : ''}
+        <div><b>VALID</b> // <span>forever</span></div>`
         : dr ? `${dr.name ? `<div><b>DROP</b> // <span>${esc(dr.name)}</span></div>` : ''}
         ${edText ? `<div><b>EDITION</b> // <span>${esc(edText)}</span></div>` : ''}
         ${dr.note ? `<div><b>NOTE</b> // <span>${esc(dr.note)}</span></div>` : ''}

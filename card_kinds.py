@@ -12,6 +12,12 @@ A tier is one of three kinds of card:
             person who claims one gets a numbered card ("#37 of 100"). It can
             only be claimed inside the drop's window (or until it sells out),
             and it never expires. The edition size is the tier's "max members".
+  "voucher" A voucher or coupon ("One free coffee", "20% off"). It is valid for
+            a number of days (or until a date) and can be used once: staff
+            redeem it on the Check-in page, exactly like a ticket.
+  "certificate"  A certificate or badge ("Completed the course", "Volunteer 2026").
+            It carries what it is for, is never-expiring and can be checked by
+            anyone. Usually handed out by the creator.
 
 Only the kind and the event details live here. How a card is drawn is a Card
 look (card_looks.py); what it unlocks is the tier's sections.
@@ -25,9 +31,13 @@ typed time; the server uses `tz` only to know when the ticket stops working.
 import re
 from datetime import datetime, timedelta, timezone
 
-KINDS = ("pass", "ticket", "collectible")
+KINDS = ("pass", "ticket", "collectible", "voucher", "certificate")
 DEFAULT_KIND = "pass"
-KIND_NAMES = {"pass": "Access pass", "ticket": "Event ticket", "collectible": "Collectible"}
+KIND_NAMES = {"pass": "Access pass", "ticket": "Event ticket", "collectible": "Collectible",
+              "voucher": "Voucher", "certificate": "Certificate"}
+
+# Cards that are used up at the door / counter (the Check-in page redeems them).
+REDEEMABLE = ("ticket", "voucher")
 
 # A collectible never expires. "Never" is stored as a date far in the future, so
 # everything else (active checks, registry, signatures) works unchanged.
@@ -39,6 +49,8 @@ MAX_NOTE = 60
 MAX_BOTTOM = 40         # the small line at the bottom of a ticket / collectible
 DEFAULT_TICKET_BOTTOM = "Show this at the door"
 DEFAULT_DROP_BOTTOM = "Limited edition"
+DEFAULT_VOUCHER_BOTTOM = "Show this to redeem"
+DEFAULT_CERT_BOTTOM = "Verified certificate"
 DEFAULT_HOURS = 12      # a ticket with no end time works for this long after the start
 
 _CTRL = re.compile(r"[\x00-\x1f\x7f]")
@@ -55,6 +67,24 @@ def is_ticket(tier) -> bool:
 
 def is_collectible(tier) -> bool:
     return isinstance(tier, dict) and tier.get("kind") == "collectible"
+
+
+def is_voucher(tier) -> bool:
+    return isinstance(tier, dict) and tier.get("kind") == "voucher"
+
+
+def is_certificate(tier) -> bool:
+    return isinstance(tier, dict) and tier.get("kind") == "certificate"
+
+
+def is_redeemable(tier_or_entry) -> bool:
+    """True for a card that is used up once (a ticket or a voucher). Works on a
+    tier or on an issued card's registry entry."""
+    return isinstance(tier_or_entry, dict) and tier_or_entry.get("kind") in REDEEMABLE
+
+
+def any_redeemable(tiers) -> bool:
+    return any(is_redeemable(t) for t in (tiers or []))
 
 
 def is_never(expires_at) -> bool:
@@ -237,3 +267,82 @@ def card_drop(tier, edition: int, of=None) -> dict:
 def sample_drop() -> dict:
     """Made-up details for previews."""
     return {"name": "Midnight Photo Set", "note": "Signed digital print", "edition": 37, "of": 100, "bottom": DEFAULT_DROP_BOTTOM}
+
+
+# ── Vouchers ──
+# A voucher tier keeps {name, terms, until, tz, bottom} in `voucher`. It is valid
+# for the tier's number of days after it is given out, or until `until` (a typed
+# local date and time plus `tz`, as for events) when one is set.
+
+def clean_voucher(name="", terms="", until="", tz=0, bottom="") -> dict:
+    return {"name": _text(name, MAX_NAME), "terms": _text(terms, MAX_NOTE), "until": _local(until),
+            "tz": _tz(tz), "bottom": _text(bottom, MAX_BOTTOM)}
+
+
+def voucher_of(tier) -> dict:
+    """A tier's voucher details, always a complete dict."""
+    v = tier.get("voucher") if isinstance(tier, dict) else None
+    v = v if isinstance(v, dict) else {}
+    return clean_voucher(v.get("name"), v.get("terms"), v.get("until"), v.get("tz"), v.get("bottom"))
+
+
+def voucher_until_utc(voucher):
+    """The fixed end date, or None when the voucher just lasts the tier's number of days."""
+    return _utc(voucher["until"], voucher.get("tz", 0)) if voucher and voucher.get("until") else None
+
+
+def voucher_ended(voucher, now=None) -> bool:
+    end = voucher_until_utc(voucher)
+    return bool(end and end <= (now or datetime.now(timezone.utc)))
+
+
+def public_voucher(tier) -> dict:
+    """What a visitor may see of a voucher tier (the sign-up list)."""
+    v = voucher_of(tier)
+    return {"name": v["name"], "terms": v["terms"], "until": _stamp(v["until"]) if v["until"] else "",
+            "over": voucher_ended(v)}
+
+
+def card_voucher(tier) -> dict:
+    """The voucher details as stored on an issued voucher and shown on its card."""
+    v = voucher_of(tier)
+    return {"name": v["name"], "terms": v["terms"], "bottom": v["bottom"] or DEFAULT_VOUCHER_BOTTOM}
+
+
+def sample_voucher() -> dict:
+    return {"name": "One free coffee", "terms": "Any size, any day", "bottom": DEFAULT_VOUCHER_BOTTOM}
+
+
+# ── Certificates ──
+# A certificate tier keeps {title, note, bottom} in `cert`.
+
+def clean_cert(title="", note="", bottom="") -> dict:
+    return {"title": _text(title, MAX_NAME), "note": _text(note, MAX_NOTE), "bottom": _text(bottom, MAX_BOTTOM)}
+
+
+def cert_of(tier) -> dict:
+    c = tier.get("cert") if isinstance(tier, dict) else None
+    c = c if isinstance(c, dict) else {}
+    return clean_cert(c.get("title"), c.get("note"), c.get("bottom"))
+
+
+def public_cert(tier) -> dict:
+    return {"title": cert_of(tier)["title"]}
+
+
+def card_cert(tier) -> dict:
+    c = cert_of(tier)
+    return {"title": c["title"], "note": c["note"], "bottom": c["bottom"] or DEFAULT_CERT_BOTTOM}
+
+
+def sample_cert() -> dict:
+    return {"title": "Completed the Pottery Course", "note": "Awarded by your studio", "bottom": DEFAULT_CERT_BOTTOM}
+
+
+def detail_of(tier) -> dict:
+    """What an issued voucher / certificate stores and shows (empty for other kinds)."""
+    if is_voucher(tier):
+        return card_voucher(tier)
+    if is_certificate(tier):
+        return card_cert(tier)
+    return {}

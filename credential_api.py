@@ -524,11 +524,16 @@ class SignupBlocked(Exception):
         self.reason = reason
         self.message = message
 
-def _signup_check(cfg: dict, tier_cfg: dict, tier: str, email: str):
+def _signup_check(cfg: dict, tier_cfg: dict, tier: str, email: str, public: bool = True):
     """None if allowed, else (reason, message). Call with _signup_lock held
-    when the answer is about to be acted on."""
+    when the answer is about to be acted on. `public` is False when the creator
+    gives a card out by hand (cards marked "only I give it out" are allowed then)."""
     if not tier_cfg:
         return None   # an unlisted/demo tier name has no limits to apply
+    if public and tier_cfg.get("hidden"):
+        return ("not_offered", "This card isn't available to sign up for.")
+    if card_kinds.is_voucher(tier_cfg) and card_kinds.voucher_ended(card_kinds.voucher_of(tier_cfg)):
+        return ("voucher_ended", "This voucher offer has ended.")
     if card_kinds.is_ticket(tier_cfg):
         ev = card_kinds.event_of(tier_cfg)
         if not card_kinds.has_date(ev):
@@ -635,7 +640,21 @@ def _issue_and_fulfill(name: str, email: str, tier: str, days: int, sections: li
     # An event ticket works until its event ends, whatever number of days the
     # caller passed; its event details are signed into the card and shown on it.
     tier_cfg_t = get_tier(cfg, tier)
-    kind, event, ends_at, drop = "pass", None, None, None
+    kind, event, ends_at, drop, detail = "pass", None, None, None, None
+    if card_kinds.is_certificate(tier_cfg_t):
+        # A certificate never expires.
+        kind, ends_at, detail = "certificate", card_kinds.NEVER, card_kinds.card_cert(tier_cfg_t)
+        days = 36500
+    if card_kinds.is_voucher(tier_cfg_t):
+        # A voucher lasts the tier's number of days, or until its own end date when one is set.
+        _v = card_kinds.voucher_of(tier_cfg_t)
+        kind, detail = "voucher", card_kinds.card_voucher(tier_cfg_t)
+        _until = card_kinds.voucher_until_utc(_v)
+        if _until is not None:
+            if _until <= datetime.now(timezone.utc):
+                raise SignupBlocked("voucher_ended", "This voucher offer has ended.")
+            ends_at = _until
+            days = max(1, -(-int((_until - datetime.now(timezone.utc)).total_seconds()) // 86400))
     if card_kinds.is_collectible(tier_cfg_t):
         # A collectible never expires. Its drop window is checked by the caller's
         # `check` (the creator can override that when giving one away by hand).
@@ -682,7 +701,8 @@ def _issue_and_fulfill(name: str, email: str, tier: str, days: int, sections: li
             expiry_days = days,
             sections    = sections,
             metadata    = ({"kind": "ticket", "event": event} if kind == "ticket"
-                           else {"kind": "collectible", "drop": drop} if kind == "collectible" else None),
+                           else {"kind": "collectible", "drop": drop} if kind == "collectible"
+                           else {"kind": kind, "detail": detail} if kind in ("voucher", "certificate") else None),
             expires_at_override = ends_at,
         )
 
@@ -715,6 +735,7 @@ def _issue_and_fulfill(name: str, email: str, tier: str, days: int, sections: li
             kind                = kind,
             event               = event,
             drop                = drop,
+            detail              = detail,
         )
 
         # 4 — Registry (payment_meta, if given, is recorded on the entry —
@@ -727,6 +748,7 @@ def _issue_and_fulfill(name: str, email: str, tier: str, days: int, sections: li
             "kind":        kind,
             "event":       event,
             "drop":        drop,
+            "detail":      detail,
         })
 
     # 5 — Email (skipped when the caller doesn't want one, e.g. the creator
@@ -745,6 +767,7 @@ def _issue_and_fulfill(name: str, email: str, tier: str, days: int, sections: li
             kind          = kind,
             event         = event,
             drop          = drop,
+            detail        = detail,
         )
 
     return {
@@ -1367,10 +1390,10 @@ def admin_members_issue():
         result = _issue_and_fulfill(
             name, email, tier_cfg["name"], days, tier_cfg.get("sections", []), cfg=cfg,
             payment_meta={"comped": True},
-            check=None if ignore else (lambda: _signup_check(cfg, tier_cfg, tier_cfg["name"], email)),
+            check=None if ignore else (lambda: _signup_check(cfg, tier_cfg, tier_cfg["name"], email, public=False)),
             send_email=send)
     except SignupBlocked as b:
-        resp = _blocked_response(b.reason, b.message if b.reason.startswith("event_")
+        resp = _blocked_response(b.reason, b.message if b.reason.startswith(("event_", "voucher_"))
                                  else b.message + " Tick \"Ignore limits\" to issue it anyway.")
         return resp
     except Exception as e:
@@ -1419,8 +1442,8 @@ def admin_members_extend():
             return err("No such member.", 404)
         if entry.get("revoked"):
             return err("This member's access was revoked, so it can't be extended.", 409)
-        if entry.get("kind") == "collectible":
-            return err("A collectible never expires, so there is nothing to extend.", 409)
+        if entry.get("kind") in ("collectible", "certificate"):
+            return err(f"A {entry['kind']} never expires, so there is nothing to extend.", 409)
         was_active = limits.is_active(entry)
         if not was_active:
             # An ended card that comes back takes a spot again, so a full tier
@@ -1462,8 +1485,15 @@ def admin_members_extend():
 # a ticket up and, unless told only to look, checks it off at once; /use and
 # /undo are the buttons on the Members screen (and "undo" on the Check-in page).
 def _ticket_info(entry: dict) -> dict:
+    """What the door sees about a ticket or voucher: who, what, when, any note."""
+    if entry.get("kind") == "voucher":
+        d = entry.get("detail") if isinstance(entry.get("detail"), dict) else {}
+        until = str(entry.get("expires_at") or "")[:10]
+        return {"credential_id": entry.get("credential_id"), "name": entry.get("holder_name"), "tier": entry.get("tier"),
+                "kind": "voucher", "event": d.get("name") or entry.get("tier") or "",
+                "when": ("valid until " + until) if until and not until.startswith("2100") else "", "note": d.get("terms") or ""}
     ev = entry.get("event") if isinstance(entry.get("event"), dict) else {}
-    return {"credential_id": entry.get("credential_id"), "name": entry.get("holder_name"),
+    return {"credential_id": entry.get("credential_id"), "name": entry.get("holder_name"), "kind": "ticket",
             "tier": entry.get("tier"), "event": ev.get("name") or "", "when": ev.get("when") or "",
             "note": ev.get("note") or ""}
 
@@ -1484,7 +1514,7 @@ def admin_checkin():
         admin_theme.shell_js(cfg["admin_style"]),
         admin_theme.body_attrs(cfg["admin_style"], "checkin", cfg["card_title"], tickets=True),
         cfg["card_title"], _checkin_stats(),
-        any(card_kinds.is_ticket(t) for t in (cfg.get("tiers") or [])))
+        card_kinds.any_redeemable(cfg.get("tiers")))
     resp = app.response_class(html, mimetype="text/html")
     resp.headers["Cache-Control"] = "no-store"
     return resp
@@ -1502,23 +1532,24 @@ def admin_checkin_scan():
         return jsonify({"success": True, "state": state, "title": title, "error": error, "marked": marked,
                         "ticket": _ticket_info(entry) if entry else None, "stats": _checkin_stats()})
     if not cid:
-        return reply("bad", "Not a ticket", "That doesn't look like a ticket link or code.")
+        return reply("bad", "Not a ticket", "That doesn't look like a ticket or voucher link or code.")
     entry = get_by_id(cid)
     if not entry:
-        return reply("bad", "Unknown ticket", "No ticket with that code was found.")
+        return reply("bad", "Unknown ticket", "No ticket or voucher with that code was found.")
     if h:
         stored = (entry.get("bundle_hash") or "").lower()
         n = min(len(h), 32)
         if len(stored) < 16 or len(h) < 16 or not hmac.compare_digest(stored[:n], h[:n]):
-            return reply("bad", "Not valid", "This code doesn't match the ticket.")
-    if entry.get("kind") != "ticket":
-        return reply("bad", "Not a ticket", "This is an access pass, not an event ticket.", entry)
+            return reply("bad", "Not valid", "This code doesn't match the card.")
+    if not card_kinds.is_redeemable(entry):
+        return reply("bad", "Not a ticket or voucher", "This card isn't a ticket or a voucher, so there is nothing to check in.", entry)
+    is_v = entry.get("kind") == "voucher"
     if entry.get("revoked"):
-        return reply("bad", "Cancelled", "This ticket was revoked.", entry)
-    if not limits.is_active(entry):
-        return reply("bad", "Expired", "The event is over, so this ticket no longer works.", entry)
+        return reply("bad", "Cancelled", "This voucher was revoked." if is_v else "This ticket was revoked.", entry)
     if entry.get("used_at"):
-        return reply("bad", "Already used", "Checked in at " + str(entry["used_at"])[:16].replace("T", " ") + " UTC.", entry)
+        return reply("bad", "Already used", ("Redeemed at " if is_v else "Checked in at ") + str(entry["used_at"])[:16].replace("T", " ") + " UTC.", entry)
+    if not limits.is_active(entry):
+        return reply("bad", "Expired", "This voucher has expired." if is_v else "The event is over, so this ticket no longer works.", entry)
     if not mark:
         return reply("valid", entry=entry)
     mark_used(cid)
@@ -1532,14 +1563,14 @@ def _checkin_toggle(undo: bool):
     cid = str(data.get("credential_id") or "").strip()
     entry = get_by_id(cid) if cid else None
     if not entry:
-        return err("No such ticket.", 404)
-    if entry.get("kind") != "ticket":
-        return err("That card is an access pass, not an event ticket.", 400)
+        return err("No such ticket or voucher.", 404)
+    if not card_kinds.is_redeemable(entry):
+        return err("That card isn't a ticket or a voucher.", 400)
     if undo:
         unmark_used(cid)
     else:
         if entry.get("revoked") or not limits.is_active(entry):
-            return err("That ticket is revoked or expired.", 400)
+            return err("That card is revoked or expired.", 400)
         mark_used(cid)
     return jsonify({"success": True, "stats": _checkin_stats()})
 
@@ -1779,7 +1810,9 @@ def admin_members():
         else:
             status_label = "active"
         is_tk = m.get("kind") == "ticket"
-        used_at = m.get("used_at") if is_tk else None
+        is_vc = m.get("kind") == "voucher"
+        is_rd = is_tk or is_vc                 # used up once: a ticket or a voucher
+        used_at = m.get("used_at") if is_rd else None
         if used_at and not revoked:
             status_label = f'USED<br><span class="small">{esc_html(str(used_at)[:16].replace("T", " "))} UTC</span>'
         if m.get("reminded_at") and m.get("reminded_for") == m.get("expires_at"):
@@ -1813,7 +1846,8 @@ def admin_members():
             default_days = 30
         default_days = min(max(default_days, 1), member_registry.MAX_EXTEND_DAYS)
         is_cl = m.get("kind") == "collectible"
-        if revoked or is_cl:                    # a collectible never expires: nothing to extend
+        is_ct = m.get("kind") == "certificate"
+        if revoked or is_cl or is_ct:           # a collectible / certificate never expires: nothing to extend
             extend_cell = '—'
         else:
             notify_box = ('<label class="small"><input type="checkbox" class="extend-notify" checked> email them</label>'
@@ -1827,6 +1861,14 @@ def admin_members():
             _ev = m.get("event") if isinstance(m.get("event"), dict) else {}
             tier_esc += ('<br><span class="small">ticket'
                          + (f' · {esc_html(str(_ev.get("name") or ""))}' if _ev.get("name") else "") + '</span>')
+        if is_vc:
+            _dt = m.get("detail") if isinstance(m.get("detail"), dict) else {}
+            tier_esc += ('<br><span class="small">voucher'
+                         + (f' · {esc_html(str(_dt.get("name") or ""))}' if _dt.get("name") else "") + '</span>')
+        if is_ct:
+            _dt = m.get("detail") if isinstance(m.get("detail"), dict) else {}
+            tier_esc += ('<br><span class="small">certificate'
+                         + (f' · {esc_html(str(_dt.get("title") or ""))}' if _dt.get("title") else "") + '</span>')
         if is_cl:
             _dr = m.get("drop") if isinstance(m.get("drop"), dict) else {}
             _num = f' · #{esc_html(str(_dr.get("edition")))}' + (f' of {esc_html(str(_dr.get("of")))}' if _dr.get("of") else "") if _dr.get("edition") else ""
@@ -1837,11 +1879,11 @@ def admin_members():
         revoke_cell = '—' if revoked else (
             f'<button class="revoke-btn" data-id="{cred_id}" data-name="{name_esc}">Revoke</button>'
         )
-        if is_tk and not revoked:
+        if is_rd and not revoked:
             if used_at:
-                use_btn = f'<button class="use-btn undo" data-id="{cred_id}" data-name="{name_esc}" data-do="undo">Undo check-in</button>'
+                use_btn = f'<button class="use-btn undo" data-id="{cred_id}" data-name="{name_esc}" data-do="undo" data-word="{"voucher" if is_vc else "ticket"}">{"Undo redeem" if is_vc else "Undo check-in"}</button>'
             elif active_now:
-                use_btn = f'<button class="use-btn" data-id="{cred_id}" data-name="{name_esc}" data-do="use">Mark as used</button>'
+                use_btn = f'<button class="use-btn" data-id="{cred_id}" data-name="{name_esc}" data-do="use" data-word="{"voucher" if is_vc else "ticket"}">Mark as used</button>'
             else:
                 use_btn = ''
             revoke_cell = f'<div class="use-box">{use_btn}{revoke_cell}</div>'
@@ -1876,7 +1918,7 @@ def admin_members():
           <td class="c-tier" data-label="Tier">{tier_esc}</td>
           <td class="c-sections" data-label="Sections">{sections_esc}</td>
           <td class="c-issued" data-label="Issued">{(m.get('issued_at') or '')[:16].replace('T',' ')}</td>
-          <td class="exp-cell c-exp" data-label="Expires">{"never" if is_cl else (m.get('expires_at') or '')[:16].replace('T',' ')}</td>
+          <td class="exp-cell c-exp" data-label="Expires">{"never" if (is_cl or is_ct) else (m.get('expires_at') or '')[:16].replace('T',' ')}</td>
           <td class="status-cell c-status" data-label="Status">{status_label}</td>
           <td class="c-ver" data-label="Verified">{m.get('verified_count', 0)}</td>
           <td class="c-ips" data-label="IPs" title="{esc_html(ip_title)}">{ip_count}</td>
@@ -1891,7 +1933,7 @@ def admin_members():
     theme_css = admin_theme.css(cfg["admin_style"], cfg["accent_color"], "wide")
     theme_js = admin_theme.shell_js(cfg["admin_style"])
     body_attrs = admin_theme.body_attrs(cfg["admin_style"], "members", cfg["card_title"],
-                                        tickets=any(card_kinds.is_ticket(t) for t in (cfg.get("tiers") or [])))
+                                        tickets=card_kinds.any_redeemable(cfg.get("tiers")))
 
     members_page_warning = ""
     if members_page_unset:
@@ -1902,7 +1944,7 @@ def admin_members():
             'of your site with the widget, save, then come back.</div>'
         )
 
-    checkin_link = '<a href="/admin/checkin">Check-in (tickets) →</a>' if any(card_kinds.is_ticket(t) for t in (cfg.get("tiers") or [])) else ""
+    checkin_link = '<a href="/admin/checkin">Check-in (tickets and vouchers) →</a>' if card_kinds.any_redeemable(cfg.get("tiers")) else ""
     tier_opts = ""
     for t in (cfg.get("tiers") or []):
         try:
@@ -2006,7 +2048,7 @@ def admin_members():
   <div class="count"><b>Extend</b>: adds days to a member's access. Same card, same link; only the end date moves. An expired card restarts from today.</div>
   <div class="count"><b>Delete</b>: removes a member for good. Their card and link stop working. To only cut off access and keep the record, use Revoke.</div>
   <div class="count"><b>Copy link</b>: copies the member's personal link. Send it yourself if email isn't set up. Treat it like a password.</div>
-  <div class="count"><b>Mark as used</b> (event tickets): lets the person in and switches their ticket off, so a copy can't be used twice. At the door the <a href="/admin/checkin" style="color:var(--accent-text);">Check-in</a> page does this for you.</div>
+  <div class="count"><b>Mark as used</b> (event tickets and vouchers): lets the person in, or redeems the voucher, and switches the card off so a copy can't be used twice. At the door the <a href="/admin/checkin" style="color:var(--accent-text);">Check-in</a> page does this for you.</div>
   </details>
   {members_page_warning}
   {issue_box}
@@ -2031,8 +2073,9 @@ def admin_members():
     document.querySelectorAll('.use-btn').forEach(btn => {{
       btn.addEventListener('click', () => {{
         const undo = btn.dataset.do === 'undo';
-        if (!confirm(undo ? `Undo the check-in for ${{btn.dataset.name}}? Their ticket works again.`
-                          : `Mark ${{btn.dataset.name}}'s ticket as used? It stops working after this.`)) return;
+        const word = btn.dataset.word || 'ticket';
+        if (!confirm(undo ? `Undo ${{word === 'voucher' ? 'the redeem' : 'the check-in'}} for ${{btn.dataset.name}}? Their ${{word}} works again.`
+                          : `Mark ${{btn.dataset.name}}'s ${{word}} as used? It stops working after this.`)) return;
         btn.disabled = true;
         fetch('/admin/checkin/' + (undo ? 'undo' : 'use'), {{
           method: 'POST', headers: {{ 'Content-Type': 'application/json' }},
@@ -2335,6 +2378,15 @@ def admin_dashboard_save():
     dr_closes        = request.form.getlist("tier_drop_closes")
     dr_notes         = request.form.getlist("tier_drop_note")
     dr_tzs           = request.form.getlist("tier_drop_tz")
+    vc_names         = request.form.getlist("tier_voucher_name")
+    vc_terms         = request.form.getlist("tier_voucher_terms")
+    vc_untils        = request.form.getlist("tier_voucher_until")
+    vc_tzs           = request.form.getlist("tier_voucher_tz")
+    vc_bottoms       = request.form.getlist("tier_voucher_bottom")
+    ct_titles        = request.form.getlist("tier_cert_title")
+    ct_notes         = request.form.getlist("tier_cert_note")
+    ct_bottoms       = request.form.getlist("tier_cert_bottom")
+    tier_hiddens     = request.form.getlist("tier_hidden")
     have_kinds       = "tier_kind" in request.form
     tier_show_spots  = request.form.getlist("tier_show_spots")
     tier_per_email   = request.form.getlist("tier_per_email")
@@ -2403,6 +2455,22 @@ def admin_dashboard_save():
                 dr_tzs[i] if i < len(dr_tzs) else 0, dr_bottoms[i] if i < len(dr_bottoms) else "")
         else:
             drop = card_kinds.drop_of(old_t)
+        if have_kinds:
+            voucher = card_kinds.clean_voucher(
+                vc_names[i] if i < len(vc_names) else "", vc_terms[i] if i < len(vc_terms) else "",
+                vc_untils[i] if i < len(vc_untils) else "", vc_tzs[i] if i < len(vc_tzs) else 0,
+                vc_bottoms[i] if i < len(vc_bottoms) else "")
+            cert = card_kinds.clean_cert(
+                ct_titles[i] if i < len(ct_titles) else "", ct_notes[i] if i < len(ct_notes) else "",
+                ct_bottoms[i] if i < len(ct_bottoms) else "")
+            hidden = (tier_hiddens[i] if i < len(tier_hiddens) else "0") == "1"
+        else:
+            voucher, cert = card_kinds.voucher_of(old_t), card_kinds.cert_of(old_t)
+            hidden = bool(old_t.get("hidden"))
+        if kind == "voucher" and not voucher["name"]:
+            logo_notes.append(f"Voucher \u201c{name.upper()}\u201d needs an offer (like \u201cOne free coffee\u201d) so people know what it is for.")
+        if kind == "certificate" and not cert["title"]:
+            logo_notes.append(f"Certificate \u201c{name.upper()}\u201d needs a title (like \u201cCompleted the course\u201d).")
         if kind == "ticket" and not event["starts_at"]:
             logo_notes.append(f"Ticket \u201c{name.upper()}\u201d needs a start date and time before anyone can get it.")
 
@@ -2410,13 +2478,16 @@ def admin_dashboard_save():
             "name":        name.upper(),
             **({"kind": "ticket", "event": event} if kind == "ticket" else {}),
             **({"kind": "collectible", "drop": drop} if kind == "collectible" else {}),
+            **({"kind": "voucher", "voucher": voucher} if kind == "voucher" else {}),
+            **({"kind": "certificate", "cert": cert} if kind == "certificate" else {}),
+            **({"hidden": True} if hidden else {}),
             "label":       (tier_labels[i] if i < len(tier_labels) else "").strip(),
             "price":       price,
             "expiry_days": expiry_days,
             "sections":    sections,
             **({"max_members": max_members} if max_members else {}),
             **({"show_spots_left": False} if not show_spots else {}),
-            **({"per_email": per_email} if (per_email != limits.DEFAULT_PER_EMAIL or kind == "collectible") else {}),
+            **({"per_email": per_email} if (per_email != limits.DEFAULT_PER_EMAIL or kind in ("collectible", "voucher", "certificate")) else {}),
             **({"look": look_id} if look_id else {}),
             **({"design": legacy_design} if legacy_design else {}),
         })
@@ -2634,6 +2705,16 @@ def _dashboard_page() -> str:
     theme_css = admin_theme.css(cfg["admin_style"], cfg["accent_color"], "page")
     theme_js = admin_theme.shell_js(cfg["admin_style"])
     body_attrs = admin_theme.body_attrs(cfg["admin_style"], "dashboard", cfg["card_title"])
+    # A big shortcut for the door: Check-in lives under People, which is easy to miss on a phone.
+    home_checkin = ""
+    if card_kinds.any_redeemable(cfg.get("tiers")):
+        home_checkin = (
+            '<a class="home-checkin" href="/admin/checkin"><b>Check-in at the door →</b>'
+            '<span>Scan or paste a ticket to let someone in.</span></a>'
+            '<style>.home-checkin{display:block;margin:0 0 18px;padding:14px 16px;border:1px solid var(--accent-text,#0a7);'
+            'border-radius:var(--radius,8px);text-decoration:none;color:var(--fg,inherit);background:var(--bg,transparent);}'
+            '.home-checkin b{display:block;color:var(--accent-text,#0a7);font-size:1.05em;}'
+            '.home-checkin span{display:block;font-size:.88em;opacity:.75;margin-top:2px;}</style>')
 
     try:
         from member_registry import stats
@@ -2705,7 +2786,8 @@ def _dashboard_page() -> str:
     except Exception:
         _registry, _requests = [], []
 
-    UI_KIND = {"pass": "Membership", "ticket": "Event ticket", "collectible": "Limited drop"}
+    UI_KIND = {"pass": "Membership", "ticket": "Event ticket", "collectible": "Limited drop",
+               "voucher": "Voucher", "certificate": "Certificate"}
 
     def _cap_field(t: dict) -> str:
         cap = limits.tier_max(t)
@@ -2718,7 +2800,7 @@ def _dashboard_page() -> str:
                      f'{" — SOLD OUT" if taken >= cap else ""}.') if cap else "No limit set."
         return f"""
           <div class="of">
-            <label><span class="lbl-members">Max members (blank = no limit)</span><span class="lbl-tickets">Tickets available (blank = no limit)</span><span class="lbl-edition">Edition size (blank = open)</span></label>
+            <label><span class="lbl-members">Max members (blank = no limit)</span><span class="lbl-tickets">Tickets available (blank = no limit)</span><span class="lbl-edition">Edition size (blank = open)</span><span class="lbl-vouchers">Vouchers available (blank = no limit)</span><span class="lbl-certs">Most certificates (blank = no limit)</span></label>
             <input name="tier_max_members" type="number" min="1" step="1" value="{esc_html(str(cap) if cap else '')}" placeholder="no limit">
             <div class="hint of-usage">{esc_html(usage)}</div>
           </div>"""
@@ -2736,6 +2818,13 @@ def _dashboard_page() -> str:
                 <select name="tier_show_spots">
                   <option value="show" {sel(show)}>Yes, e.g. "12 left"</option>
                   <option value="hide" {sel(not show)}>No, only show "Sold out" when full</option>
+                </select>
+              </div>
+              <div class="design-field">
+                <label>Who can get this card?</label>
+                <select name="tier_hidden">
+                  <option value="0" {sel(not t.get("hidden"))}>Anyone, from the sign-up list</option>
+                  <option value="1" {sel(bool(t.get("hidden")))}>Only me: I give it out myself (not in the sign-up list)</option>
                 </select>
               </div>
               <div class="design-field">
@@ -2822,14 +2911,57 @@ def _dashboard_page() -> str:
             <div class="hint event-hint">People can only claim it between <b>Opens</b> and <b>Closes</b> (leave them empty for no window, so it runs until it sells out). Set the <b>Edition size</b> above to how many copies exist; every card gets its own number, like #37 of 100. A drop never expires. Put the drop's links in <b>Content</b> and tick them for this card. Times are in your own time zone.</div>
           </div>"""
 
+    def _voucher_panel(t: dict) -> str:
+        v = card_kinds.voucher_of(t)
+        return f"""
+          <div class="design-panel voucher-block">
+            <div class="design-field wide">
+              <label>The offer (shown big on the voucher)</label>
+              <input name="tier_voucher_name" maxlength="{card_kinds.MAX_NAME}" value="{esc_html(v['name'])}" placeholder="One free coffee">
+            </div>
+            <div class="design-field">
+              <label>Small print (optional)</label>
+              <input name="tier_voucher_terms" maxlength="{card_kinds.MAX_NOTE}" value="{esc_html(v['terms'])}" placeholder="Any size, any day">
+            </div>
+            <div class="design-field">
+              <label>Valid until (optional)</label>
+              <input name="tier_voucher_until" type="datetime-local" value="{esc_html(v['until'])}">
+            </div>
+            <div class="design-field wide">
+              <label>Line at the bottom of the voucher (optional)</label>
+              <input name="tier_voucher_bottom" maxlength="{card_kinds.MAX_BOTTOM}" value="{esc_html(v['bottom'])}" placeholder="{card_kinds.DEFAULT_VOUCHER_BOTTOM}">
+            </div>
+            <input type="hidden" name="tier_voucher_tz" value="{esc_html(str(v['tz']))}">
+            <div class="hint event-hint">A voucher works once. Your staff redeem it on the <b>Check-in</b> page (scan or paste), and then it stops working. It is valid for the number of days above after someone gets it, or until the date you set here (which wins when both are set). Open <b>Advanced</b> and choose <b>Only me</b> if you want to hand vouchers out yourself instead of offering them in the sign-up list.</div>
+          </div>"""
+
+    def _cert_panel(t: dict) -> str:
+        c = card_kinds.cert_of(t)
+        return f"""
+          <div class="design-panel cert-block">
+            <div class="design-field wide">
+              <label>What it is for (shown big on the certificate)</label>
+              <input name="tier_cert_title" maxlength="{card_kinds.MAX_NAME}" value="{esc_html(c['title'])}" placeholder="Completed the Pottery Course">
+            </div>
+            <div class="design-field wide">
+              <label>Note (optional)</label>
+              <input name="tier_cert_note" maxlength="{card_kinds.MAX_NOTE}" value="{esc_html(c['note'])}" placeholder="Awarded by Acme Studio">
+            </div>
+            <div class="design-field wide">
+              <label>Line at the bottom of the certificate (optional)</label>
+              <input name="tier_cert_bottom" maxlength="{card_kinds.MAX_BOTTOM}" value="{esc_html(c['bottom'])}" placeholder="{card_kinds.DEFAULT_CERT_BOTTOM}">
+            </div>
+            <div class="hint event-hint">A certificate never expires and carries the person's name. Anyone can check that it is real by scanning its QR code. You usually give these out yourself: open <b>Advanced</b> and choose <b>Only me</b>, then use <b>People &gt; Send a card</b>.</div>
+          </div>"""
+
     def _offer_box(t: dict) -> str:
         look_sel = t.get("look") if card_looks.get(cfg["card_looks"], t.get("look")) else ""
         k = card_kinds.clean_kind(t.get("kind"))
-        cls = " is-ticket" if k == "ticket" else " is-collectible" if k == "collectible" else ""
+        cls = "" if k == "pass" else f" is-{k}"
         return f"""
         <div class="offer tier-row{cls}">
           <div class="offer-head">
-            <span class="offer-type"><span class="ot-pass">Membership</span><span class="ot-ticket">Event ticket</span><span class="ot-collectible">Limited drop</span></span>
+            <span class="offer-type"><span class="ot-pass">Membership</span><span class="ot-ticket">Event ticket</span><span class="ot-collectible">Limited drop</span><span class="ot-voucher">Voucher</span><span class="ot-certificate">Certificate</span></span>
             <button type="button" class="remove-tier" title="Remove this card">Remove</button>
           </div>
           <div class="offer-grid">
@@ -2844,6 +2976,8 @@ def _dashboard_page() -> str:
           </div>
           {_event_panel(t)}
           {_drop_panel(t)}
+          {_voucher_panel(t)}
+          {_cert_panel(t)}
           {_adv_panel(t)}
         </div>"""
 
@@ -2853,7 +2987,9 @@ def _dashboard_page() -> str:
         f'<button type="button" class="new-type" data-newkind="{k}"><b>{UI_KIND[k]}</b><span>{d}</span></button>'
         for k, d in (("pass", "Access for a number of days. Unlocks your members-only content."),
                      ("ticket", "For one event. Shows the event on the card and can be checked in at the door."),
-                     ("collectible", "A numbered, limited edition (like #37 of 100) that never expires.")))
+                     ("collectible", "A numbered, limited edition (like #37 of 100) that never expires."),
+                     ("voucher", "An offer that can be used once, like a free coffee or 20% off. Staff redeem it on the Check-in page."),
+                     ("certificate", "A named certificate or badge that never expires and anyone can check is real.")))
 
     saved_banner = '<div class="banner">Saved.</div>' if request.args.get("saved") else ""
     if request.args.get("logo_note"):
@@ -3009,7 +3145,8 @@ def _dashboard_page() -> str:
   .offer-head {{ display:flex; justify-content:space-between; align-items:center; gap:10px; margin-bottom:4px; }}
   .offer-type {{ font-size:11px; letter-spacing:1.4px; text-transform:uppercase; color:var(--accent-text); font-weight:600; }}
   .offer-type span {{ display:none; }}
-  .offer:not(.is-ticket):not(.is-collectible) .ot-pass, .offer.is-ticket .ot-ticket, .offer.is-collectible .ot-collectible {{ display:inline; }}
+  .offer:not(.is-ticket):not(.is-collectible):not(.is-voucher):not(.is-certificate) .ot-pass, .offer.is-ticket .ot-ticket, .offer.is-collectible .ot-collectible,
+  .offer.is-voucher .ot-voucher, .offer.is-certificate .ot-certificate {{ display:inline; }}
   .offer .remove-tier {{ width:auto; height:auto; padding:6px 12px; font-family:var(--font); font-size:11px; }}
   .offer-grid {{ display:grid; grid-template-columns:repeat(auto-fit, minmax(190px, 1fr)); gap:0 16px; }}
   .of {{ min-width:0; }}
@@ -3017,13 +3154,13 @@ def _dashboard_page() -> str:
   .offer input, .offer select {{ width:100%; box-sizing:border-box; }}
   .of-usage {{ margin-top:4px; }}
   .days-note {{ display:none; color:var(--muted); font-size:12px; padding:8px 0; }}
-  .offer.is-ticket .c-days input, .offer.is-collectible .c-days input {{ display:none; }}
-  .offer.is-ticket .c-days .days-note, .offer.is-collectible .c-days .days-note {{ display:block; }}
-  .offer .event-block, .offer .drop-block {{ display:none; margin-top:14px; }}
-  .offer.is-ticket .event-block, .offer.is-collectible .drop-block {{ display:flex; }}
-  .lbl-edition, .lbl-tickets {{ display:none; }}
-  .offer.is-collectible .lbl-edition, .offer.is-ticket .lbl-tickets {{ display:inline; }}
-  .offer.is-collectible .lbl-members, .offer.is-ticket .lbl-members {{ display:none; }}
+  .offer.is-ticket .c-days input, .offer.is-collectible .c-days input, .offer.is-certificate .c-days input {{ display:none; }}
+  .offer.is-ticket .c-days .days-note, .offer.is-collectible .c-days .days-note, .offer.is-certificate .c-days .days-note {{ display:block; }}
+  .offer .event-block, .offer .drop-block, .offer .voucher-block, .offer .cert-block {{ display:none; margin-top:14px; }}
+  .offer.is-ticket .event-block, .offer.is-collectible .drop-block, .offer.is-voucher .voucher-block, .offer.is-certificate .cert-block {{ display:flex; }}
+  .lbl-edition, .lbl-tickets, .lbl-vouchers, .lbl-certs {{ display:none; }}
+  .offer.is-collectible .lbl-edition, .offer.is-ticket .lbl-tickets, .offer.is-voucher .lbl-vouchers, .offer.is-certificate .lbl-certs {{ display:inline; }}
+  .offer.is-collectible .lbl-members, .offer.is-ticket .lbl-members, .offer.is-voucher .lbl-members, .offer.is-certificate .lbl-members {{ display:none; }}
   .offer-adv {{ margin-top:12px; }}
   .offer-adv summary {{ cursor:pointer; color:var(--accent-text); font-size:12px; }}
   .new-types {{ display:none; gap:12px; flex-wrap:wrap; margin-top:14px; }}
@@ -3079,6 +3216,8 @@ def _dashboard_page() -> str:
     <div><b>{s['expired']}</b>expired</div>
   </div>
 
+  {home_checkin}
+
   {checklist_html}
 
   <h2>Embed on your website</h2>
@@ -3093,7 +3232,7 @@ def _dashboard_page() -> str:
     <section class="dsec" id="sec-tiers" data-title="Cards">
     <h2>Cards</h2>
     {tier_sections_hint}
-    <div class="hint" style="margin-bottom:6px;">Each box is one card people can get. Press <b>+ New card</b> to add one: a <b>Membership</b> (access for a number of days), an <b>Event ticket</b> (for one event, can be checked in at the door) or a <b>Limited drop</b> (a numbered collectible that never expires). Pick how each card looks under <b>Design → Card looks</b>.</div>
+    <div class="hint" style="margin-bottom:6px;">Each box is one card people can get. Press <b>+ New card</b> to add one: a <b>Membership</b> (access for a number of days), an <b>Event ticket</b> (for one event, can be checked in at the door), a <b>Limited drop</b> (a numbered collectible that never expires), a <b>Voucher</b> (an offer that can be used once) or a <b>Certificate</b> (a named badge that never expires). Pick how each card looks under <b>Design → Card looks</b>.</div>
     <div class="offers" id="tier-body">{tier_rows}</div>
     <div class="hint" id="no-cards" style="display:none;margin-top:10px;">No cards yet. Press <b>+ New card</b> to make your first one.</div>
     <button type="button" class="add-tier" id="add-tier">+ New card</button>
@@ -3325,14 +3464,21 @@ def _dashboard_page() -> str:
       function sync(box, fresh) {{
         const sel = box.querySelector('[name="tier_kind"]');
         if (!sel) return;
-        const t = sel.value === 'ticket', c = sel.value === 'collectible';
+        const t = sel.value === 'ticket', c = sel.value === 'collectible', v = sel.value === 'voucher', x = sel.value === 'certificate';
         box.classList.toggle('is-ticket', t);
         box.classList.toggle('is-collectible', c);
+        box.classList.toggle('is-voucher', v);
+        box.classList.toggle('is-certificate', x);
         const note = box.querySelector('.days-note');
-        if (note) note.textContent = c ? 'Never expires' : 'Until the event ends';
-        // a collectible is one copy per person by default
+        if (note) note.textContent = (c || x) ? 'Never expires' : 'Until the event ends';
+        // a collectible, voucher or certificate is one copy per person by default
         const pe = box.querySelector('select[name=tier_per_email]');
-        if (c && fresh && pe && pe.value === 'one_active') pe.value = 'one_ever';
+        if ((c || v || x) && fresh && pe && pe.value === 'one_active') pe.value = 'one_ever';
+        // a certificate is usually handed out by the creator
+        const hid = box.querySelector('select[name=tier_hidden]');
+        if (x && fresh && hid && hid.value === '0') hid.value = '1';
+        const dl = box.querySelector('.c-days label');
+        if (dl) dl.textContent = v ? 'Days it stays valid' : 'Days of access';
       }}
       function setTz(box) {{
         const st = box.querySelector('[name="tier_event_start"]'), tz = box.querySelector('[name="tier_event_tz"]');
@@ -3340,6 +3486,8 @@ def _dashboard_page() -> str:
           const when = new Date(st.value);
           if (!isNaN(when)) tz.value = String(when.getTimezoneOffset());
         }}
+        const vu = box.querySelector('[name="tier_voucher_until"]'), vz = box.querySelector('[name="tier_voucher_tz"]');
+        if (vu && vz && vu.value) {{ const w = new Date(vu.value); if (!isNaN(w)) vz.value = String(w.getTimezoneOffset()); }}
         const o = box.querySelector('[name="tier_drop_opens"]'), c = box.querySelector('[name="tier_drop_closes"]'), dz = box.querySelector('[name="tier_drop_tz"]');
         const dv = o && o.value ? o.value : (c && c.value ? c.value : '');
         if (dz && dv) {{ const w = new Date(dv); if (!isNaN(w)) dz.value = String(w.getTimezoneOffset()); }}
@@ -3349,7 +3497,7 @@ def _dashboard_page() -> str:
         const box = boxOf(e.target);
         if (!box) return;
         if (e.target.name === 'tier_kind') {{ sync(box, true); return; }}
-        if (e.target.name === 'tier_event_start' || e.target.name === 'tier_drop_opens' || e.target.name === 'tier_drop_closes') setTz(box);
+        if (e.target.name === 'tier_event_start' || e.target.name === 'tier_drop_opens' || e.target.name === 'tier_drop_closes' || e.target.name === 'tier_voucher_until') setTz(box);
       }});
       body.addEventListener('click', (e) => {{
         if (e.target.classList.contains('remove-tier')) {{ boxOf(e.target).remove(); refresh(); }}
@@ -3590,9 +3738,11 @@ def _render_preview_card(cfg: dict, design: dict, tier_name: str = "MEMBER", cre
         layout        = design.get("layout", card_looks.DEFAULT_LAYOUT),
         background_data_uri = design.get("background_data_uri"),
         background_dim      = design.get("background_dim", card_looks.DEFAULT_DIM),
-        kind          = kind if kind in ("ticket", "collectible") else "pass",
+        kind          = kind if kind in ("ticket", "collectible", "voucher", "certificate") else "pass",
         event         = card_kinds.sample_event() if kind == "ticket" else None,
         drop          = card_kinds.sample_drop() if kind == "collectible" else None,
+        detail        = (card_kinds.sample_voucher() if kind == "voucher"
+                         else card_kinds.sample_cert() if kind == "certificate" else None),
         save          = False,
     )
 
@@ -3976,10 +4126,13 @@ def get_config():
     # Whether to offer "Lost your link? Email it to me" (needs email set up and the switch on).
     public["lost_link"] = bool(email_sender.is_configured() and email_templates.clean_on(cfg.get("lostlink_on"), True) == "1")
     tiers = [t for t in (cfg.get("tiers") or []) if isinstance(t, dict)]
+    shown = [t for t in tiers if not t.get("hidden")]      # "only I give it out" cards are not offered
     public["tiers"] = [{**{k: t[k] for k in ("name", "label", "price", "expiry_days", "sections") if k in t},
                         **({"kind": "ticket", "event": card_kinds.public_event(t)} if card_kinds.is_ticket(t) else {}),
-                        **({"kind": "collectible", "drop": card_kinds.public_drop(t)} if card_kinds.is_collectible(t) else {})}
-                       for t in tiers]
+                        **({"kind": "collectible", "drop": card_kinds.public_drop(t)} if card_kinds.is_collectible(t) else {}),
+                        **({"kind": "voucher", "voucher": card_kinds.public_voucher(t)} if card_kinds.is_voucher(t) else {}),
+                        **({"kind": "certificate", "cert": card_kinds.public_cert(t)} if card_kinds.is_certificate(t) else {})}
+                       for t in shown]
     # An optional locked preview of the members-only content: item titles only,
     # for the sections the creator marked as a teaser (never links or files).
     try:
@@ -3995,7 +4148,7 @@ def get_config():
         from member_registry import list_all as registry_list
         from payment_requests import list_all as requests_list
         registry, requests = registry_list(), requests_list()
-        for pub, t in zip(public["tiers"], tiers):
+        for pub, t in zip(public["tiers"], shown):
             pub.update(limits.public_state(t, registry, requests))
     return jsonify(public)
 
@@ -4145,7 +4298,8 @@ def member_card(cid):
     download = request.args.get("dl") == "1"
     # the saved file is named for what it is: ticket_<id>.html, collectible_<id>.html, membership_<id>.html
     entry = _member_entry(cid) or {}
-    kind = {"ticket": "ticket", "collectible": "collectible"}.get(entry.get("kind"), "membership")
+    kind = {"ticket": "ticket", "collectible": "collectible", "voucher": "voucher",
+            "certificate": "certificate"}.get(entry.get("kind"), "membership")
     fname = "%s_%s.html" % (kind, re.sub(r"[^A-Za-z0-9_-]", "", str(cid))[:64])
     resp = send_file(path, mimetype="text/html", as_attachment=download,
                      download_name=fname, conditional=False, max_age=0)

@@ -18,6 +18,7 @@ fresh on every send. See SETUP.md.
 """
 
 import base64
+from datetime import datetime
 import json
 import os
 import re
@@ -382,17 +383,22 @@ def send_credential_email(
     kind:          str = "pass",
     event:         dict = None,
     drop:          dict = None,
+    detail:        dict = None,
 ) -> bool:
     """
     Send the credential email via Brevo's HTTP API: the Welcome email for a
     membership, the ticket confirmation for a ticket, the collectible one for
-    a collectible. Attaches the card HTML and bundle ZIP and includes the
+    a collectible, the voucher or certificate one for those. Attaches the card HTML and bundle ZIP and includes the
     personal access link. Returns True on success.
     """
     if kind == "ticket" and event:
         msg = build_ticket_email(to_name, tier, credential_id, bundle_hash, event)
     elif kind == "collectible" and drop:
         msg = build_collectible_email(to_name, tier, credential_id, bundle_hash, drop)
+    elif kind == "voucher" and detail:
+        msg = build_voucher_email(to_name, tier, credential_id, bundle_hash, detail, expires_at)
+    elif kind == "certificate" and detail:
+        msg = build_certificate_email(to_name, tier, credential_id, bundle_hash, detail)
     else:
         msg = build_email(to_name, tier, credential_id, bundle_hash, expires_at)
 
@@ -659,6 +665,60 @@ def build_ticket_email(to_name, tier, credential_id, bundle_hash, event, overrid
     extra = "".join(f"{a}: {b}\n" for a, b in _event_rows(to_name, tier, ev))
     return {"subject": _one_line(_fill(subj_t, values)), "html": html_body,
             "text": _plain("Your ticket", intro, "\n" + extra, link), "link": link}
+
+
+def _until_text(expires_at) -> str:
+    """"31 Dec 2026" for a voucher's end date ("" when it never ends)."""
+    s = str(expires_at or "")
+    if not s or s.startswith("2100"):
+        return ""
+    try:
+        return datetime.fromisoformat(s).strftime("%d %b %Y").lstrip("0")
+    except (ValueError, TypeError):
+        return s[:10]
+
+
+def build_voucher_email(to_name, tier, credential_id, bundle_hash, detail, expires_at="", overrides: dict = None,
+                        link_base=None) -> dict:
+    """What a person gets with their voucher."""
+    _refresh_branding()
+    subj_t, text_t = _tpl("voucher", overrides, email_templates.DEFAULT_VOUCHER_SUBJECT, email_templates.DEFAULT_VOUCHER_TEXT)
+    d = detail or {}
+    until = _until_text(expires_at)
+    values = {"name": to_name, "tier": tier, "creator": CREATOR_NAME, "brand": CARD_TITLE,
+              "offer": d.get("name") or tier, "until": until}
+    link = _personal_link(credential_id, bundle_hash, link_base)
+    intro = _fill(text_t, values)
+    rows = [("FOR", to_name.upper()), ("OFFER", d.get("name") or tier)]
+    if d.get("terms"):
+        rows.append(("TERMS", d["terms"]))
+    if until:
+        rows.append(("VALID UNTIL", until))
+    html_body = _shell("Your voucher", intro, rows, link, "◈ Open my voucher",
+                       footer_note="Keep this email. Your voucher is attached; show its QR code when you redeem it. It works once.")
+    extra = "".join(f"{a}: {b}\n" for a, b in rows)
+    return {"subject": _one_line(_fill(subj_t, values)), "html": html_body,
+            "text": _plain("Your voucher", intro, "\n" + extra, link), "link": link}
+
+
+def build_certificate_email(to_name, tier, credential_id, bundle_hash, detail, overrides: dict = None,
+                            link_base=None) -> dict:
+    """What a person gets with their certificate."""
+    _refresh_branding()
+    subj_t, text_t = _tpl("certificate", overrides, email_templates.DEFAULT_CERT_SUBJECT, email_templates.DEFAULT_CERT_TEXT)
+    d = detail or {}
+    values = {"name": to_name, "tier": tier, "creator": CREATOR_NAME, "brand": CARD_TITLE,
+              "title": d.get("title") or tier}
+    link = _personal_link(credential_id, bundle_hash, link_base)
+    intro = _fill(text_t, values)
+    rows = [("AWARDED TO", to_name.upper()), ("CERTIFICATE", d.get("title") or tier)]
+    if d.get("note"):
+        rows.append(("NOTE", d["note"]))
+    html_body = _shell("Your certificate", intro, rows, link, "◈ Open my certificate",
+                       footer_note="Keep this email. Your certificate is attached, and its QR code lets anyone check that it is real.")
+    extra = "".join(f"{a}: {b}\n" for a, b in rows)
+    return {"subject": _one_line(_fill(subj_t, values)), "html": html_body,
+            "text": _plain("Your certificate", intro, "\n" + extra, link), "link": link}
 
 
 def _edition_text(drop) -> str:
@@ -930,6 +990,12 @@ def preview_kind(kind: str, tier: str, overrides: dict = None) -> dict:
     if kind == "collectible":
         return build_collectible_email(d["to_name"], tier, d["credential_id"], d["bundle_hash"],
                                        card_kinds.sample_drop(), overrides, base)
+    if kind == "voucher":
+        return build_voucher_email(d["to_name"], tier, d["credential_id"], d["bundle_hash"], card_kinds.sample_voucher(),
+                                   "2099-12-31T00:00:00+00:00", overrides, base)
+    if kind == "certificate":
+        return build_certificate_email(d["to_name"], tier, d["credential_id"], d["bundle_hash"], card_kinds.sample_cert(),
+                                       overrides, base)
     if kind == "evremind":
         return build_event_reminder_email(d["to_name"], tier, d["credential_id"], d["bundle_hash"], sample_event, overrides, base)
     cfg = _load_config()

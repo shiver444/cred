@@ -18,6 +18,7 @@ CHIP_HELP = {
     "brand": "Your card title", "expires": "The date access ends", "days": "How many days",
     "event": "The event's name", "when": "Date and time of the event", "place": "Where it is",
     "drop": "The drop's name", "edition": "The number, like #37 of 100",
+    "offer": "What the voucher is for", "until": "The date the voucher stops working", "title": "What the certificate is for",
     "price": "The price", "reference": "Their payment reference",
 }
 

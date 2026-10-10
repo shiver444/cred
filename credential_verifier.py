@@ -85,14 +85,15 @@ def verify_credential(credential_id: str = None,
         now    = datetime.now(timezone.utc)
         expiry = datetime.fromisoformat(entry["expires_at"])
         is_ticket = entry.get("kind") == "ticket"
+        is_voucher = entry.get("kind") == "voucher"
         if expiry < now:
             return {"valid": False, "error": "This ticket has expired. The event is over." if is_ticket
-                    else "Credential has expired."}
+                    else "This voucher has expired." if is_voucher else "Credential has expired."}
 
-        # An event ticket that was already scanned in at the door
+        # An event ticket or voucher that was already used
         if entry.get("used_at"):
-            return {"valid": False, "used_at": entry["used_at"], "kind": "ticket",
-                    "error": "This ticket has already been used."}
+            return {"valid": False, "used_at": entry["used_at"], "kind": entry.get("kind") or "ticket",
+                    "error": "This voucher has already been used." if is_voucher else "This ticket has already been used."}
 
         # Verify bundle hash matches if provided
         if bundle_hash and entry.get("bundle_hash"):
@@ -120,6 +121,7 @@ def verify_credential(credential_id: str = None,
             "fingerprint_hash": entry.get("fingerprint_hash", "NOT_ANCHORED"),
             **({"kind": "ticket", "event": entry.get("event") or {}} if is_ticket else {}),
             **({"kind": "collectible", "drop": entry.get("drop") or {}} if entry.get("kind") == "collectible" else {}),
+            **({"kind": entry["kind"], "detail": entry.get("detail") or {}} if entry.get("kind") in ("voucher", "certificate") else {}),
         }
 
     # ── Full path: verify from bundle ZIP ──
@@ -182,8 +184,9 @@ def _verify_from_bundle(bundle_path: str, ip: str = None) -> dict:
             from member_registry import get_by_id
             reg = get_by_id(cred_id)
             if reg and reg.get("used_at"):
-                return {"valid": False, "used_at": reg["used_at"], "kind": "ticket",
-                        "error": "This ticket has already been used."}
+                _v = reg.get("kind") == "voucher"
+                return {"valid": False, "used_at": reg["used_at"], "kind": reg.get("kind") or "ticket",
+                        "error": "This voucher has already been used." if _v else "This ticket has already been used."}
         except Exception:
             pass
 
@@ -211,6 +214,8 @@ def _verify_from_bundle(bundle_path: str, ip: str = None) -> dict:
                if (manifest.get("metadata") or {}).get("kind") == "ticket" else {}),
             **({"kind": "collectible", "drop": (manifest.get("metadata") or {}).get("drop") or {}}
                if (manifest.get("metadata") or {}).get("kind") == "collectible" else {}),
+            **({"kind": (manifest.get("metadata") or {}).get("kind"), "detail": (manifest.get("metadata") or {}).get("detail") or {}}
+               if (manifest.get("metadata") or {}).get("kind") in ("voucher", "certificate") else {}),
         }
 
     except Exception as e:

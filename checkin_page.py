@@ -34,16 +34,24 @@ def parse_code(text: str):
 
 
 def stats(registry: list, now=None) -> list:
-    """Per event: how many tickets were issued and how many are checked in.
-    [{"name": "Halloween Live", "total": 12, "used": 7}, ...] (revoked tickets
-    are not counted)."""
+    """Per event (tickets) or per offer (vouchers): how many were issued and how
+    many are checked in / redeemed. [{"name": "Halloween Live", "total": 12,
+    "used": 7, "word": "checked in"}, ...] (revoked cards are not counted)."""
     out = {}
     for e in registry or []:
-        if e.get("kind") != "ticket" or e.get("revoked"):
+        if e.get("kind") not in ("ticket", "voucher") or e.get("revoked"):
+            continue
+        if e.get("kind") == "voucher":
+            d = e.get("detail") if isinstance(e.get("detail"), dict) else {}
+            key = ("voucher", d.get("name") or e.get("tier") or "Vouchers", "")
+            row = out.setdefault(key, {"name": key[1], "when": "voucher", "total": 0, "used": 0, "word": "redeemed"})
+            row["total"] += 1
+            if e.get("used_at"):
+                row["used"] += 1
             continue
         ev = e.get("event") if isinstance(e.get("event"), dict) else {}
-        key = (ev.get("name") or e.get("tier") or "Tickets", ev.get("starts_at") or "")
-        row = out.setdefault(key, {"name": key[0], "when": ev.get("when") or "", "total": 0, "used": 0})
+        key = ("ticket", ev.get("name") or e.get("tier") or "Tickets", ev.get("starts_at") or "")
+        row = out.setdefault(key, {"name": key[1], "when": ev.get("when") or "", "total": 0, "used": 0, "word": "checked in"})
         row["total"] += 1
         if e.get("used_at"):
             row["used"] += 1
@@ -53,8 +61,8 @@ def stats(registry: list, now=None) -> list:
 def render(theme_css: str, theme_js: str, body_attrs: str, title: str, stat_rows: list, has_tickets: bool) -> str:
     data = json.dumps({"stats": stat_rows}).replace("<", "\\u003c")
     note = ("" if has_tickets else
-            '<div class="warn">You have no event ticket tiers yet. On the Dashboard, open <b>Tiers &amp; pricing</b> and '
-            'set a tier\'s <b>Card type</b> to <b>Event ticket</b>.</div>')
+            '<div class="warn">You have no event ticket or voucher cards yet. Open <b>Cards</b>, press <b>+ New card</b> and '
+            'choose <b>Event ticket</b> or <b>Voucher</b>.</div>')
     return f"""<!DOCTYPE html>
 <html><head><meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -93,17 +101,17 @@ def render(theme_css: str, theme_js: str, body_attrs: str, title: str, stat_rows
   {admin_theme.nav_html("checkin", True)}
   <h1>{escape(title)} — Check-in</h1>
   <div class="ci">
-    <div class="hint">Scan a ticket's QR code, or paste its link or code. A good ticket is checked off right away and can't be used again.</div>
+    <div class="hint">Scan a ticket's or voucher's QR code, or paste its link or code. A good one is checked off right away and can't be used again.</div>
     {note}
     <div class="ci-row">
       <button type="button" class="ci-btn" id="ci-cam-btn">Scan with the camera</button>
     </div>
     <div class="ci-cam" id="ci-cam"><video id="ci-video" playsinline muted></video><div class="hint" id="ci-cam-msg"></div></div>
     <form class="ci-row" id="ci-form" autocomplete="off">
-      <input type="text" id="ci-code" placeholder="Paste a ticket link or code" aria-label="Ticket link or code">
+      <input type="text" id="ci-code" placeholder="Paste a ticket or voucher link or code" aria-label="Ticket or voucher link or code">
       <button type="submit" class="ci-btn ghost" id="ci-go">Check in</button>
     </form>
-    <label class="ci-opt"><input type="checkbox" id="ci-peek"> Only look, don't mark the ticket as used</label>
+    <label class="ci-opt"><input type="checkbox" id="ci-peek"> Only look, don't mark it as used</label>
     <div class="ci-res" id="ci-res" role="status" aria-live="polite"></div>
     <div class="ci-stats" id="ci-stats"></div>
   </div>
@@ -117,7 +125,7 @@ def render(theme_css: str, theme_js: str, body_attrs: str, title: str, stat_rows
       (state.stats || []).forEach(function (r) {{
         var row = document.createElement('div'); row.className = 'ci-stat';
         var a = document.createElement('span'); a.textContent = r.name + (r.when ? ' · ' + r.when : '');
-        var b = document.createElement('span'); b.textContent = r.used + ' of ' + r.total + ' checked in';
+        var b = document.createElement('span'); b.textContent = r.used + ' of ' + r.total + ' ' + (r.word || 'checked in');
         row.appendChild(a); row.appendChild(b); box.appendChild(row);
       }});
     }}
@@ -129,12 +137,12 @@ def render(theme_css: str, theme_js: str, body_attrs: str, title: str, stat_rows
       var b = document.createElement('div'); b.className = 'ci-big'; b.textContent = big; el.appendChild(b);
       (lines || []).forEach(function (t) {{ if (!t) return; var d = document.createElement('div'); d.className = 'ci-line'; d.textContent = t; el.appendChild(d); }});
       if (undoId) {{
-        var u = document.createElement('button'); u.type = 'button'; u.className = 'ci-undo'; u.textContent = 'Undo (checked in by mistake)';
+        var u = document.createElement('button'); u.type = 'button'; u.className = 'ci-undo'; u.textContent = 'Undo (used by mistake)';
         u.onclick = function () {{
           u.disabled = true;
           post('/admin/checkin/undo', {{ credential_id: undoId }}).then(function (d) {{
             if (d.stats) {{ state.stats = d.stats; drawStats(); }}
-            show('peek', 'Undone', ['The ticket works again.']);
+            show('peek', 'Undone', ['It works again.']);
           }});
         }};
         el.appendChild(u);
@@ -154,8 +162,9 @@ def render(theme_css: str, theme_js: str, body_attrs: str, title: str, stat_rows
         if (d.stats) {{ state.stats = d.stats; drawStats(); }}
         var t = d.ticket || {{}};
         var who = [t.name, t.event, t.when, t.note].filter(Boolean);
-        if (d.state === 'ok') show('ok', '\\u2713 Let in', who, d.marked ? t.credential_id : null);
-        else if (d.state === 'valid') show('peek', 'Valid ticket', who.concat(['Not marked as used.']));
+        var isV = t.kind === 'voucher';
+        if (d.state === 'ok') show('ok', isV ? '\\u2713 Redeemed' : '\\u2713 Let in', who, d.marked ? t.credential_id : null);
+        else if (d.state === 'valid') show('peek', isV ? 'Valid voucher' : 'Valid ticket', who.concat(['Not marked as used.']));
         else show('bad', d.title || 'Not valid', [d.error].concat(who));
         $('ci-code').value = '';
       }}).catch(function () {{ busy = false; $('ci-go').disabled = false; show('bad', 'No connection', ['Could not reach the server. Try again.']); }});

@@ -111,6 +111,7 @@ def generate_card(
     kind: str = "pass",
     event: dict = None,
     drop: dict = None,
+    detail: dict = None,
     save: bool = True,
 ) -> str:
     """
@@ -161,6 +162,11 @@ def generate_card(
     the drop name and "#37 of 100", never an expiry date, and says "Limited
     edition" at the bottom. Same compact layout as a ticket.
 
+    `kind="voucher"` shows the offer (`detail`: name, terms, bottom), a "Valid
+    until" date and who it is for; `kind="certificate"` shows what it is for
+    (`detail`: title, note, bottom), who it was awarded to and the date, and no
+    expiry. Both use the same compact layout as a ticket.
+
     `layout` is "classic" (text over the picture) or "art": the front shows just
     the picture with a small name label, and a tap flips the card over to the
     details and the QR code (the classic card is the back). Printing always
@@ -181,9 +187,13 @@ def generate_card(
     accent_color = accent_color.strip()
     is_ticket    = kind == "ticket"
     is_coll      = kind == "collectible"
+    is_voucher   = kind == "voucher"
+    is_cert      = kind == "certificate"
     event        = event if (is_ticket and isinstance(event, dict)) else {}
     drop         = drop if (is_coll and isinstance(drop, dict)) else {}
-    label_text   = ("Event Ticket" if is_ticket else "Collectible" if is_coll
+    detail       = detail if ((is_voucher or is_cert) and isinstance(detail, dict)) else {}
+    label_text   = ("Event Ticket" if is_ticket else "Collectible" if is_coll else "Voucher" if is_voucher
+                    else "Certificate" if is_cert
                     else ((card_label or "").strip()[:40] or "Member Keycard"))
 
     sections = sections or []
@@ -197,6 +207,7 @@ def generate_card(
         "expires_at":     expires_at,
         **({"kind": "ticket"} if is_ticket else {}),
         **({"kind": "collectible", "edition": drop.get("edition")} if is_coll else {}),
+        **({"kind": kind} if (is_voucher or is_cert) else {}),
     }
     # Goes inside a <script> block: "<" is written as \u003c so a name like
     # "</script><script>…" can never close the block (JSON.parse reads it back
@@ -232,19 +243,21 @@ def generate_card(
     e_link    = _esc(access_link, quote=True)
     accent_color = _esc(accent_color, quote=True)
     logo_html = f'<img class="card-logo" src="{_esc(logo_uri, quote=True)}" alt="{_esc(creator_name, quote=True)}">' if logo_uri else ""
-    barcode_html = '<div class="card-barcode"></div>' if (show_barcode and not is_ticket and not is_coll) else ''
+    barcode_html = '<div class="card-barcode"></div>' if (show_barcode and not is_ticket and not is_coll and not is_voucher and not is_cert) else ''
     has_bg = is_logo_data_uri(background_data_uri)
     dim = DIM_ALPHA.get(background_dim, DIM_ALPHA[DEFAULT_DIM])
     bg_html = (f'<img class="card-bg" src="{_esc(background_data_uri, quote=True)}" alt="">'
                f'<div class="card-scrim" style="background:rgba(0,0,0,{dim})"></div>') if has_bg else ""
     qr_style = qr_style if qr_style in QR_STYLES else "solid"
     card_classes = ("card" + (f" card--{card_style}" if card_style != "distressed" else "") + (" card--has-bg" if has_bg else "")
-                    + (" card--is-ticket" if (is_ticket or is_coll) else "")
+                    + (" card--is-ticket" if (is_ticket or is_coll or is_voucher or is_cert) else "")
                     + ("" if qr_style == "solid" else f" card--qr-{qr_style}")
                     + (" card--art" if layout == "art" else ""))
 
     bottom_text = _esc((((event.get("bottom") or "Show this at the door") if is_ticket
                          else (drop.get("bottom") or "Limited edition") if is_coll
+                         else (detail.get("bottom") or "Show this to redeem") if is_voucher
+                         else (detail.get("bottom") or "Verified certificate") if is_cert
                          else "Authorized access")).upper())
 
     if is_ticket:
@@ -272,6 +285,28 @@ def generate_card(
         rows.append(_crow("CLAIMED", (issued_at or "")[:10]))
         rows.append(f'      <div><b>ID</b> // <span>{formatted_id}</span></div>')
         meta_rows = "\n".join(rows)
+    elif is_voucher:
+        def _vrow(label, value, cls=""):
+            return f'      <div{(" class=" + chr(34) + cls + chr(34)) if cls else ""}><b>{label}</b> // <span>{_esc(value)}</span></div>'
+        rows = []
+        if detail.get("name"):   rows.append(_vrow("OFFER", detail["name"], "ev-name"))
+        if detail.get("terms"):  rows.append(_vrow("TERMS", detail["terms"]))
+        if expires_at and not str(expires_at).startswith("2100"):
+            rows.append(_vrow("VALID UNTIL", str(expires_at)[:10]))
+        rows.append(_vrow("VOUCHER", tier))
+        if holder_name:          rows.append(_vrow("FOR", holder_name))
+        rows.append(f'      <div><b>ID</b> // <span>{formatted_id}</span></div>')
+        meta_rows = "\n".join(rows)
+    elif is_cert:
+        def _xrow(label, value, cls=""):
+            return f'      <div{(" class=" + chr(34) + cls + chr(34)) if cls else ""}><b>{label}</b> // <span>{_esc(value)}</span></div>'
+        rows = []
+        if detail.get("title"):  rows.append(_xrow("CERTIFICATE", detail["title"], "ev-name"))
+        if holder_name:          rows.append(_xrow("AWARDED TO", holder_name))
+        if detail.get("note"):   rows.append(_xrow("NOTE", detail["note"]))
+        rows.append(_xrow("DATE", (issued_at or "")[:10]))
+        rows.append(f'      <div><b>ID</b> // <span>{formatted_id}</span></div>')
+        meta_rows = "\n".join(rows)
     else:
         meta_rows = (f'      <div><b>ACCESS CLASS</b> // <span>{e_tier}</span></div>\n'
                      f'      <div><b>ID</b> // <span>{formatted_id}</span></div>')
@@ -284,6 +319,12 @@ def generate_card(
             front_name = drop.get("name") or card_title
             n, of = drop.get("edition"), drop.get("of")
             front_sub = (f"#{n} of {of}" if of else f"#{n}") if n else ""
+        elif is_voucher:
+            front_name = detail.get("name") or card_title
+            front_sub = detail.get("terms") or ""
+        elif is_cert:
+            front_name = detail.get("title") or card_title
+            front_sub = holder_name or ""
         else:
             front_name = card_title
             front_sub = tier

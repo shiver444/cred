@@ -71,7 +71,7 @@ be reset every time you deployed. Two things follow from this:
 This also holds your saved card looks and their uploaded pictures. Your
 members-only content (step 4) is stored the same way.
 
-### Card kinds: Membership, Event ticket or Limited drop
+### Card kinds: Membership, Event ticket, Limited drop, Voucher or Certificate
 
 Every card is one box on the **Cards** screen. Press **+ New card** and pick what
 kind it is (you can also change the **Kind of card** later):
@@ -84,6 +84,20 @@ kind it is (you can also change the **Kind of card** later):
   ticket** (a seat, "doors 19:00"...). Type the times in your own time zone.
 - **Limited drop** (a collectible): a limited-edition drop (an exclusive photo set, an album, a
   single, a one-day-only release). See "Collectibles" below.
+- **Voucher**: an offer that can be used once ("One free coffee", "20% off"). Fill in
+  **The offer** (shown big on the card), optional **Terms** ("Any size, any day") and,
+  if you like, **Valid until** (a fixed date; when it is set it wins over the **Days** box).
+  Your staff redeem it on the **Check-in** page, exactly like a ticket, and then it stops working.
+  Once a fixed end date has passed nobody can get that voucher any more.
+- **Certificate**: a named certificate or badge ("Completed the course", "Volunteer 2026").
+  Write **What it is for**, an optional note and the line at the bottom. It carries the
+  person's name, never expires, and anyone can check it is real by scanning its QR code.
+  It cannot be redeemed or extended.
+
+For a voucher or certificate you often want to hand them out yourself rather than list them
+for everyone: open **Advanced** and choose **Only me** under "Who can get this card?". The card then
+does not appear in the sign-up list, and you give it out with **People > Send a card**
+(a new certificate starts as "Only me").
 
 A ticket card shows the event, the time, the place and the note in place of the
 plain "access class" row, says "Event Ticket" under the title and a small line
@@ -104,8 +118,8 @@ unlock content if you want a ticket to include some (a stream link, a download).
 Tickets never get the "your access is ending" reminder, and the event details
 are part of what is signed into the card.
 
-**Check-in (at the door).** Under **People**, the **Check-in** tab (it appears once you
-have an event ticket card) opens a page for the door. Press **Scan with the camera** and point it at a ticket's QR
+**Check-in (at the door or counter).** Open it from the big **Check-in at the door** button at the top of **Home**, or from **People**, the **Check-in** tab (it appears once you
+have an event ticket or a voucher card) opens a page for the door. Press **Scan with the camera** and point it at a ticket's QR
 code, or paste the ticket's link or code. A good ticket is checked off right away
 and the page shows a big green **Let in** with the name and event; a ticket that
 was already used, cancelled or expired shows a red reason. The page counts how many
@@ -114,7 +128,7 @@ tickets of each event are checked in. If you checked someone in by mistake, pres
 the member's own page tells them "This ticket has already been used". On the
 Members screen a ticket shows **Mark as used** / **Undo check-in** buttons too, and
 "Only look, don't mark the ticket as used" on the Check-in page lets you test a
-ticket without using it. (The camera needs a phone or computer browser that allows
+ticket without using it. For a voucher the same page says **Redeemed**, and **Undo (used by mistake)** brings it back. (The camera needs a phone or computer browser that allows
 camera use for this site; if it can't, paste the link instead.)
 
 ### Limits per tier: spots and one card per email

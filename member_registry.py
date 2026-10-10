@@ -82,6 +82,9 @@ def _add_credential_locked(entry: dict):
         **({"kind": entry["kind"], "event": entry.get("event") or {}} if entry.get("kind") == "ticket" else {}),
         # "collectible": the numbered drop card ({name, note, edition, of}).
         **({"kind": "collectible", "drop": entry.get("drop") or {}} if entry.get("kind") == "collectible" else {}),
+        # "voucher" / "certificate": what it is for (`detail`: offer or title, terms or note...).
+        # A voucher is used up once (`used_at`, like a ticket).
+        **({"kind": entry["kind"], "detail": entry.get("detail") or {}} if entry.get("kind") in ("voucher", "certificate") else {}),
         "revoked":          False,
         "revoked_at":       None,
         "verified_count":   0,
