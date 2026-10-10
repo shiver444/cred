@@ -12,6 +12,7 @@ email_templates.registry()).
 from html import escape as _esc
 
 import email_templates as et
+import email_look
 
 CHIP_HELP = {
     "name": "The member's name", "tier": "The card's name", "creator": "Your creator name",
@@ -49,6 +50,30 @@ CSS = """
   #sec-emails .em-actions { margin-top:12px; display:flex; gap:10px; align-items:center; flex-wrap:wrap; }
   #sec-emails .em-status { margin-top:8px; min-height:14px; font-size:12.5px; }
   #sec-emails .em-frame { display:none; width:100%; height:560px; border:1px solid var(--line); margin-top:10px; background:var(--frame-bg); }
+
+  #sec-emails .el-box { margin:14px 0 6px; padding:14px 16px; border:1px solid var(--line); background:var(--panel); border-radius:var(--radius-lg, 0); }
+  #sec-emails .el-box h3 { margin:0 0 4px; font-size:12px; letter-spacing:1.4px; text-transform:uppercase; color:var(--accent-text); }
+  #sec-emails .el-tiles { display:grid; grid-template-columns:repeat(auto-fit, minmax(128px, 1fr)); gap:10px; margin:12px 0 4px; }
+  #sec-emails .el-tile { display:block; cursor:pointer; border:2px solid var(--line); padding:8px; border-radius:var(--radius, 0); background:var(--bg, transparent); }
+  #sec-emails .el-tile.on { border-color:var(--accent-text); }
+  #sec-emails .el-tile input { position:absolute; opacity:0; width:1px; height:1px; }
+  #sec-emails .el-tile:focus-within { outline:2px solid var(--accent-text); outline-offset:2px; }
+  #sec-emails .el-sw { display:block; padding:9px 8px 8px; border:1px solid rgba(128,128,128,.35); height:62px; box-sizing:border-box; overflow:hidden; }
+  #sec-emails .el-sw i { display:block; font-style:normal; font-size:9px; font-weight:700; line-height:1.2; padding:2px 3px; margin-bottom:5px; white-space:nowrap; overflow:hidden; }
+  #sec-emails .el-sw u { display:block; height:3px; margin:3px 0; text-decoration:none; opacity:.55; }
+  #sec-emails .el-sw b { display:block; width:42px; height:8px; margin-top:7px; }
+  #sec-emails .el-name { display:block; margin-top:7px; font-size:13px; font-weight:600; }
+  #sec-emails .el-match { margin-top:12px; padding-top:12px; border-top:1px solid var(--line); }
+  #sec-emails .el-match[hidden] { display:none; }
+  #sec-emails .el-row { display:flex; gap:10px; align-items:center; flex-wrap:wrap; margin-top:8px; }
+  #sec-emails .el-row input[type=url] { flex:1 1 260px; min-width:0; box-sizing:border-box; }
+  #sec-emails .el-colors { display:flex; gap:18px; flex-wrap:wrap; margin-top:12px; }
+  #sec-emails .el-colors label { display:flex; flex-direction:column; gap:4px; font-size:12.5px; color:var(--muted); }
+  #sec-emails .el-colors input[type=color] { width:64px; height:38px; padding:2px; cursor:pointer; background:transparent; border:1px solid var(--line); }
+  #sec-emails .el-colors select { min-width:120px; }
+  #sec-emails .el-logo { margin-top:12px; font-size:13px; }
+  #sec-emails .el-logo input { width:auto; margin-right:6px; }
+  #sec-emails .el-status { margin-top:8px; min-height:14px; font-size:12.5px; }
   @media (max-width: 640px) {
     #sec-emails .em-head { padding:12px; gap:8px; }
     #sec-emails .em-panel { padding:2px 12px 14px; }
@@ -63,6 +88,17 @@ JS = """
   var root = document.getElementById('sec-emails'); if (!root) return;
   var rows = [].slice.call(root.querySelectorAll('.em-row'));
   var testTo = document.getElementById('em-test-to');
+  var look = document.getElementById('el-box');
+  function lookValues() {
+    var o = {};
+    if (!look) return o;
+    var picked = look.querySelector('input[name=email_look]:checked');
+    o.email_look = picked ? picked.value : 'dark';
+    [].forEach.call(look.querySelectorAll('[name]:not([name=email_look])'), function (el) {
+      if (el.type === 'checkbox') { if (el.checked) o[el.name] = el.value; } else { o[el.name] = el.value; }
+    });
+    return o;
+  }
   function post(url, body) {
     return fetch(url, { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify(body) }).then(function (r) { return r.json().then(function (j) { return { status: r.status, body: j }; }); });
@@ -70,6 +106,44 @@ JS = """
   function closeRow(r) {
     r.querySelector('.em-panel').hidden = true; r.classList.remove('open');
     r.querySelector('.em-edit').textContent = 'Edit';
+  }
+
+  if (look) {
+    var tiles = [].slice.call(look.querySelectorAll('.el-tile')), match = look.querySelector('.el-match');
+    function syncLook() {
+      var v = lookValues().email_look;
+      tiles.forEach(function (t) { t.classList.toggle('on', t.querySelector('input').value === v); });
+      match.hidden = v !== 'match';
+    }
+    look.addEventListener('change', syncLook); syncLook();
+    var lst = look.querySelector('.el-status'), pvBtn = look.querySelector('.el-preview'), pvFrame = look.querySelector('.em-frame');
+    function lsay(t, good) { lst.textContent = t; lst.style.color = good ? 'var(--ok)' : 'var(--bad)'; }
+    pvBtn.addEventListener('click', function () {
+      pvBtn.disabled = true; lsay('Loading preview…', true);
+      post('/admin/email/preview', Object.assign({ kind: 'welcome' }, lookValues())).then(function (res) {
+        pvBtn.disabled = false;
+        if (!res.body.success) { lsay(res.body.error || 'Preview failed.', false); return; }
+        pvFrame.srcdoc = res.body.html; pvFrame.style.display = 'block'; lsay('This is the Welcome email in that look. Press “Save changes” to keep it.', true);
+      }).catch(function () { pvBtn.disabled = false; lsay('Could not reach the server.', false); });
+    });
+    var readBtn = look.querySelector('.el-read');
+    readBtn.addEventListener('click', function () {
+      var url = (look.querySelector('[name=email_site]').value || '').trim();
+      if (!url) { lsay('Type your website address first (starting with https://).', false); return; }
+      readBtn.disabled = true; lsay('Reading your website…', true);
+      post('/admin/email/read-site', { url: url }).then(function (res) {
+        readBtn.disabled = false;
+        var b = res.body;
+        if (!b.success) { lsay(b.error || 'Could not read that website.', false); return; }
+        look.querySelector('[name=email_bg]').value = b.email_bg;
+        look.querySelector('[name=email_text]').value = b.email_text;
+        look.querySelector('[name=email_accent]').value = b.email_accent;
+        look.querySelector('[name=email_font]').value = b.email_font;
+        var msg = b.found.length ? 'Found: ' + b.found.join(', ') + '.' : 'Could not find any colors on that page.';
+        if (b.missing && b.missing.length && b.found.length) msg += ' Not found (we guessed): ' + b.missing.join(', ') + '.';
+        lsay(msg + ' Change anything below, then press Preview and “Save changes”.', b.found.length > 0);
+      }).catch(function () { readBtn.disabled = false; lsay('Could not reach the server.', false); });
+    });
   }
   rows.forEach(function (row) {
     var panel = row.querySelector('.em-panel'), editBtn = row.querySelector('.em-edit');
@@ -79,7 +153,7 @@ JS = """
     function values() {
       var o = { kind: row.getAttribute('data-kind') };
       [].forEach.call(panel.querySelectorAll('[name]'), function (el) { o[el.name] = el.value; });
-      return o;
+      return Object.assign(o, lookValues());
     }
     editBtn.addEventListener('click', function () {
       var wasClosed = panel.hidden;
@@ -195,6 +269,52 @@ def _row_html(kind: dict, values: dict, tier_names=()) -> str:
          _esc(kind["when"]), " on" if on else "", _esc(label), fields, chips, note, reset)
 
 
+def look_box_html(cfg_values: dict) -> str:
+    """The "How your emails look" box: five tiles, the Match-my-website settings, the logo tick and a preview."""
+    v = email_look.values_for(cfg_values)
+    accent = email_look.clean_hex(cfg_values.get("accent_color"), email_look.DEFAULT_ACCENT)
+    has_logo = str(cfg_values.get("logo_data_uri") or "").startswith("data:image/")
+    tiles = []
+    for name in email_look.LOOKS:
+        L = email_look.resolve({**cfg_values, **v, "email_look": name}, accent)
+        stack = email_look.FONT_STACKS.get(L.font, email_look.FONT_STACKS["sans"])
+        head = ('background:%s;color:%s;' % (L.accent, L.on_accent)) if L.band else 'color:%s;' % L.ink
+        sw = ('<span class="el-sw" style="background:%s;color:%s;font-family:%s;"><i style="%s">YOUR NAME</i>'
+              '<u style="background:%s"></u><u style="background:%s"></u><b style="background:%s"></b></span>'
+              % (L.bg, L.text, stack, head, L.text, L.text, L.accent))
+        on = " on" if v["email_look"] == name else ""
+        chk = " checked" if v["email_look"] == name else ""
+        tiles.append('<label class="el-tile%s"><input type="radio" name="email_look" value="%s"%s>%s'
+                     '<span class="el-name">%s</span></label>' % (on, name, chk, sw, _esc(email_look.LOOK_NAMES[name])))
+    font_opts = "".join('<option value="%s"%s>%s</option>' % (f, " selected" if v["email_font"] == f else "", n)
+                        for f, n in (("sans", "Plain (sans-serif)"), ("serif", "Classic (serif)"), ("mono", "Typewriter (monospace)")))
+    L0 = email_look.resolve({**cfg_values, **v, "email_look": "match"}, accent)
+    logo = ('<label class="el-logo"><input type="checkbox" name="email_logo" value="1"%s> Show my logo at the top of every email</label>'
+            % (" checked" if v["email_logo"] == "1" else "")) if has_logo else (
+            '<div class="hint el-logo">Want your logo at the top of the emails? Add it under Design > Branding, then tick the box here.</div>')
+    return (
+        '<div class="el-box" id="el-box"><h3>How your emails look</h3>'
+        '<div class="hint">Pick one look for every email below. <b>Dark</b> is the original. '
+        '<b>Match my website</b> copies the colors and type of your own site.</div>'
+        '<div class="el-tiles" role="radiogroup" aria-label="Email look">' + "".join(tiles) + '</div>'
+        '<div class="el-match" hidden>'
+        '<label for="el-site">Your website address</label>'
+        '<div class="el-row"><input id="el-site" type="url" name="email_site" maxlength="%d" value="%s" placeholder="https://yourwebsite.com">'
+        '<button type="button" class="add-tier el-read" style="margin-top:0;">Read my website\'s colors</button></div>'
+        '<div class="el-colors">'
+        '<label>Page color<input type="color" name="email_bg" value="%s"></label>'
+        '<label>Text color<input type="color" name="email_text" value="%s"></label>'
+        '<label>Button and heading color<input type="color" name="email_accent" value="%s"></label>'
+        '<label>Type<select name="email_font">%s</select></label>'
+        '</div></div>'
+        % (email_look.MAX_URL, _esc(v["email_site"], quote=True), L0.bg, L0.text, L0.accent, font_opts) +
+        logo +
+        '<div class="em-actions"><button type="button" class="add-tier el-preview" style="margin-top:0;">Preview this look →</button></div>'
+        '<div class="el-status em-status" role="status" aria-live="polite"></div>'
+        '<iframe class="em-frame" sandbox="" title="Email preview"></iframe></div>'
+    )
+
+
 def section_html(cfg_values: dict, email_ready: bool) -> str:
     """The whole Emails section. `cfg_values` is a dict of the dashboard's
     current settings (email_templates.values_for-style values are filled in here)."""
@@ -215,7 +335,7 @@ def section_html(cfg_values: dict, email_ready: bool) -> str:
         '<h2>Emails</h2>'
         '<div class="hint">Every email your members get, in one place. Press <b>Edit</b> to change one. '
         'Leave a box as it is to keep the standard words. Preview and Send test use what is typed, even before you save.</div>'
-        + ready +
+        + ready + look_box_html(cfg_values) +
         '<div class="em-test"><label for="em-test-to">Send tests to</label>'
         '<input id="em-test-to" type="email" placeholder="your own address" autocomplete="email"></div>'
         + "".join(groups) +

@@ -81,6 +81,7 @@ can revoke any of them at any time.
   to everyone, one tier, or one event's ticket holders. Every email is editable in
   one short list (welcome, ticket confirmation, collectible, voucher, certificate, how to pay, payment not confirmed,
   event reminder, access-ending reminder, access extended, lost link, access ended), plus an alert to you when a payment is waiting.
+- Email looks: one picker for every email (Dark, Light, Paper, Bold, or "Match my website", which reads your site's colors and type once), plus an optional logo at the top.
 - Follow-up emails: up to five automatic notes some days after someone joins (like a short
   welcome sequence), each limited to one card if you like, with a "stop these emails" link.
 - Limits per tier: cap how many members a tier can have (it shows as

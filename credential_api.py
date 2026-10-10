@@ -78,6 +78,8 @@ import content_store
 import content_page
 import email_sender
 import email_templates
+import email_look
+import site_reader
 import backup
 import announcements
 import card_kinds
@@ -411,6 +413,8 @@ def load_config() -> dict:
         "extended_text":    cfg.get("extended_text", email_sender.DEFAULT_EXTENDED_TEXT),
         # The newer emails (ticket, collectible, how to pay, declined, event reminder, alert to the creator).
         **email_templates.new_values(cfg),
+        # How the emails look (email_look.py): dark (default), light, paper, bold, or colors matched to the creator's website.
+        **email_look.values_for(cfg),
         # Card look: the logo (a data: URI saved from the dashboard — "" for
         # none) and the style, "distressed" or "clean".
         "logo_data_uri": cfg.get("logo_data_uri", "") or "",
@@ -2561,6 +2565,7 @@ def admin_dashboard_save():
         "extended_subject": (request.form.get("extended_subject") or "").strip()[:email_sender.MAX_EXTENDED_SUBJECT],
         "extended_text":    (request.form.get("extended_text") or "").strip()[:email_sender.MAX_EXTENDED_TEXT],
         **email_templates.clean_new_from_form(request.form, saved_cfg),
+        **email_look.clean_settings(request.form, saved_cfg),
         **widget_look.from_form(request.form),
         "admin_style":    admin_theme.clean_style(request.form.get("admin_style"), load_config()["admin_style"]),
         "tiers":          tiers,
@@ -3681,6 +3686,48 @@ def _email_kind(data: dict) -> str:
     k = str(data.get("kind") or "welcome")
     return k if email_templates.kind_of(k) else "welcome"
 
+def _look_from_request(data: dict):
+    """The email look a preview/test should use: the one typed on the screen (even
+    if not saved yet) when the request carries it, else None (= the saved look)."""
+    if "email_look" not in data:
+        return None
+    cfg = load_config()
+    typed = email_look.clean_settings(data, _read_config_file())
+    return email_look.resolve({**cfg, **typed}, cfg.get("accent_color"))
+
+@app.route("/admin/email/read-site", methods=["POST"])
+def admin_email_read_site():
+    """"Match my website": read the colors and type of the creator's own site.
+    Nothing is saved here; the screen fills its boxes and the creator saves."""
+    if not check_admin(request):
+        return jsonify({"success": False, "error": "Not logged in."}), 401
+    data = request.get_json(silent=True) or {}
+    try:
+        out = site_reader.read_site(data.get("url"), load_config().get("accent_color"))
+    except site_reader.SiteError as e:
+        return jsonify({"success": False, "error": str(e)}), 200
+    except Exception as e:                      # never show a stack trace for a stranger's web page
+        print(f"read-site failed: {e}")
+        return jsonify({"success": False, "error": "Could not read that website."}), 200
+    return jsonify({"success": True, **out})
+
+@app.route("/email-logo", methods=["GET"])
+def email_logo():
+    """The logo from Branding as a picture file, so emails can show it (an email
+    cannot carry the inline picture the dashboard stores). Public, like the logo on a card."""
+    uri = _read_config_file().get("logo_data_uri") or ""
+    if not logo_utils.is_logo_data_uri(uri):
+        return ("", 404)
+    mime = uri[5:uri.index(";")]
+    try:
+        raw = base64.b64decode(uri.split(",", 1)[1])
+    except Exception:
+        return ("", 404)
+    resp = app.response_class(raw, mimetype=mime)
+    resp.headers["Cache-Control"] = "public, max-age=86400"
+    resp.headers["X-Content-Type-Options"] = "nosniff"
+    return resp
+
 def _sample_tier() -> str:
     tiers = load_config().get("tiers") or []
     return (tiers[0].get("name") if tiers else "") or "MEMBER"
@@ -3691,7 +3738,8 @@ def admin_email_preview():
         return jsonify({"success": False, "error": "Not logged in."}), 401
     data = request.get_json(silent=True) or {}
     kind = _email_kind(data)
-    msg = email_sender.preview_kind(kind, _sample_tier(), email_templates.overrides_from_data(kind, data))
+    with email_look.override(_look_from_request(data)):
+        msg = email_sender.preview_kind(kind, _sample_tier(), email_templates.overrides_from_data(kind, data))
     return jsonify({"success": True, "subject": msg["subject"], "html": msg["html"]})
 
 @app.route("/admin/email/test", methods=["POST"])
@@ -3703,7 +3751,8 @@ def admin_email_test():
     if len(to) > 254 or "@" not in to[1:] or any(c in to for c in " \r\n<>,;"):
         return jsonify({"success": False, "message": "That doesn't look like an email address."}), 400
     kind = _email_kind(data)
-    ok_, message = email_sender.send_test_email(to, _sample_tier(), email_templates.overrides_from_data(kind, data), kind=kind)
+    with email_look.override(_look_from_request(data)):
+        ok_, message = email_sender.send_test_email(to, _sample_tier(), email_templates.overrides_from_data(kind, data), kind=kind)
     return jsonify({"success": ok_, "message": message}), (200 if ok_ else 502)
 
 

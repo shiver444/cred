@@ -289,6 +289,18 @@ built-in text back. A leave-it-alone email keeps the standard words. A row tagge
 not set up, members can still get in: copy their link from **Members → Copy link**
 and send it yourself.
 
+*How your emails look.* At the top of the Emails screen, **How your emails look** picks one
+look for every email (and the News emails): **Dark** (the original), **Light and clean** (white,
+plain type), **Paper** (warm off-white, classic type), **Bold** (a big band in your accent color) or
+**Match my website**. For the last one, type your website address and press **Read my website's colors**:
+the server reads that one page (and its stylesheets) once and fills in the page color, text color,
+heading/button color and type style. It is only a first guess, so change anything you like with the color
+boxes, press **Preview this look**, then **Save changes**. The colors are saved as plain values, so your
+emails never depend on your website being up, and nothing is fetched when an email goes out. Only ordinary
+public websites can be read (not addresses inside a private network). If your logo is uploaded under
+Design → Branding, tick **Show my logo at the top of every email** (it is served from your server at
+`/email-logo`). Light looks are the safest in mail apps that re-color dark emails.
+
 *When someone gets a card:*
 
 - **Welcome (membership):** the card, the signed bundle and their personal access

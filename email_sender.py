@@ -27,6 +27,7 @@ from html import escape as _esc
 from pathlib import Path
 
 import card_kinds
+import email_look
 import config_store
 import email_templates
 import public_url
@@ -107,6 +108,22 @@ def _refresh_branding():
     MEMBERS_PAGE = public_url.effective_members_page(os.environ.get("MEMBERS_PAGE", cfg.get("members_page", "")))
 
 
+def _look():
+    """The look every email is drawn with: the one a preview/test hands in, else the saved one."""
+    return email_look.overridden() or email_look.resolve(_load_config(), ACCENT_COLOR)
+
+
+def _logo_tag(L) -> str:
+    """The logo <img> for the top of an email ("" when off, no logo or no public address)."""
+    if not (L and L.logo):
+        return ""
+    import hashlib, logo_utils
+    uri = _load_config().get("logo_data_uri") or ""
+    if not logo_utils.is_logo_data_uri(uri):
+        return ""
+    return email_look.logo_html(L, public_url.base_url(), hashlib.md5(uri.encode()).hexdigest()[:8], CREATOR_NAME)
+
+
 def build_email(
     to_name:       str,
     tier:          str,
@@ -162,99 +179,20 @@ def build_email(
     signoff_html    = (f'\n  <div class="value" style="margin-top:28px;line-height:1.8;">'
                        f'{_esc(signoff).replace(chr(10), "<br>")}</div>\n') if signoff else ""
 
+    L = _look()
+    logo = _logo_tag(L)
+
     # ── HTML email body ──
     html_body = f"""<!DOCTYPE html>
 <html>
 <head>
 <meta charset="UTF-8">
-<style>
-  body {{
-    background: #0a0908;
-    color: #e6dfd2;
-    font-family: 'Courier New', monospace;
-    margin: 0;
-    padding: 0;
-  }}
-  .wrap {{
-    max-width: 560px;
-    margin: 0 auto;
-    padding: 48px 32px;
-  }}
-  .header {{
-    font-size: 28px;
-    letter-spacing: 6px;
-    color: {_esc(ACCENT_COLOR, quote=True)};
-    text-transform: uppercase;
-    margin-bottom: 4px;
-  }}
-  .sub {{
-    font-size: 9px;
-    letter-spacing: 3px;
-    color: #6b6058;
-    text-transform: uppercase;
-    margin-bottom: 40px;
-  }}
-  .line {{
-    border: none;
-    border-top: 1px solid #3a1210;
-    margin: 28px 0;
-  }}
-  .label {{
-    font-size: 8px;
-    letter-spacing: 3px;
-    color: {_esc(ACCENT_COLOR, quote=True)};
-    text-transform: uppercase;
-    margin-bottom: 6px;
-  }}
-  .value {{
-    font-size: 12px;
-    color: #e6dfd2;
-    margin-bottom: 20px;
-  }}
-  .access-btn {{
-    display: inline-block;
-    background: {_esc(ACCENT_COLOR, quote=True)};
-    color: #0a0908;
-    font-family: 'Courier New', monospace;
-    font-size: 11px;
-    letter-spacing: 3px;
-    text-transform: uppercase;
-    padding: 14px 28px;
-    text-decoration: none;
-    margin: 24px 0;
-  }}
-  .warning {{
-    font-size: 10px;
-    color: {_esc(ACCENT_COLOR, quote=True)};
-    letter-spacing: 1px;
-    text-transform: uppercase;
-    border-left: 2px solid #3a1210;
-    padding: 10px 14px;
-    margin-top: 28px;
-    line-height: 1.8;
-  }}
-  .footer {{
-    font-size: 8px;
-    color: #3a1210;
-    letter-spacing: 1px;
-    text-transform: uppercase;
-    margin-top: 40px;
-    line-height: 2;
-  }}
-  .row {{
-    display: flex;
-    justify-content: space-between;
-    padding: 8px 0;
-    border-bottom: 1px solid #1a100e;
-    font-size: 10px;
-  }}
-  .row-label {{ color: #6b6058; }}
-  .row-val   {{ color: #e6dfd2; }}
+<style>{email_look.css(L, True)}
 </style>
 </head>
 <body>
 <div class="wrap">
-
+  {logo}
   <div class="header">{e_creator}</div>
   <div class="sub">{e_brand} — Member Access</div>
 
@@ -291,14 +229,14 @@ def build_email(
   <div class="label">Your personal access link</div>
   <a href="{e_link_attr}" class="access-btn">◈ Get Access</a>
 
-  <div style="font-size:9px;color:#6b6058;letter-spacing:1px;word-break:break-all;margin-top:-12px;">
+  <div style="font-size:9px;color:{L.muted};letter-spacing:1px;word-break:break-all;margin-top:-12px;">
     {e_link_text}
   </div>
 
   <hr class="line">
 
   <div class="label">What's attached</div>
-  <div class="value" style="font-size:10px;line-height:2;color:#6b6058;">
+  <div class="value" style="font-size:10px;line-height:2;color:{L.muted};">
     ◈ Your member card (HTML) — a signed keepsake with your QR code<br>
     ◈ Your credential bundle (ZIP) — a signed backup copy, for your records<br>
     ◈ Use the link above (or the QR on your card) to get into the member area
@@ -482,7 +420,7 @@ def _shell(heading: str, intro: str, rows, link: str, link_label: str, extra_htm
     """The shared look of the short emails below. `rows` is a list of
     (label, value) pairs; `blocks` is a list of (label, text) paragraphs shown
     before the rows; with no `link` there is no button. Everything is escaped here."""
-    acc = _esc(ACCENT_COLOR, quote=True)
+    L = _look()
     rows_html = "".join(
         f'<div class="row"><span class="row-label">{_esc(a)}</span><span class="row-val">{_esc(b)}</span></div>'
         for a, b in rows)
@@ -490,25 +428,14 @@ def _shell(heading: str, intro: str, rows, link: str, link_label: str, extra_htm
         f'<div class="label" style="margin-top:6px;">{_esc(a)}</div>'
         f'<div class="value">{_esc(b).replace(chr(10), "<br>")}</div>' for a, b in (blocks or []) if b)
     button_html = (f'<a href="{_esc(link, quote=True)}" class="btn">{_esc(link_label)}</a>\n  {extra_html}\n'
-                   f'  <div style="font-size:9px;color:#6b6058;letter-spacing:1px;word-break:break-all;margin-top:8px;">{_esc(link)}</div>'
+                   f'  <div style="font-size:9px;color:{L.muted};letter-spacing:1px;word-break:break-all;margin-top:8px;">{_esc(link)}</div>'
                    if link else extra_html)
     return f"""<!DOCTYPE html>
 <html><head><meta charset="UTF-8">
-<style>
-  body {{ background:#0a0908; color:#e6dfd2; font-family:'Courier New',monospace; margin:0; padding:0; }}
-  .wrap {{ max-width:560px; margin:0 auto; padding:48px 32px; }}
-  .header {{ font-size:28px; letter-spacing:6px; color:{acc}; text-transform:uppercase; margin-bottom:4px; }}
-  .sub {{ font-size:9px; letter-spacing:3px; color:#6b6058; text-transform:uppercase; margin-bottom:40px; }}
-  .line {{ border:none; border-top:1px solid #3a1210; margin:28px 0; }}
-  .label {{ font-size:8px; letter-spacing:3px; color:{acc}; text-transform:uppercase; margin-bottom:6px; }}
-  .value {{ font-size:12px; color:#e6dfd2; margin-bottom:20px; line-height:1.7; }}
-  .btn {{ display:inline-block; background:{acc}; color:#0a0908; font-size:11px; letter-spacing:3px;
-          text-transform:uppercase; padding:14px 28px; text-decoration:none; margin:8px 10px 8px 0; }}
-  .row {{ display:flex; justify-content:space-between; padding:8px 0; border-bottom:1px solid #1a100e; font-size:10px; }}
-  .row-label {{ color:#6b6058; }} .row-val {{ color:#e6dfd2; }}
-  .footer {{ font-size:8px; color:#3a1210; letter-spacing:1px; text-transform:uppercase; margin-top:40px; line-height:2; }}
+<style>{email_look.css(L)}
 </style></head>
 <body><div class="wrap">
+  {_logo_tag(L)}
   <div class="header">{_esc(CREATOR_NAME.upper())}</div>
   <div class="sub">{_esc(CARD_TITLE)} — Member Access</div>
   <hr class="line">
@@ -597,7 +524,7 @@ def build_reminder_email(to_name, tier, credential_id, bundle_hash, expires_at, 
     link    = _personal_link(credential_id, bundle_hash, link_base)
 
     extra = (f'<a href="{_esc(renew, quote=True)}" class="btn" style="background:transparent;'
-             f'border:1px solid {_esc(ACCENT_COLOR, quote=True)};color:{_esc(ACCENT_COLOR, quote=True)};">'
+             f'border:1px solid {_look().ink};color:{_look().ink};">'
              f'Renew</a>') if renew else ""
     html_body = _shell("Access ending soon", body,
                        [("MEMBER", to_name.upper()), ("ACCESS CLASS", tier), ("VALID UNTIL", expires)],
@@ -1033,7 +960,7 @@ def build_announcement_email(to_name, tier, credential_id, bundle_hash, title, t
     subject = re.sub(r"[\r\n]+", " ", title or f"News from {CREATOR_NAME}").strip()[:MAX_ANNOUNCE_SUBJECT]
     extra_link = safe_renew_url(link)
     extra = (f'<a href="{_esc(extra_link, quote=True)}" class="btn" style="background:transparent;'
-             f'border:1px solid {_esc(ACCENT_COLOR, quote=True)};color:{_esc(ACCENT_COLOR, quote=True)};">'
+             f'border:1px solid {_look().ink};color:{_look().ink};">'
              f'Open the link</a>') if extra_link else ""
     why = f"You get this because you hold a {tier} card from {CREATOR_NAME}."
     html_body = _shell(title or "News", text, [], personal, "◈ Open member area",
