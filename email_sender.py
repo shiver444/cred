@@ -1044,13 +1044,13 @@ def build_announcement_email(to_name, tier, credential_id, bundle_hash, title, t
     title = str(title or "").strip()[:150]
     text = str(text or "").strip()
     personal = _personal_link(credential_id, bundle_hash, link_base)
-    subject = re.sub(r"[\r\n]+", " ", title or f"News from {CREATOR_NAME}").strip()[:MAX_ANNOUNCE_SUBJECT]
+    subject = re.sub(r"[\r\n]+", " ", title or f"A note from {CREATOR_NAME}").strip()[:MAX_ANNOUNCE_SUBJECT]
     extra_link = safe_renew_url(link)
     extra = (f'<a href="{_esc(extra_link, quote=True)}" class="btn" style="background:transparent;'
              f'border:1px solid {_look().ink};color:{_look().ink};">'
              f'Open the link</a>') if extra_link else ""
     why = f"You get this because you hold a {tier} card from {CREATOR_NAME}."
-    html_body = _shell(title or "News", text, [], personal, "◈ Open member area",
+    html_body = _shell(title or "A note", text, [], personal, "◈ Open member area",
                        extra_html=extra, footer_note=why)
     extra_text = f"\nLink: {extra_link}\n" if extra_link else ""
     plain = (f"{CREATOR_NAME.upper()} — {CARD_TITLE.upper()}\n\n"

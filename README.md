@@ -77,7 +77,7 @@ can revoke any of them at any time.
 - Small touches: a welcome box on a fresh dashboard, automatic YouTube thumbnails, an
   optional locked preview of your content for visitors, and optional terms/privacy links
   in the sign-up box.
-- Announcements: write one note, pin it at the top of every member's page and/or email it
+- Bulletin board: write one note, pin it at the top of every member's page and/or email it
   to everyone, one tier, or one event's ticket holders. Every email is editable in
   one short list (welcome, ticket confirmation, collectible, voucher, certificate, how to pay, payment not confirmed,
   event reminder, access-ending reminder, access extended, something new opened, lost link, access ended), plus an alert to you when a payment is waiting.

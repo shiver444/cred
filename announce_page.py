@@ -19,7 +19,7 @@ def render(theme_css: str, theme_js: str, body_attrs: str, title: str, state: di
     return f"""<!DOCTYPE html>
 <html><head><meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>News — Admin</title>
+<title>Bulletin board — Admin</title>
 <style>
   body {{ background:var(--bg); color:var(--fg); font-family:var(--font); padding:32px; }}
   h1 {{ color:var(--accent-text); font-size:16px; letter-spacing:2px; text-transform:uppercase; }}
@@ -57,9 +57,9 @@ def render(theme_css: str, theme_js: str, body_attrs: str, title: str, state: di
 {theme_css}</style></head>
 <body {body_attrs}>
   {admin_theme.nav_html("announce")}
-  <h1>{escape(title)} — News</h1>
+  <h1>{escape(title)} — Bulletin board</h1>
   <div class="an">
-    <div class="hint">Tell your members about something new, like a new post or upload. Pin it at the top of their page, email it to a group, or both.</div>
+    <div class="hint">Put a note on your members' bulletin board, like a new post or upload. Pin it at the top of their page, email it to a group, or both.</div>
 
     <h2>Pinned now</h2>
     <div id="an-current"></div>
@@ -119,7 +119,7 @@ def render(theme_css: str, theme_js: str, body_attrs: str, title: str, state: di
     function drawCurrent() {{
       var box = $('an-current'); box.textContent = '';
       var c = S.current;
-      if (!c) {{ var n = el('div', 'hint', 'Nothing is pinned right now.'); box.appendChild(n); return; }}
+      if (!c) {{ var n = el('div', 'hint', 'Nothing is pinned on the board right now.'); box.appendChild(n); return; }}
       var card = el('div', 'an-card');
       if (c.title) card.appendChild(el('div', 't', c.title));
       card.appendChild(el('div', 'x', c.text));

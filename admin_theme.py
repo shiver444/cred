@@ -63,7 +63,7 @@ GROUPS = [
     {"id": "cards", "label": "Cards", "icon": "cards", "items": [
         ("tiers", "Cards", _D + "tiers", ""), ("sets", "Sets", "/admin/sets", "")]},
     {"id": "content", "label": "Content", "icon": "content", "items": [
-        ("content", "Content", "/admin/content", ""), ("announce", "News", "/admin/announce", "")]},
+        ("content", "Content", "/admin/content", ""), ("announce", "Bulletin board", "/admin/announce", "")]},
     {"id": "design", "label": "Design", "icon": "design", "items": [
         ("branding", "Branding", _D + "branding", ""), ("looks", "Card looks", _D + "looks", ""),
         ("widget", "Widget look", _D + "widget", ""), ("style", "Dashboard style", _D + "style", "")]},

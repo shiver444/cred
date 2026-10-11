@@ -356,7 +356,7 @@ not set up, members can still get in: copy their link from **Members → Copy li
 and send it yourself.
 
 *How your emails look.* At the top of the Emails screen, **How your emails look** picks one
-look for every email (and the News emails): **Dark** (the original), **Light and clean** (white,
+look for every email (and the bulletin board emails): **Dark** (the original), **Light and clean** (white,
 plain type), **Paper** (warm off-white, classic type), **Bold** (a big band in your accent color) or
 **Match my website**. For the last one, type your website address and press **Read my website's colors**:
 the server reads that one page (and its stylesheets) once and fills in the page color, text color,
@@ -428,7 +428,7 @@ Follow-up emails**.
   batch is spread out. Your email service (Brevo) has its own daily limit on the free
   plan, so for a large list switch them on gradually.
 - This is not a newsletter: it is a few set notes after joining. For a one-off note to
-  members, use **News**.
+  members, use the **Bulletin board**.
 
 *Other:*
 
@@ -446,7 +446,7 @@ Follow-up emails**.
 When you take payment by hand, the sign-up box also tells the person "We've also
 emailed you how to pay" (only when that email was really sent).
 
-News emails (a note to some or all members) are written on the **News** page.
+Bulletin board emails (a note to some or all members) are written on the **Bulletin board** page.
 
 ### Renewing a member (Extend) and the expiry reminder
 
@@ -478,9 +478,9 @@ their reminder at the next check. A pass that lasts no longer than the reminder
 window isn't reminded. Members who are about to end show "ends in Nd" on the
 Members page, with a note once a reminder went out.
 
-### Announcements: tell your members about something new
+### The bulletin board: tell your members about something new
 
-Open **Content → News** (the **Content** place in the menu has two small tabs: Content and News). Write a **title** (optional), a **message** and an optional **link**, then choose:
+Open **Content → Bulletin board** (the **Content** place in the menu has two small tabs: Content and Bulletin board). Write a **title** (optional), a **message** and an optional **link**, then choose:
 
 - **Pin it at the top of every member's page.** Members who open their link see it in a
   "Latest from you" box above their card, with the link as a button. It stays until you
@@ -844,7 +844,7 @@ looks:
   wide screen to jump between sections. It has the same Save changes bar.
 - **Spaceship lite**, **Daylight** and **Midnight** work like an app. On a computer there is a
   menu down the left with six places: **Home**, **People** (Members and
-  Check-in), **Cards**, **Content** (Content and News), **Design** (Branding,
+  Check-in), **Cards**, **Content** (Content and Bulletin board), **Design** (Branding,
   Card looks, Widget look, Dashboard style) and **Settings** (Payment, Emails,
   Backup). On a phone the same six sit along the bottom. Places with more than
   one screen show them as small tabs under the title. When you change something, a **Save changes** bar appears; nothing is

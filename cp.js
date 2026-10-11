@@ -1389,7 +1389,7 @@
     const box = document.createElement('div')
     box.className = 'ca-news'
     box.innerHTML = `
-      <div class="ca-news-label">Latest from ${esc(name)}${n.posted_at ? ' \u00b7 ' + esc(String(n.posted_at).slice(0, 10)) : ''}</div>
+      <div class="ca-news-label">Bulletin board${n.posted_at ? ' \u00b7 ' + esc(String(n.posted_at).slice(0, 10)) : ''}</div>
       ${n.title ? `<div class="ca-news-title">${esc(n.title)}</div>` : ''}
       ${n.text ? `<div class="ca-news-text">${esc(n.text).replace(/\n/g, '<br>')}</div>` : ''}
       ${link ? '<a class="ca-dl-btn ca-news-link" target="_blank" rel="noopener noreferrer">Open the link</a>' : ''}`

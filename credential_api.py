@@ -2712,7 +2712,7 @@ def _welcome_html(cfg: dict) -> str:
       <li><b>Check your cards.</b> Under <b>Cards</b> you already have two examples. Rename them, set a price, or add your own.</li>
       <li><b>Put two lines on your website.</b> Copy them from <b>Embed on your website</b> just below and paste them where you want the sign-up box and members area.</li>
     </ol>
-    <div class="hint">Everything else (emails, content, tickets, news) can wait. You can come back to it any time.</div>
+    <div class="hint">Everything else (emails, content, tickets, the bulletin board) can wait. You can come back to it any time.</div>
     <form method="POST" action="/admin/welcome/hide" style="margin-top:10px;"><button type="submit" class="copy-btn">Got it, hide this</button></form>
   </div>"""
 

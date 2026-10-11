@@ -339,7 +339,7 @@ def section_html(cfg_values: dict, email_ready: bool) -> str:
         '<div class="em-test"><label for="em-test-to">Send tests to</label>'
         '<input id="em-test-to" type="email" placeholder="your own address" autocomplete="email"></div>'
         + "".join(groups) +
-        '<div class="hint" style="margin-top:18px;">News emails (a note to all or some of your members) are written on the '
-        '<a href="/admin/announce" style="color:var(--accent-text);">News</a> page.</div>'
+        '<div class="hint" style="margin-top:18px;">Bulletin board emails (a note to all or some of your members) are written on the '
+        '<a href="/admin/announce" style="color:var(--accent-text);">Bulletin board</a> page.</div>'
         + JS + '</section>'
     )
