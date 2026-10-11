@@ -146,7 +146,15 @@ def _parse(local: str):
 
 
 def _utc(local: str, tz: int) -> datetime:
-    return (_parse(local) + timedelta(minutes=tz)).replace(tzinfo=timezone.utc)
+    d = _parse(local)
+    try:
+        d = d + timedelta(minutes=tz)
+    except OverflowError:
+        pass
+    # A date at the very edge of what a computer can count (year 9999) stays a date, never an error,
+    # and leaves room to add hours to it.
+    d = max(datetime(1, 1, 3), min(d, datetime(9999, 12, 28)))
+    return d.replace(tzinfo=timezone.utc)
 
 
 def has_date(event) -> bool:

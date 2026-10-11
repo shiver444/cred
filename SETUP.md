@@ -293,8 +293,10 @@ cards to collect (at least two, at most twelve) and press **Save sets**.
 - People are matched by **email address**, so the pieces can be bought under different names.
 - A piece counts once it was issued and not revoked. A ticket that was used, or a card that ran out or expired,
   still counts: it was collected.
-- The reward is given **once per person per set**, even if they lose a piece later. Someone you already sent the
-  reward card to by hand does not get a second one.
+- The reward is given **once per person per set**, even if they lose a piece later, or you delete the reward card
+  afterwards (the server keeps its own record of who was given it, and it is part of every backup). Someone you
+  already sent the reward card to by hand does not get a second one.
+- The reward card lasts as long as that card's own length says (a certificate or limited drop never ends).
 - Only people who finish the set **after you saved it** get the reward, so nobody is surprised by a mass mailing.
   Tick "Also give the reward to people who already hold every piece" if you want those people rewarded too (the
   screen says how many there are).
@@ -310,10 +312,17 @@ cards to collect (at least two, at most twelve) and press **Save sets**.
   it opens that card. A missing piece is a "?" tile. The reward is a big panel at the bottom: locked
   ("Collect 2 more pieces to unlock it"), then "Unlocking your reward" for the moment before it arrives, then a
   glowing "Reward unlocked" panel with the reward card's picture and an "Open your ..." button. Only sets they
-  have started show up. Links are given only for **free** cards (a link opens a card on its own, so handing out
-  the links of paid cards just because they share an email address would let one leaked link open them all);
-  a paid piece still shows as collected, and members reach it through its own email or link.
-- Rewards are given right after someone's last piece is issued and checked again once an hour.
+  have started show up. Links are given only for **free** cards, and never for **tickets or vouchers** (a link opens
+  a card on its own, so handing out the links of paid or one-use cards just because they share an email address
+  would let one leaked link open them all); such a piece still shows as collected, and members reach it through its
+  own email or link. Someone who finished a set before it existed (and wasn't included) is told "You have every
+  piece of this set" rather than promised a reward.
+- Rewards are given right after someone's last piece is issued and checked again once an hour. To keep a big new
+  set from tying the server up, one hourly check gives out at most 40 rewards and one press of **Save sets** at most
+  20; the screen says how many are still to come ("12 more will go out over the next hour or so"). A person who
+  has just collected their last piece is never made to wait for that.
+- If the "Set completed" email fails (email down for a moment), it is tried again on the hourly check for up to
+  3 days.
 
 Mind your storage: uploads live on the same Volume as your members and
 signing key, and the Volume has a fixed size (see your Railway plan). The

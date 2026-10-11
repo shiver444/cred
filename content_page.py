@@ -377,7 +377,7 @@ __THEME__</style></head>
     } else if (mode === 'after') {
       var ni = el('input', { type: 'number', min: '0', max: '3650', step: '1', 'data-role': 'when-days' });
       ni.value = String(it.opens.days == null ? 0 : it.opens.days);
-      ni.addEventListener('input', function () { it.opens = { mode: 'after', days: Math.max(0, Math.min(3650, parseInt(ni.value, 10) || 0)) }; touch(); });
+      ni.addEventListener('input', function () { it.opens = { mode: 'after', days: (ni.value.trim() === '' || isNaN(parseInt(ni.value, 10))) ? null : Math.max(0, Math.min(3650, parseInt(ni.value, 10))) }; touch(); });
       var nd = el('div', { class: 'narrow' }, [el('label', { text: 'Days after joining' }), ni]);
       row.appendChild(nd);
     }

@@ -231,6 +231,25 @@ def load() -> dict:
     return normalize(config_store.read_content_raw())
 
 
+def schedule_problems(payload) -> list:
+    """Items whose "when" rule was started but is not usable (a date box cleared or half typed, a blank
+    number of days). Saving such an item would quietly turn it into an item that is open to everyone,
+    so the dashboard refuses the save and says which item needs a date."""
+    out = []
+    for sec in (payload.get("sections") if isinstance(payload, dict) and isinstance(payload.get("sections"), list) else []):
+        if not isinstance(sec, dict):
+            continue
+        for it in (sec.get("items") if isinstance(sec.get("items"), list) else []):
+            if not isinstance(it, dict):
+                continue
+            name = _text(it.get("title"), 60) or "An item"
+            if it.get("opens") and not timeline.clean_opens(it.get("opens")):
+                out.append(f"\"{name}\": choose a date and time for when it opens (or set it to \"Right away\").")
+            if it.get("until") and not timeline.clean_until(it.get("until")):
+                out.append(f"\"{name}\": choose a date and time for when it closes (or untick \"It closes again on a date\").")
+    return out
+
+
 def save(payload) -> tuple:
     """Validate and store what the dashboard sent. Returns (what was stored,
     [warnings about anything that had to be dropped])."""

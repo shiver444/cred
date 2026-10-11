@@ -1530,7 +1530,7 @@
       return sec.type === 'chat'
     })
     // The member's card sets (collect these cards, get a reward): one more tab at the end.
-    if (Array.isArray(sets) && sets.length) shown.push({ key: 'sets', title: 'Your sets', type: 'sets', sets })
+    if (Array.isArray(sets) && sets.length) shown.push({ key: '__sets', title: 'Your sets', type: 'sets', sets })
 
     if (!shown.length) {
       panelsEl.innerHTML = '<div class="ca-panel active"><p style="color:#6b6058;font-size:10px;position:relative;">No content available yet.</p></div>'
@@ -1742,10 +1742,12 @@
               ${rHref ? `<a class="ca-boss-btn" href="${esc(rHref)}">Open your ${esc(rw.name)} \u2192</a>` : ''}
             </div>`
         } else if (st.complete) {
+          // "pending" = the reward really is on its way. Someone who finished before the set existed
+          // (and was not included) is only told that they have everything.
           boss = `<div class="ca-boss ca-wait">
               <div class="ca-boss-badge">All ${total} collected</div>
               <div class="ca-boss-name">${esc(rw.name)}</div>
-              <div class="ca-boss-sub">Unlocking your reward\u2026 this can take a minute. Reload this page to check.</div>
+              <div class="ca-boss-sub">${st.pending ? 'Unlocking your reward\u2026 this can take a minute. Reload this page to check.' : 'You have every piece of this set.'}</div>
             </div>`
         } else {
           boss = `<div class="ca-boss ca-locked">

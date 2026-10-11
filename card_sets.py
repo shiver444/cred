@@ -111,7 +111,7 @@ def of_config(cfg) -> list:
     raw = (cfg or {}).get("sets")
     out = []
     for s in (raw if isinstance(raw, list) else [])[:MAX_SETS]:
-        if (isinstance(s, dict) and isinstance(s.get("pieces"), list) and s.get("reward")
+        if (isinstance(s, dict) and isinstance(s.get("pieces"), list) and len(s["pieces"]) >= MIN_PIECES and s.get("reward")
                 and _ID.match(str(s.get("id") or "")) and _name(s.get("name"))):
             out.append({"id": s["id"], "name": _name(s["name"]), "pieces": [str(p) for p in s["pieces"]][:MAX_PIECES],
                         "reward": str(s["reward"]), "include_existing": s.get("include_existing") is True,
@@ -153,31 +153,44 @@ def people(registry) -> dict:
     return out
 
 
-def rewarded(registry, s, key) -> bool:
-    """True when this person already has this set's reward: it was given by the set (even if it was
-    revoked later) or you sent them that card yourself."""
+def rewarded_keys(registry, s, given=None) -> set:
+    """Every person (email key) who already has this set's reward: it was given by the set (even if it was
+    revoked or deleted later: `given` is the permanent record), or you sent them that card yourself.
+    One pass over the registry, so a long member list stays fast."""
     reward = str(s["reward"]).strip().upper()
-    return any(limits.normalize_email(e.get("holder_email")) == key
-               and ((e.get("from_set") or {}).get("id") == s["id"] or str(e.get("tier") or "").strip().upper() == reward)
-               for e in registry)
+    keys = set((given or {}).get(s["id"]) or [])
+    for e in registry:
+        if (e.get("from_set") or {}).get("id") == s["id"] or str(e.get("tier") or "").strip().upper() == reward:
+            k = limits.normalize_email(e.get("holder_email"))
+            if k:
+                keys.add(k)
+    return keys
+
+
+def rewarded(registry, s, key, given=None) -> bool:
+    """True when this person already has this set's reward (see rewarded_keys)."""
+    return bool(key) and key in rewarded_keys(registry, s, given)
 
 
 def completed_at(s, person):
     got = [person["pieces"].get(str(p).upper()) for p in s["pieces"]]
-    return None if any(g is None for g in got) else max(got)
+    return None if (not got or any(g is None for g in got)) else max(got)
 
 
-def due(sets, tiers, registry) -> list:
-    """[(set, person, completed_at)] who should be given a reward now."""
+def due(sets, tiers, registry, given=None, only=None) -> list:
+    """[(set, person, completed_at)] who should be given a reward now (`only` = one email key)."""
     ppl = people(registry)
     out = []
     for s in sets:
         if problems(s, tiers):
             continue
         since = _parse(s.get("active_from"))
+        got = rewarded_keys(registry, s, given)
         for key, person in ppl.items():
+            if only and key != only:
+                continue
             done = completed_at(s, person)
-            if done is None or rewarded(registry, s, key):
+            if done is None or key in got:
                 continue
             if not s.get("include_existing") and since is not None and done <= since:
                 continue
@@ -186,50 +199,65 @@ def due(sets, tiers, registry) -> list:
     return out
 
 
-def waiting_now(s, tiers, registry) -> int:
+def waiting_now(s, tiers, registry, given=None) -> int:
     """How many people already hold every piece and have not been rewarded (for the screen)."""
     if problems(s, tiers):
         return 0
-    return sum(1 for key, person in people(registry).items()
-               if completed_at(s, person) is not None and not rewarded(registry, s, key))
+    got = rewarded_keys(registry, s, given)
+    return sum(1 for key, person in people(registry).items() if completed_at(s, person) is not None and key not in got)
 
 
-def counts(s, registry) -> dict:
+def counts(s, registry, given=None) -> dict:
     """{"rewarded": n, "collecting": n}: people who got the reward, and people who hold some but not all pieces."""
     ppl = people(registry)
-    got = sum(1 for key in ppl if rewarded(registry, s, key))
+    got = rewarded_keys(registry, s, given)
     part = sum(1 for key, p in ppl.items()
                if completed_at(s, p) is None and any(str(x).upper() in p["pieces"] for x in s["pieces"]))
-    return {"rewarded": got, "collecting": part}
+    return {"rewarded": sum(1 for key in ppl if key in got), "collecting": part}
+
+
+def held_by(registry, email) -> dict:
+    """{CARD NAME in capitals: the newest unrevoked entry} for everything this email address holds (one pass)."""
+    key, out = limits.normalize_email(email), {}
+    if not key:
+        return out
+    for e in registry:
+        if limits.normalize_email(e.get("holder_email")) != key or e.get("revoked"):
+            continue
+        t = str(e.get("tier") or "").strip().upper()
+        if t and (t not in out or str(e.get("issued_at") or "") > str(out[t].get("issued_at") or "")):
+            out[t] = e
+    return out
 
 
 def holding(registry, email, tier):
     """The newest card of this kind that this email address holds and that was not revoked (or None)."""
-    key, want, best = limits.normalize_email(email), str(tier or "").strip().upper(), None
-    for e in registry:
-        if (limits.normalize_email(e.get("holder_email")) == key and not e.get("revoked")
-                and str(e.get("tier") or "").strip().upper() == want):
-            if best is None or str(e.get("issued_at") or "") > str(best.get("issued_at") or ""):
-                best = e
-    return best
+    return held_by(registry, email).get(str(tier or "").strip().upper())
 
 
-def member_view(sets, tiers, registry, email, this_tier=None) -> list:
+def member_view(sets, tiers, registry, email, this_tier=None, given=None) -> list:
     """What one member sees: every set they have started (or whose piece/reward is the card they
-    are looking at), with each slot filled or empty."""
+    are looking at), with each slot filled or empty. Nothing for a card with no email address."""
     key = limits.normalize_email(email)
+    if not key:
+        return []
     person = people(registry).get(key) or {"pieces": {}}
     out = []
     for s in sets:
         if problems(s, tiers):
             continue
         slots = [{"name": tier_label(tiers, p), "tier": str(p), "got": str(p).upper() in person["pieces"]} for p in s["pieces"]]
-        has_reward = rewarded(registry, s, key)
+        has_reward = rewarded(registry, s, key, given)
         involved = any(sl["got"] for sl in slots) or has_reward or (
             this_tier and str(this_tier).upper() in [str(p).upper() for p in s["pieces"] + [s["reward"]]])
         if not involved:
             continue
+        complete = all(sl["got"] for sl in slots)
+        # "pending" = the reward is on its way. Someone who finished before the set existed (and the
+        # "already complete" box is unticked) is never going to get it, so they are not promised one.
+        done, since = completed_at(s, person), _parse(s.get("active_from"))
+        pending = bool(complete and not has_reward and (s.get("include_existing") or since is None or (done is not None and done > since)))
         out.append({"name": s["name"], "got": sum(1 for sl in slots if sl["got"]), "total": len(slots), "slots": slots,
                     "reward": {"name": tier_label(tiers, s["reward"]), "tier": str(s["reward"]), "got": has_reward},
-                    "complete": all(sl["got"] for sl in slots)})
+                    "complete": complete, "pending": pending})
     return out

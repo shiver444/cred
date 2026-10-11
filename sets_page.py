@@ -178,7 +178,7 @@ __THEME__</style></head>
         if (res.status === 401) { say('You were logged out. Log in again, then save.', false); return; }
         if (!res.body.success) { say(res.body.error || 'Save failed.', false); return; }
         sets = res.body.sets; cards = res.body.cards || cards; dirty = false; render(); showWarnings(res.body.warnings);
-        say('Saved.' + (res.body.issued ? ' ' + res.body.issued + (res.body.issued === 1 ? ' reward was' : ' rewards were') + ' given out right now.' : ''), true);
+        say('Saved.' + (res.body.issued ? ' ' + res.body.issued + (res.body.issued === 1 ? ' reward was' : ' rewards were') + ' given out right now.' : '') + (res.body.more ? ' ' + res.body.more + ' more will go out over the next hour or so.' : ''), true);
       }).catch(function () { saveBtn.disabled = false; say('Could not reach the server. Nothing was saved.', false); });
   });
   window.addEventListener('beforeunload', function (e) { if (dirty) { e.preventDefault(); e.returnValue = ''; } });

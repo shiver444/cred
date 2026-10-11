@@ -52,7 +52,7 @@ def clean_opens(raw):
     if mode == "after":
         try:
             days = int(float(raw.get("days")))
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             return None
         return {"mode": "after", "days": max(0, min(MAX_DAYS, days))}
     return None
@@ -82,24 +82,47 @@ def _parse(ts):
     return d if d.tzinfo else d.replace(tzinfo=timezone.utc)
 
 
+_NEVER = datetime(9999, 12, 31, tzinfo=timezone.utc)
+
+
+def _days(o) -> int:
+    """The number of days of a "days after joining" rule, always a whole number from 0 to MAX_DAYS."""
+    try:
+        return max(0, min(MAX_DAYS, int(float(o.get("days", 0)))))
+    except (TypeError, ValueError, OverflowError):
+        return 0
+
+
 def opens_utc(item, issued_at=None):
-    """When the item opens for this person (None = from the start)."""
+    """When the item opens for this person (None = from the start). A rule that cannot be worked
+    out (a hand-edited, absurd value) keeps the item locked rather than opening it."""
     o = item.get("opens") if isinstance(item, dict) else None
     if not o:
         return None
-    if o.get("mode") == "date":
-        return card_kinds._utc(o["at"], o.get("tz", 0))
-    if o.get("mode") == "after":
-        base = _parse(issued_at)
-        if base is None:
-            return None
-        return base + timedelta(days=int(o.get("days", 0)))
+    if not isinstance(o, dict):
+        return _NEVER
+    try:
+        if o.get("mode") == "date":
+            return card_kinds._utc(o["at"], o.get("tz", 0))
+        if o.get("mode") == "after":
+            base = _parse(issued_at)
+            if base is None:
+                return None
+            return base + timedelta(days=_days(o))
+    except (OverflowError, ValueError, TypeError, KeyError):
+        return _NEVER
     return None
 
 
 def until_utc(item):
+    """When the item closes (None = never). An unusable value means it simply does not close."""
     u = item.get("until") if isinstance(item, dict) else None
-    return card_kinds._utc(u["at"], u.get("tz", 0)) if u else None
+    if not isinstance(u, dict):
+        return None
+    try:
+        return card_kinds._utc(u["at"], u.get("tz", 0)) if u else None
+    except (OverflowError, ValueError, TypeError, KeyError):
+        return None
 
 
 def state(item, issued_at=None, now=None) -> str:
@@ -118,20 +141,26 @@ def when_text(item) -> str:
     """The opening time in the creator's own words: "Tue 01 Dec 2026" (plus the
     time when it is not midnight), or "Day 7" for a drip."""
     o = item.get("opens") if isinstance(item, dict) else None
-    if not o:
+    if not o or not isinstance(o, dict):
         return ""
     if o.get("mode") == "after":
-        d = int(o.get("days", 0))
+        d = _days(o)
         return "Right away" if d == 0 else f"Day {d}"
-    s = datetime.strptime(o["at"], "%Y-%m-%dT%H:%M")
+    try:
+        s = datetime.strptime(o["at"], "%Y-%m-%dT%H:%M")
+    except (ValueError, TypeError, KeyError):
+        return ""
     return s.strftime("%a %d %b %Y") + ("" if (s.hour, s.minute) == (0, 0) else s.strftime(", %H:%M"))
 
 
 def until_text(item) -> str:
     u = item.get("until") if isinstance(item, dict) else None
-    if not u:
+    if not u or not isinstance(u, dict):
         return ""
-    s = datetime.strptime(u["at"], "%Y-%m-%dT%H:%M")
+    try:
+        s = datetime.strptime(u["at"], "%Y-%m-%dT%H:%M")
+    except (ValueError, TypeError, KeyError):
+        return ""
     return s.strftime("%a %d %b %Y") + ("" if (s.hour, s.minute) == (0, 0) else s.strftime(", %H:%M"))
 
 
@@ -180,7 +209,7 @@ def when_fields(item, issued_at) -> dict:
         "opens_at": start.isoformat() if start is not None else "",
     }
     if o.get("mode") == "after":
-        out["day"] = int(o.get("days", 0))
+        out["day"] = _days(o)
     if until_utc(item) is not None:
         out["until_text"] = until_text(item)
     return out

@@ -37,7 +37,7 @@ VERSION = 1
 
 DATA_FILES = ("config.json", "content.json", "member_registry.json",
               "payment_requests.json", "revocation_list.json",
-              "stripe_processed_sessions.json")
+              "stripe_processed_sessions.json", "sets_given.json")
 DATA_DIRS = ("keys", "credentials", "bundles", "cards")
 UPLOADS = "uploads"
 PRIVATE_KEY = "keys/credential_private.pem"
@@ -50,7 +50,7 @@ SPARE_BYTES = 50 * 1024 * 1024        # free space to leave over when checking r
 _JSON_SHAPE = {
     "config.json": dict, "content.json": dict, "member_registry.json": list,
     "payment_requests.json": list, "revocation_list.json": dict,
-    "stripe_processed_sessions.json": (list, dict),
+    "stripe_processed_sessions.json": (list, dict), "sets_given.json": dict,
 }
 
 

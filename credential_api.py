@@ -783,7 +783,7 @@ def _issue_and_fulfill(name: str, email: str, tier: str, days: int, sections: li
     # 6 — Card sets: this card may have been the last piece of someone's set.
     try:
         if email and (cfg.get("sets") or _read_config_file().get("sets")):
-            _bg(run_sets_now)
+            _bg(run_sets_now, SETS_PER_RUN, email)
     except Exception as e:
         print(f"❌ Set check failed: {e}")
 
@@ -1971,6 +1971,8 @@ def admin_members():
         except (ValueError, TypeError):
             td = 30
         tk_attr = ' data-ticket="1"' if card_kinds.is_ticket(t) else ""
+        if card_kinds.is_collectible(t) or card_kinds.is_certificate(t):
+            tk_attr += ' data-never="1"'          # a drop or a certificate never expires: the days box does not apply
         tier_opts += (f'<option value="{esc_html(t.get("name", ""))}" data-days="{td}"{tk_attr}>'
                       f'{esc_html(t.get("label") or t.get("name", ""))} ({esc_html(t.get("name", ""))})</option>')
     if tier_opts:
@@ -2139,10 +2141,10 @@ def admin_members():
       function say(t, good) {{ msg.textContent = t; msg.style.color = good ? 'var(--ok)' : 'var(--bad)'; }}
       function defaultDays() {{
         const o = f('issue-tier').selectedOptions[0];
-        const tk = !!(o && o.dataset.ticket);
-        f('issue-days').placeholder = tk ? 'until the event ends' : (o ? o.dataset.days : '');
-        f('issue-days').disabled = tk;
-        if (tk) f('issue-days').value = '';
+        const tk = !!(o && o.dataset.ticket), nv = !!(o && o.dataset.never);
+        f('issue-days').placeholder = tk ? 'until the event ends' : (nv ? 'never expires' : (o ? o.dataset.days : ''));
+        f('issue-days').disabled = tk || nv;
+        if (tk || nv) f('issue-days').value = '';
       }}
       f('issue-tier').addEventListener('change', defaultDays); defaultDays();
       btn.addEventListener('click', () => {{
@@ -4083,6 +4085,9 @@ def admin_content_save():
     # as "empty" and wiping the saved content.
     if not isinstance(payload, dict) or not isinstance(payload.get("sections"), list):
         return jsonify({"success": False, "error": "Expected JSON like {\"sections\": [...]}."}), 400
+    problems = content_store.schedule_problems(payload)
+    if problems:
+        return jsonify({"success": False, "error": "Nothing was saved. " + " ".join(problems[:3]) + (f" (and {len(problems) - 3} more)" if len(problems) > 3 else "")}), 400
     clean, warnings = content_store.save(payload)
     content_store.cleanup_orphans(clean)   # files no item uses any more (after a grace period)
     return jsonify({"success": True, "content": clean, "warnings": warnings})
@@ -4264,7 +4269,7 @@ def get_content():
 
 
 # ── Who may see members-only content ──
-def _member_entry(cid: str, h: str = None):
+def _member_entry(cid: str, h: str = None, entry: dict = None):
     """The registry entry for a credential that is currently good: exists,
     not revoked, not expired, not on the revocation list — and, when `h`
     (the access code from the member's link / card / bundle) is given, the
@@ -4273,7 +4278,7 @@ def _member_entry(cid: str, h: str = None):
     try:
         from member_registry import get_by_id
         from credential_verifier import is_on_revocation_list
-        entry = get_by_id(cid)
+        entry = entry or get_by_id(cid)
         if not entry or entry.get("revoked"):
             return None
         if datetime.fromisoformat(entry["expires_at"]) < datetime.now(timezone.utc):
@@ -4325,8 +4330,10 @@ def _card_art(cfg: dict, tier_name: str, px: int, square: bool) -> str:
 def _decorate_sets(mine: list, cfg: dict, registry: list, email: str):
     """Adds to each set's slots and reward what the member page needs to make them clickable and
     pretty: the card's picture, and a link to open that card. A link is only given for FREE cards
-    that are still good: a link opens a card by itself, so handing out the links of paid cards
-    because they share an email address would let one leaked link open them all."""
+    that are still good, and never for tickets or vouchers (those can be used up): a link opens a card by
+    itself, so handing out the links of paid or one-use cards because they share an email address would let
+    one leaked link open them all."""
+    held_all = card_sets.held_by(registry, email)
     prices = {str(t.get("name") or "").strip().upper(): t.get("price") for t in (cfg.get("tiers") or []) if isinstance(t, dict)}
     for st in mine:
         rw = st.get("reward") or {}
@@ -4342,10 +4349,10 @@ def _decorate_sets(mine: list, cfg: dict, registry: list, email: str):
                     free = float(prices.get(str(tier).strip().upper()) or 0) == 0
                 except (TypeError, ValueError):
                     free = False
-                held = card_sets.holding(registry, email, tier) if free else None
-                if held:
+                held = held_all.get(str(tier).strip().upper()) if free else None
+                if held and held.get("kind") not in ("ticket", "voucher"):
                     h = (held.get("bundle_hash") or "")[:32].lower()
-                    if _member_entry(held.get("credential_id"), h):
+                    if _member_entry(held.get("credential_id"), h, entry=held):
                         sl["link"] = {"id": held["credential_id"], "h": h}
             except Exception as e:
                 print(f"⚠ Sets tab extras failed for {tier}: {e}")
@@ -4429,7 +4436,7 @@ def member_content():
             if _sets:
                 _cfg = load_config()
                 _reg = member_registry.list_all()
-                mine = card_sets.member_view(_sets, _cfg.get("tiers") or [], _reg, entry.get("holder_email"), entry.get("tier"))
+                mine = card_sets.member_view(_sets, _cfg.get("tiers") or [], _reg, entry.get("holder_email"), entry.get("tier"), _given_load())
                 if mine:
                     _decorate_sets(mine, _cfg, _reg, entry.get("holder_email"))
                     out["sets"] = mine
@@ -4601,51 +4608,177 @@ def members_page_builtin():
 # Collect every piece of a set (by one email address) and the reward card is
 # issued automatically, once. Checked right after any card is issued and again
 # every hour (which also catches a set made after people already had pieces).
-_sets_lock = threading.RLock()
+_sets_lock = threading.RLock()       # guards the "already given" record
+_sets_flag = threading.Lock()        # guards the two things below
+_sets_gate = threading.Lock()        # only one set check runs at a time
+_sets_wanted = set()                 # people (or "") who asked for a check while one was running
+_sets_more = 0                       # rewards still waiting after the last check (the cap was reached)
+SETS_PER_RUN = 40                    # most rewards one hourly / background check hands out
+SETS_PER_SAVE = 20                   # ... and one "Save" on the Sets screen
+_SETS_GIVEN_FILE = DATA_DIR / "sets_given.json"
 
-def run_sets_now() -> int:
-    """Give every reward that is due. Returns how many were issued."""
+
+def _given_load() -> dict:
+    """{set id: [email keys]}: everyone who was ever given a set's reward. Kept apart from the
+    member list, so deleting a reward card later can never make the set hand it out again."""
+    try:
+        d = json.loads(_SETS_GIVEN_FILE.read_text(encoding="utf-8"))
+        return d if isinstance(d, dict) else {}
+    except Exception:
+        return {}
+
+
+def _given_add(set_id: str, key: str):
+    if not set_id or not key:
+        return
+    with _sets_lock:
+        d = _given_load()
+        keys = d.setdefault(set_id, [])
+        if key in keys:
+            return
+        keys.append(key)
+        tmp = _SETS_GIVEN_FILE.with_suffix(".tmp")
+        tmp.write_text(json.dumps(d), encoding="utf-8")
+        os.replace(tmp, _SETS_GIVEN_FILE)
+
+
+def _reward_days(tier_cfg: dict) -> int:
+    try:
+        return min(36500, max(1, int(tier_cfg.get("expiry_days") or 31)))
+    except (TypeError, ValueError, OverflowError):
+        return 31
+
+
+def run_sets_now(limit=None, focus=None) -> int:
+    """Give the rewards that are due. Returns how many were issued.
+    `focus` = an email address that just got a card: that person is checked first and always.
+    `limit` = at most this many people from everyone else (the rest are done by the next check),
+    so a big new set can never tie the server up. Two checks never run at once: a second
+    caller just asks the running one to look again when it is done."""
+    key = limits.normalize_email(focus)
+    with _sets_flag:
+        if not _sets_gate.acquire(blocking=False):
+            _sets_wanted.add(key or "")
+            return 0
+    total = 0
+    try:
+        keys, lim = ([key] if key else []), limit
+        for _ in range(6):
+            try:
+                total += _run_sets_pass(lim, keys)
+            except Exception as e:
+                print(f"❌ Set check failed: {e}")
+            with _sets_flag:
+                if not _sets_wanted:
+                    break
+                keys = [k for k in _sets_wanted if k]
+                # Someone asked for a check of one person (a card was just issued): only that person.
+                # Someone asked for a general check: the same limit again.
+                lim = limit if "" in _sets_wanted else 0
+                _sets_wanted.clear()
+    finally:
+        with _sets_flag:
+            _sets_gate.release()
+    return total
+
+
+def _run_sets_pass(limit, focus_keys) -> int:
+    global _sets_more
     raw = _read_config_file()
     sets = card_sets.of_config(raw)
     if not sets:
+        _sets_more = 0
         return 0
     cfg = load_config()
-    issued = 0
-    with _sets_lock:
-        for s, person, _done in card_sets.due(sets, cfg.get("tiers") or [], member_registry.list_all()):
-            key = limits.normalize_email(person["email"])
-            if card_sets.rewarded(member_registry.list_all(), s, key):
-                continue
-            tier_cfg = get_tier(cfg, s["reward"])
-            if not tier_cfg:
-                continue
-            days = member_registry.clean_extend_days(tier_cfg.get("expiry_days", 31)) or 31
-            ready = email_sender.is_configured()
-            note = ready and email_templates.clean_on(cfg.get("setdone_on"), True) == "1"
-            try:
-                result = _issue_and_fulfill(
-                    person["name"] or "Member", person["email"], tier_cfg["name"], days, tier_cfg.get("sections", []), cfg=cfg,
-                    payment_meta={"comped": True, "set": s["id"]},
-                    check=lambda: _signup_check(cfg, tier_cfg, tier_cfg["name"], person["email"], public=False),
-                    send_email=bool(ready and not note),
-                    extra={"from_set": {"id": s["id"], "name": s["name"]}})
-            except SignupBlocked as b:
-                print(f"ℹ Set \u201c{s['name']}\u201d: reward not given to {person['email']}: {b.message}")
-                continue
-            except Exception as e:
-                print(f"❌ Set \u201c{s['name']}\u201d: reward failed for {person['email']}: {e}")
-                continue
-            issued += 1
-            print(f"✔ Set \u201c{s['name']}\u201d completed by {person['email']}: {tier_cfg['name']} issued")
-            if note:
-                try:
-                    email_sender.send_setdone_email(
-                        person["name"] or "Member", person["email"], card_sets.tier_label(cfg.get("tiers"), tier_cfg["name"]),
-                        s["name"], [card_sets.tier_label(cfg.get("tiers"), p) for p in s["pieces"]],
-                        result["credential_id"], result["bundle_hash"])
-                except Exception as e:
-                    print(f"❌ Set-completed email failed for {person['email']}: {e}")
+    tiers = cfg.get("tiers") or []
+    reg = member_registry.list_all()
+    given = _given_load()
+    queue, seen = [], set()
+    for k in focus_keys:
+        for item in card_sets.due(sets, tiers, reg, given, only=k):
+            queue.append(item)
+            seen.add((item[0]["id"], k))
+    rest = [t for t in card_sets.due(sets, tiers, reg, given)
+            if (t[0]["id"], limits.normalize_email(t[1]["email"])) not in seen]
+    issued = attempts = 0
+    ready = email_sender.is_configured()
+    note = ready and email_templates.clean_on(cfg.get("setdone_on"), True) == "1"
+    n_focus, left = len(queue), 0
+    for i, (s, person, _done) in enumerate(queue + rest):
+        if i >= n_focus and limit is not None and (issued >= limit or attempts >= limit * 3):
+            left = len(queue) + len(rest) - i
+            break
+        pkey = limits.normalize_email(person["email"])
+        if card_sets.rewarded(member_registry.list_all(), s, pkey, _given_load()):
+            continue
+        tier_cfg = get_tier(cfg, s["reward"])
+        if not tier_cfg:
+            continue
+        attempts += 1
+        try:
+            result = _issue_and_fulfill(
+                person["name"] or "Member", person["email"], tier_cfg["name"], _reward_days(tier_cfg), tier_cfg.get("sections", []), cfg=cfg,
+                payment_meta={"comped": True, "set": s["id"]},
+                check=lambda: _signup_check(cfg, tier_cfg, tier_cfg["name"], person["email"], public=False),
+                send_email=bool(ready and not note),
+                extra={"from_set": {"id": s["id"], "name": s["name"], **({"notified": False} if note else {})}})
+        except SignupBlocked as b:
+            print(f"ℹ Set \u201c{s['name']}\u201d: reward not given to {person['email']}: {b.message}")
+            continue
+        except Exception as e:
+            print(f"❌ Set \u201c{s['name']}\u201d: reward failed for {person['email']}: {e}")
+            continue
+        try:
+            _given_add(s["id"], pkey)
+        except Exception as e:
+            print(f"⚠ Could not write the sets record: {e}")
+        issued += 1
+        print(f"✔ Set \u201c{s['name']}\u201d completed by {person['email']}: {tier_cfg['name']} issued")
+        if note:
+            _send_setdone(person["name"], person["email"], cfg, s, tier_cfg["name"], result["credential_id"], result["bundle_hash"])
+    _sets_more = left
     return issued
+
+
+def _send_setdone(name, email, cfg, s, reward_tier, cid, bundle_hash) -> bool:
+    """The "you completed a set" email. Marks the reward card as notified when it went out."""
+    try:
+        ok = email_sender.send_setdone_email(
+            name or "Member", email, card_sets.tier_label(cfg.get("tiers"), reward_tier),
+            s["name"], [card_sets.tier_label(cfg.get("tiers"), p) for p in s["pieces"]], cid, bundle_hash)
+    except Exception as e:
+        print(f"❌ Set-completed email failed for {email}: {e}")
+        return False
+    if ok:
+        member_registry.mark_set_notified(cid)
+    return bool(ok)
+
+
+def _retry_setdone(limit=20) -> int:
+    """A "set completed" email that failed (email down for a moment) is tried again on the hourly
+    check, for up to 3 days. Rewards given while emails were off are never emailed afterwards."""
+    cfg = load_config()
+    if not email_sender.is_configured() or email_templates.clean_on(cfg.get("setdone_on"), True) != "1":
+        return 0
+    sets = {s["id"]: s for s in card_sets.of_config(_read_config_file())}
+    now, sent = datetime.now(timezone.utc), 0
+    for e in member_registry.list_all():
+        fs = e.get("from_set")
+        if sent >= limit:
+            break
+        if not isinstance(fs, dict) or fs.get("notified") is not False or e.get("revoked"):
+            continue
+        try:
+            age = now - datetime.fromisoformat(e["issued_at"])
+        except Exception:
+            continue
+        s = sets.get(fs.get("id"))
+        if age > timedelta(days=3) or s is None or not e.get("holder_email"):
+            member_registry.mark_set_notified(e["credential_id"])      # too late / set gone: stop trying
+            continue
+        if _send_setdone(e.get("holder_name"), e["holder_email"], cfg, s, e.get("tier", ""), e["credential_id"], e.get("bundle_hash", "")):
+            sent += 1
+    return sent
 
 
 def _sets_state() -> dict:
@@ -4653,10 +4786,11 @@ def _sets_state() -> dict:
     cfg = load_config()
     tiers = cfg.get("tiers") or []
     reg = member_registry.list_all()
+    given = _given_load()
     out = []
     for s in card_sets.of_config(raw):
-        c = card_sets.counts(s, reg)
-        out.append({**s, "problems": card_sets.problems(s, tiers), "waiting": card_sets.waiting_now(s, tiers, reg),
+        c = card_sets.counts(s, reg, given)
+        out.append({**s, "problems": card_sets.problems(s, tiers), "waiting": card_sets.waiting_now(s, tiers, reg, given),
                     "rewarded": c["rewarded"], "collecting": c["collecting"]})
     return {"sets": out,
             "cards": [{"name": t.get("name", ""), "label": t.get("label") or t.get("name", ""), "kind": card_kinds.clean_kind(t.get("kind")),
@@ -4693,12 +4827,12 @@ def admin_sets_save():
     cleaned, warnings = card_sets.clean(data["sets"], cfg.get("tiers") or [], card_sets.of_config(raw))
     save_config({"sets": cleaned})
     try:
-        issued = run_sets_now()
+        issued = run_sets_now(SETS_PER_SAVE)
     except Exception as e:
         print(f"❌ Set check failed: {e}")
         issued = 0
     state = _sets_state()
-    return jsonify({"success": True, "warnings": warnings, "issued": issued, **state})
+    return jsonify({"success": True, "warnings": warnings, "issued": issued, "more": _sets_more, **state})
 
 
 # ── GET /whats-on and /whats-on.ics ──
@@ -4782,7 +4916,8 @@ def run_reminders_now(now=None) -> dict:
     """One pass of the reminder jobs (access ending, event starting soon, follow-ups);
     returns {"sent": n, "failed": n} for both together."""
     try:
-        run_sets_now()
+        run_sets_now(SETS_PER_RUN)
+        _retry_setdone()
     except Exception as e:
         print(f"❌ Set check failed: {e}")
     cfg = load_config()

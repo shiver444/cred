@@ -240,11 +240,14 @@ def newitem_titles(content, entry, t0, t1) -> list:
 
 
 def newitem_due(registry, content, since, now=None) -> list:
-    """[(entry, titles, t1)] to email now. `since` is when the creator switched this on."""
+    """[(entry, titles, t1, ids)] to email now, ONE per person (by email address): someone who holds several
+    cards that unlock the same item gets one email listing it once. `ids` are the credential ids of every
+    card that contributed, all marked once the email went out. `since` is when the creator switched this on."""
     import email_templates
+    import limits
     now = now or datetime.now(timezone.utc)
     floor = now - timedelta(days=email_templates.NEWITEM_WINDOW_DAYS)
-    out = []
+    people, order = {}, []
     for e in registry:
         if e.get("revoked") or e.get("followups_off") or not e.get("holder_email"):
             continue
@@ -252,11 +255,19 @@ def newitem_due(registry, content, since, now=None) -> list:
         if issued is None or (end is not None and end <= now):
             continue
         marks = [m for m in (_parse(e.get("newitem_upto")), since, issued, floor) if m is not None]
-        t0 = max(marks)
-        titles = newitem_titles(content, e, t0, now)
-        if titles:
-            out.append((e, titles, now))
-    return out
+        titles = newitem_titles(content, e, max(marks), now)
+        if not titles:
+            continue
+        key = limits.normalize_email(e.get("holder_email")) or e.get("credential_id")
+        if key not in people:
+            people[key] = {"entry": e, "titles": [], "ids": []}
+            order.append(key)
+        p = people[key]
+        p["ids"].append(e["credential_id"])
+        for t in titles:
+            if t not in p["titles"]:
+                p["titles"].append(t)
+    return [(people[k]["entry"], people[k]["titles"], now, people[k]["ids"]) for k in order]
 
 
 def run_newitems_once(content, since, send, now=None, limit=None) -> dict:
@@ -269,7 +280,7 @@ def run_newitems_once(content, since, send, now=None, limit=None) -> dict:
     result = {"sent": 0, "failed": 0}
     if since is None:
         return result
-    for e, titles, t1 in newitem_due(member_registry.list_all(), content, since, now):
+    for e, titles, t1, ids in newitem_due(member_registry.list_all(), content, since, now):
         if result["sent"] + result["failed"] >= limit:
             break
         cid = e["credential_id"]
@@ -281,7 +292,8 @@ def run_newitems_once(content, since, send, now=None, limit=None) -> dict:
             print(f"❌ New-item email for {cid} failed: {ex}")
             ok = False
         if ok:
-            member_registry.mark_newitem(cid, t1, now)
+            for x in ids:
+                member_registry.mark_newitem(x, t1, now)
             result["sent"] += 1
         else:
             result["failed"] += 1

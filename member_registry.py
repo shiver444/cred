@@ -421,6 +421,18 @@ def mark_newitem(credential_id: str, upto, now=None) -> bool:
     return False
 
 
+def mark_set_notified(credential_id: str) -> bool:
+    """The "you completed a set" email for this reward card went out (or is no longer wanted)."""
+    with _lock:
+        registry = _load()
+        for entry in registry:
+            if entry["credential_id"] == credential_id and isinstance(entry.get("from_set"), dict):
+                entry["from_set"]["notified"] = True
+                _save(registry)
+                return True
+    return False
+
+
 def set_followups_off(credential_id: str, off: bool = True) -> bool:
     """The member pressed "stop these emails" (or turned them back on). It
     covers every card held with the same email address."""
