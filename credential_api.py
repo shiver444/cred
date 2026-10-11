@@ -4292,6 +4292,65 @@ def _member_entry(cid: str, h: str = None):
         return None
 
 
+_art_cache = {}
+
+
+def _card_art(cfg: dict, tier_name: str, px: int, square: bool) -> str:
+    """The card's own picture (its look's background) shrunk to `px` as a small data address, or "".
+    Shown on the member page next to a card the member holds. Remembered, so it is made once."""
+    try:
+        bg = (resolve_tier_design(cfg, tier_name) or {}).get("background_data_uri") or ""
+        if not bg.startswith("data:image/") or "," not in bg:
+            return ""
+        key = (hashlib.sha1(bg.encode()).hexdigest(), px, square)
+        if key in _art_cache:
+            return _art_cache[key]
+        from PIL import Image, ImageOps
+        import io
+        im = Image.open(io.BytesIO(base64.b64decode(bg.split(",", 1)[1])))
+        im = ImageOps.exif_transpose(im).convert("RGB")
+        im = ImageOps.fit(im, (px, px)) if square else ImageOps.contain(im, (px, px))
+        buf = io.BytesIO()
+        im.save(buf, "JPEG", quality=74, optimize=True)
+        uri = "data:image/jpeg;base64," + base64.b64encode(buf.getvalue()).decode()
+        if len(_art_cache) > 64:
+            _art_cache.clear()
+        _art_cache[key] = uri
+        return uri
+    except Exception as e:
+        print(f"⚠ Card picture for the sets tab failed ({tier_name}): {e}")
+        return ""
+
+
+def _decorate_sets(mine: list, cfg: dict, registry: list, email: str):
+    """Adds to each set's slots and reward what the member page needs to make them clickable and
+    pretty: the card's picture, and a link to open that card. A link is only given for FREE cards
+    that are still good: a link opens a card by itself, so handing out the links of paid cards
+    because they share an email address would let one leaked link open them all."""
+    prices = {str(t.get("name") or "").strip().upper(): t.get("price") for t in (cfg.get("tiers") or []) if isinstance(t, dict)}
+    for st in mine:
+        rw = st.get("reward") or {}
+        for sl, big in [(x, False) for x in st.get("slots", [])] + [(rw, True)]:
+            tier = sl.pop("tier", "")
+            if not sl.get("got"):
+                continue
+            try:
+                art = _card_art(cfg, tier, 720 if big else 320, square=not big)
+                if art:
+                    sl["art"] = art
+                try:
+                    free = float(prices.get(str(tier).strip().upper()) or 0) == 0
+                except (TypeError, ValueError):
+                    free = False
+                held = card_sets.holding(registry, email, tier) if free else None
+                if held:
+                    h = (held.get("bundle_hash") or "")[:32].lower()
+                    if _member_entry(held.get("credential_id"), h):
+                        sl["link"] = {"id": held["credential_id"], "h": h}
+            except Exception as e:
+                print(f"⚠ Sets tab extras failed for {tier}: {e}")
+
+
 def _file_token(cid: str, fid: str) -> str:
     """A short-lived, signed download ticket for one member and one file.
     A plain link can't carry the member's credentials safely, so
@@ -4368,9 +4427,11 @@ def member_content():
         try:
             _sets = card_sets.of_config(_read_config_file())
             if _sets:
-                mine = card_sets.member_view(_sets, load_config().get("tiers") or [], member_registry.list_all(),
-                                             entry.get("holder_email"), entry.get("tier"))
+                _cfg = load_config()
+                _reg = member_registry.list_all()
+                mine = card_sets.member_view(_sets, _cfg.get("tiers") or [], _reg, entry.get("holder_email"), entry.get("tier"))
                 if mine:
+                    _decorate_sets(mine, _cfg, _reg, entry.get("holder_email"))
                     out["sets"] = mine
         except Exception as e:
             print(f"❌ Sets for member page failed: {e}")

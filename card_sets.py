@@ -203,6 +203,17 @@ def counts(s, registry) -> dict:
     return {"rewarded": got, "collecting": part}
 
 
+def holding(registry, email, tier):
+    """The newest card of this kind that this email address holds and that was not revoked (or None)."""
+    key, want, best = limits.normalize_email(email), str(tier or "").strip().upper(), None
+    for e in registry:
+        if (limits.normalize_email(e.get("holder_email")) == key and not e.get("revoked")
+                and str(e.get("tier") or "").strip().upper() == want):
+            if best is None or str(e.get("issued_at") or "") > str(best.get("issued_at") or ""):
+                best = e
+    return best
+
+
 def member_view(sets, tiers, registry, email, this_tier=None) -> list:
     """What one member sees: every set they have started (or whose piece/reward is the card they
     are looking at), with each slot filled or empty."""
@@ -212,13 +223,13 @@ def member_view(sets, tiers, registry, email, this_tier=None) -> list:
     for s in sets:
         if problems(s, tiers):
             continue
-        slots = [{"name": tier_label(tiers, p), "got": str(p).upper() in person["pieces"]} for p in s["pieces"]]
+        slots = [{"name": tier_label(tiers, p), "tier": str(p), "got": str(p).upper() in person["pieces"]} for p in s["pieces"]]
         has_reward = rewarded(registry, s, key)
         involved = any(sl["got"] for sl in slots) or has_reward or (
             this_tier and str(this_tier).upper() in [str(p).upper() for p in s["pieces"] + [s["reward"]]])
         if not involved:
             continue
         out.append({"name": s["name"], "got": sum(1 for sl in slots if sl["got"]), "total": len(slots), "slots": slots,
-                    "reward": {"name": tier_label(tiers, s["reward"]), "got": has_reward},
+                    "reward": {"name": tier_label(tiers, s["reward"]), "tier": str(s["reward"]), "got": has_reward},
                     "complete": all(sl["got"] for sl in slots)})
     return out

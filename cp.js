@@ -460,12 +460,34 @@
     .ca-set-count { font-size: 11px; letter-spacing: 1px; color: var(--ca-accent-text); white-space: nowrap; }
     .ca-set-bar { height: 5px; background: var(--ca-line); margin-bottom: 10px; }
     .ca-set-bar i { display: block; height: 100%; background: ${accent}; }
-    .ca-slot { display: flex; flex-direction: column; gap: 4px; border: 1px dashed var(--ca-line); padding: 8px; min-width: 0; opacity: .7; }
-    .ca-slot.ca-got { border: 1px solid ${accent}; opacity: 1; }
+    .ca-slot { display: flex; flex-direction: column; gap: 4px; border: 1px dashed var(--ca-line); padding: 8px; min-width: 0; text-decoration: none; color: inherit; }
+    .ca-slot.ca-miss { opacity: .75; }
+    .ca-slot.ca-got { border: 1px solid ${accent}; }
     .ca-slot-mark { font-size: 18px; line-height: 1; color: var(--ca-ash); }
     .ca-slot.ca-got .ca-slot-mark { color: var(--ca-accent-text); }
-    .ca-set-reward { margin-top: 10px; font-size: 10px; letter-spacing: 1px; text-transform: uppercase; color: var(--ca-ash); }
-    .ca-set-reward.ca-got { color: var(--ca-accent-text); }
+    .ca-slot-art { display: block; width: 100%; aspect-ratio: 1 / 1; object-fit: cover; background: var(--ca-line); }
+    .ca-slot-blank { display: flex; align-items: center; justify-content: center; width: 100%; aspect-ratio: 1 / 1; font-size: 30px; color: var(--ca-ash);
+                     background: repeating-linear-gradient(135deg, transparent 0 7px, var(--ca-line) 7px 8px); }
+    .ca-slot.ca-link { cursor: pointer; transition: transform .15s ease, box-shadow .15s ease; }
+    .ca-slot.ca-link:hover, .ca-slot.ca-link:focus-visible { transform: translateY(-2px); box-shadow: 0 6px 16px rgba(0,0,0,.35); outline: none; }
+    .ca-slot.ca-link .ca-day-state { color: var(--ca-accent-text); }
+    /* the prize at the end of a set */
+    .ca-boss { margin-top: 14px; padding: 18px 16px; text-align: center; border: 1px dashed var(--ca-line); display: flex; flex-direction: column; align-items: center; gap: 8px; }
+    .ca-boss-badge { font-size: 10px; letter-spacing: 3px; text-transform: uppercase; color: var(--ca-ash); }
+    .ca-boss-name { font-size: 20px; line-height: 1.2; color: var(--ca-fg); overflow-wrap: anywhere; }
+    .ca-boss-sub { font-size: 12px; color: var(--ca-ash); }
+    .ca-boss.ca-locked .ca-boss-name { color: var(--ca-ash); }
+    .ca-boss.ca-wait { border: 1px solid ${accent}; }
+    .ca-boss.ca-won { border: 1px solid ${accent}; box-shadow: 0 0 0 1px ${accent}, 0 0 26px color-mix(in srgb, ${accent} 45%, transparent);
+                      background: linear-gradient(180deg, color-mix(in srgb, ${accent} 12%, transparent), transparent 70%); animation: ca-boss-glow 3.2s ease-in-out infinite; }
+    .ca-boss.ca-won .ca-boss-badge { color: var(--ca-accent-text); }
+    .ca-boss.ca-won .ca-boss-name { font-size: 24px; letter-spacing: .5px; }
+    .ca-boss-art-link { display: block; width: 100%; max-width: 420px; }
+    .ca-boss-art { display: block; width: 100%; height: auto; max-height: 420px; object-fit: contain; border: 1px solid ${accent}; background: var(--ca-line); }
+    .ca-boss-btn { display: inline-block; margin-top: 4px; padding: 11px 20px; background: ${accent}; color: var(--ca-on-accent, #0a0908); font-size: 11px; letter-spacing: 2px; text-transform: uppercase; text-decoration: none; }
+    .ca-boss-btn:hover, .ca-boss-btn:focus-visible { filter: brightness(1.1); outline: none; }
+    @keyframes ca-boss-glow { 0%, 100% { box-shadow: 0 0 0 1px ${accent}, 0 0 14px color-mix(in srgb, ${accent} 30%, transparent); } 50% { box-shadow: 0 0 0 1px ${accent}, 0 0 32px color-mix(in srgb, ${accent} 55%, transparent); } }
+    @media (prefers-reduced-motion: reduce) { .ca-boss.ca-won { animation: none; } .ca-slot.ca-link { transition: none; } }
     /* locked / ended items and the calendar (the "when" rules from Content) */
     .ca-closed { opacity: .72; }
     .ca-closed.ca-ended .ca-track-title { text-decoration: line-through; }
@@ -694,7 +716,7 @@
     #credential-widget.ca-keycard .ca-banner-text { text-shadow: 0 0 12px ${accent}55; }
     #credential-widget.ca-solid { background: var(--ca-bg); padding: 24px; border-radius: var(--ca-radius); }
     #credential-widget .ca-banner, #credential-widget .ca-drop-zone, #credential-widget .ca-modal,
-    #credential-widget .ca-field, #credential-widget .ca-tier-option, #credential-widget .ca-dl-btn, #credential-widget .ca-thumb, #credential-widget .ca-card, #credential-widget .ca-day, #credential-widget .ca-slot, #credential-widget .ca-lock-ico,
+    #credential-widget .ca-field, #credential-widget .ca-tier-option, #credential-widget .ca-dl-btn, #credential-widget .ca-thumb, #credential-widget .ca-card, #credential-widget .ca-day, #credential-widget .ca-slot, #credential-widget .ca-boss, #credential-widget .ca-boss-btn, #credential-widget .ca-lock-ico,
     #credential-widget .ca-chat-messages, #credential-widget .ca-result, #credential-widget .ca-video-thumb,
     #credential-widget .ca-qr-video-wrap, #credential-widget .ca-submit, #credential-widget .ca-close { border-radius: var(--ca-radius); }
     #credential-widget .ca-token-input, #credential-widget .ca-chat-input { border-radius: var(--ca-radius) 0 0 var(--ca-radius); }
@@ -1690,24 +1712,54 @@
     }
 
     if (sec.type === 'sets') {
-      const one = st => {
-        const total = Math.max(1, +st.total || 0), got = Math.max(0, +st.got || 0)
-        const slots = (st.slots || []).map(sl => `
-          <div class="ca-slot ${sl.got ? 'ca-got' : 'ca-miss'}">
-            <div class="ca-slot-mark">${sl.got ? '\u2713' : '\u00b7'}</div>
+      // Pictures and links come from the server, but are checked again here: a picture must be a small
+      // JPEG data address, a link must be a card id and a 32-character access code, and it only ever
+      // points back at this same page.
+      const artOk = a => (typeof a === 'string' && /^data:image\/jpeg;base64,[A-Za-z0-9+\/=]+$/.test(a)) ? a : ''
+      const linkOf = l => (l && /^[A-Za-z0-9_-]{1,80}$/.test(String(l.id)) && /^[a-f0-9]{32}$/.test(String(l.h)))
+        ? `${location.pathname}?id=${l.id}&h=${l.h}` : ''
+      const slotHtml = sl => {
+        const href = sl.got ? linkOf(sl.link) : '', art = sl.got ? artOk(sl.art) : ''
+        const pic = art ? `<img class="ca-slot-art" src="${art}" alt="">` : `<div class="ca-slot-blank">${sl.got ? '\u2713' : '?'}</div>`
+        const inner = `${pic}
             <div class="ca-day-title">${esc(sl.name)}</div>
-            <div class="ca-day-state">${sl.got ? 'Collected' : 'Missing'}</div>
-          </div>`).join('')
+            <div class="ca-day-state">${sl.got ? (href ? 'Open \u2192' : 'Collected') : 'Not yet'}</div>`
+        return href ? `<a class="ca-slot ca-got ca-link" href="${esc(href)}">${inner}</a>`
+          : `<div class="ca-slot ${sl.got ? 'ca-got' : 'ca-miss'}">${inner}</div>`
+      }
+      const one = st => {
+        const total = Math.max(1, +st.total || 0), got = Math.max(0, +st.got || 0), left = Math.max(0, total - got)
         const rw = st.reward || {}
-        const line = rw.got ? `\u2713 You have the ${esc(rw.name)}`
-          : st.complete ? `All collected: your ${esc(rw.name)} is on its way`
-          : `Collect them all to get the ${esc(rw.name)}`
+        const rHref = rw.got ? linkOf(rw.link) : '', rArt = rw.got ? artOk(rw.art) : ''
+        let boss
+        if (rw.got) {
+          const img = rArt ? `<img class="ca-boss-art" src="${rArt}" alt="">` : ''
+          boss = `<div class="ca-boss ca-won">
+              <div class="ca-boss-badge">\u2605 Reward unlocked \u2605</div>
+              ${img ? (rHref ? `<a class="ca-boss-art-link" href="${esc(rHref)}">${img}</a>` : `<div class="ca-boss-art-link">${img}</div>`) : ''}
+              <div class="ca-boss-name">${esc(rw.name)}</div>
+              <div class="ca-boss-sub">Yours for completing ${esc(st.name)}</div>
+              ${rHref ? `<a class="ca-boss-btn" href="${esc(rHref)}">Open your ${esc(rw.name)} \u2192</a>` : ''}
+            </div>`
+        } else if (st.complete) {
+          boss = `<div class="ca-boss ca-wait">
+              <div class="ca-boss-badge">All ${total} collected</div>
+              <div class="ca-boss-name">${esc(rw.name)}</div>
+              <div class="ca-boss-sub">Unlocking your reward\u2026 this can take a minute. Reload this page to check.</div>
+            </div>`
+        } else {
+          boss = `<div class="ca-boss ca-locked">
+              <div class="ca-boss-badge">Locked reward</div>
+              <div class="ca-boss-name">${esc(rw.name)}</div>
+              <div class="ca-boss-sub">Collect ${left} more ${left === 1 ? 'piece' : 'pieces'} to unlock it</div>
+            </div>`
+        }
         return `
           <div class="ca-set">
             <div class="ca-set-head"><span class="ca-set-name">${esc(st.name)}</span><span class="ca-set-count">${got} of ${total}</span></div>
             <div class="ca-set-bar"><i style="width:${Math.min(100, Math.round(100 * got / total))}%"></i></div>
-            <div class="ca-cal">${slots}</div>
-            <div class="ca-set-reward${rw.got ? ' ca-got' : ''}">${line}</div>
+            <div class="ca-cal">${(st.slots || []).map(slotHtml).join('')}</div>
+            ${boss}
           </div>`
       }
       return title + sec.sets.map(one).join('')

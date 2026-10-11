@@ -279,7 +279,7 @@ Cards you send yourself under People are never held back. A limited drop keeps u
 **The "What's on" page.** Your site has a public page at `/whats-on` (the address is on Home) listing your
 upcoming events, drops opening, offers ending, sale dates and the opening dates of locked-preview items, in
 date order, plus a calendar link (`/whats-on.ics`) people can add to Google, Apple or Outlook calendars. It only
-shows things already public in the sign-up list. Cards marked "only I give it out" never appear.
+shows things already public in the sign-up list. Cards set to "Only me" never appear.
 
 ## Sets: collect these cards, get a reward
 
@@ -288,7 +288,7 @@ card** ("supercard") and one email about it. Think of a robot built from a head,
 three courses" badge. Open **Cards > Sets**, press **+ New set**, give it a name, choose the reward card, tick the
 cards to collect (at least two, at most twelve) and press **Save sets**.
 
-- The reward is usually a card you marked **Only me** (Cards > Advanced), so nobody can simply sign up for it.
+- The reward is usually a card set to **Only me** (on the card press **Advanced**, then **Who can get this card?**), so nobody can simply sign up for it.
   Any card can be the reward, but it can't also be one of the pieces.
 - People are matched by **email address**, so the pieces can be bought under different names.
 - A piece counts once it was issued and not revoked. A ticket that was used, or a card that ran out or expired,
@@ -305,8 +305,14 @@ cards to collect (at least two, at most twelve) and press **Save sets**.
 - With email set up, the person gets one **Set completed** email (edit it under Settings > Emails) with a button
   to the reward card. Switch it off and they get the reward card's normal email instead. Without email set up
   the reward is still issued automatically and appears on their member page.
-- Members see a **Your sets** tab on their member page: each set with "3 of 5", a slot for every piece
-  (collected or missing) and what they get at the end. Only sets they have started show up.
+- Members see a **Your sets** tab on their member page: each set with "3 of 5" and a tile for every piece.
+  A collected piece shows its own card picture (the background picture of its Card look) and is **clickable**:
+  it opens that card. A missing piece is a "?" tile. The reward is a big panel at the bottom: locked
+  ("Collect 2 more pieces to unlock it"), then "Unlocking your reward" for the moment before it arrives, then a
+  glowing "Reward unlocked" panel with the reward card's picture and an "Open your ..." button. Only sets they
+  have started show up. Links are given only for **free** cards (a link opens a card on its own, so handing out
+  the links of paid cards just because they share an email address would let one leaked link open them all);
+  a paid piece still shows as collected, and members reach it through its own email or link.
 - Rewards are given right after someone's last piece is issued and checked again once an hour.
 
 Mind your storage: uploads live on the same Volume as your members and

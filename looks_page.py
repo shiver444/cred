@@ -166,14 +166,18 @@ _JS = r"""
   function run(frame) {
     active++;
     frame._tries = (frame._tries || 0) + 1;
-    fetch('/admin/looks/preview/' + frame.getAttribute('data-look'), { credentials: 'same-origin' })
-      .then(function (r) { if (!r.ok) throw new Error('preview ' + r.status); return r.text(); })
-      .then(function (h) { frame.srcdoc = h; if (frame.parentNode) frame.parentNode.className = 'lk-thumb ready'; })
+    // a request that hangs (a busy server) is given up after 25 seconds and tried again, never left spinning
+    var ac = window.AbortController ? new AbortController() : null, to = ac ? setTimeout(function () { ac.abort(); }, 25000) : null;
+    fetch('/admin/looks/preview/' + frame.getAttribute('data-look'), ac ? { credentials: 'same-origin', signal: ac.signal } : { credentials: 'same-origin' })
+      .then(function (r) { if (to) clearTimeout(to); if (!r.ok) throw new Error('preview ' + r.status); return r.text(); })
+      .then(function (h) { frame.srcdoc = h; frame._busy = false; if (frame.parentNode) frame.parentNode.className = 'lk-thumb ready'; })
       .catch(function () {
-        if (frame._tries < 3) { setTimeout(function () { queue.push(frame); pump(); }, 1000 * frame._tries); return; }
+        if (to) clearTimeout(to);
+        if (frame._tries < 4) { setTimeout(function () { queue.push(frame); pump(); }, 1000 * frame._tries); return; }
+        frame._busy = false;
         var box = frame.parentNode; if (!box) return;
         var b = el('button', 'lk-retry', "Couldn't load. Try again"); b.type = 'button';
-        b.addEventListener('click', function () { box.removeChild(b); frame._tries = 0; queue.push(frame); pump(); });
+        b.addEventListener('click', function () { box.removeChild(b); frame._tries = 0; frame._busy = true; queue.push(frame); pump(); });
         box.appendChild(b);
       })
       .then(function () { active--; pump(); });
@@ -181,8 +185,19 @@ _JS = r"""
   function loadThumb(frame) {
     if (frame.getAttribute('data-loaded')) return;
     frame.setAttribute('data-loaded', '1');
+    frame._busy = true;
     queue.push(frame); pump();
   }
+  // Safety net: a preview that is on screen but never arrived (a slow server, a request that got
+  // lost) is asked for again every few seconds, a few times, instead of staying blank.
+  setInterval(function () {
+    [].slice.call(grid.querySelectorAll('.lk-thumb')).forEach(function (t) {
+      var f = t.firstChild;
+      if (!f || t.className.indexOf('ready') > -1 || f._busy || t.querySelector('.lk-retry') || !t.clientWidth) return;
+      if (!f.getAttribute('data-loaded') || (f._sweeps = (f._sweeps || 0) + 1) > 6) return;
+      f._tries = 0; f._busy = true; queue.push(f); pump();
+    });
+  }, 4000);
   function fit() {
     [].slice.call(grid.querySelectorAll('.lk-thumb')).forEach(function (t) {
       var w = t.clientWidth; if (!w) return;
@@ -312,19 +327,28 @@ _JS = r"""
     fd.forEach(function (v, k) { out.push(k + '=' + (typeof v === 'string' ? v : 'file:' + v.name + ':' + v.size + ':' + v.lastModified)); });
     return out.join('&');
   }
-  function preview() {
+  function preview(retried) {
     // Nothing actually changed (e.g. a field was only clicked out of): leave the preview alone,
     // so a card the person has just turned over stays turned over.
     var fdata = formData(), sig = sigOf(fdata);
     if (sig === lastSig && frame.srcdoc) return;
-    lastSig = sig;
     var mine = ++seq;
+    function failed(why) {
+      if (mine !== seq) return;
+      lastSig = '';     // a failed preview is never "up to date": the next change (or retry) asks again
+      if (!retried) { setTimeout(function () { if (mine === seq) preview(true); }, 1500); return; }
+      frame.srcdoc = '<p style="font-family:sans-serif;color:#b00">The preview could not be drawn' + (why ? ' (' + String(why).replace(/[<>&]/g, '') + ')' : '') + '. Change any setting, or press the Edit button again, to try once more.</p>';
+    }
     fetch('/admin/looks/preview', { method: 'POST', body: fdata, credentials: 'same-origin' })
-      .then(function (r) { return r.text().then(function (h) { return { ok: r.ok, h: h }; }); })
-      .then(function (x) { if (mine === seq) frame.srcdoc = x.h; })
-      .catch(function () { if (mine === seq) frame.srcdoc = '<p style="font-family:sans-serif;color:#b00">Preview failed.</p>'; });
+      .then(function (r) { return r.text().then(function (h) { return { ok: r.ok, h: h, status: r.status }; }); })
+      .then(function (x) {
+        if (mine !== seq) return;
+        if (!x.ok) { if (x.status === 400) { lastSig = sig; frame.srcdoc = x.h; return; } failed(x.status); return; }
+        lastSig = sig; frame.srcdoc = x.h;
+      })
+      .catch(function () { failed(''); });
   }
-  function later() { clearTimeout(timer); timer = setTimeout(preview, 700); }
+  function later() { clearTimeout(timer); timer = setTimeout(function () { preview(); }, 700); }
   [fName, fTitle, fLabel, fStyle, fAccent, fSame, fBar, fQr, fLayout, fDim].forEach(function (f) { f.addEventListener('input', later); f.addEventListener('change', later); });
   $('lk-prev-kind').addEventListener('change', later);
   fSame.addEventListener('change', states);

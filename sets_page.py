@@ -71,7 +71,7 @@ __THEME__</style></head>
   __NAV__
   <h1>__TITLE__ — Sets</h1>
   <div class="hint">A <b>set</b> is a few cards people collect. When someone has <b>every piece</b>, they automatically get the <b>reward card</b> and one email about it. Think of a robot built from head, arms and legs, or a "completed all three courses" badge.</div>
-  <div class="hint">People are matched by <b>email address</b> (they can use different names). A card still counts after it ran out or a ticket was used, but not if you revoked it. The reward is given <b>once per person</b>. The reward is usually a card marked <b>Only me</b> (Cards, Advanced), so nobody can just sign up for it.</div>
+  <div class="hint">People are matched by <b>email address</b> (they can use different names). A card still counts after it ran out or a ticket was used, but not if you revoked it. The reward is given <b>once per person</b>. The reward is usually a card set to <b>Only me</b> (on the card press <b>Advanced</b>, then <b>Who can get this card?</b>), so nobody can just sign up for it.</div>
   <div id="needcards"></div>
   <div id="sets"></div>
   <div class="bar">

@@ -73,7 +73,7 @@ can revoke any of them at any time.
   numbered limited-edition drop, "#37 of 100", with a claim window; it never expires), a voucher
   (a one-time offer such as "One free coffee", redeemed on the same Check-in page), or a
   certificate (a named badge that never expires and anyone can verify). Any card can be
-  marked "only I give it out", so it stays out of the sign-up list.
+  set to "Only me", so it stays out of the sign-up list.
 - Small touches: a welcome box on a fresh dashboard, automatic YouTube thumbnails, an
   optional locked preview of your content for visitors, and optional terms/privacy links
   in the sign-up box.
