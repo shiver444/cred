@@ -2,7 +2,7 @@
 Credential Protocol — the "Content" page of the admin dashboard
 
 Renders the editor where the creator manages what members see after they
-verify: sections (links / merch / chat) and the items inside them. The page
+verify: sections (links / merch) and the items inside them. The page
 is a single self-contained HTML document. Everything the creator typed (and
 anything already stored) reaches the browser as JSON inside a data block and
 is turned into DOM with textContent / value only — never HTML — so a stray
@@ -142,7 +142,6 @@ __THEME__</style></head>
     <select id="new-type" style="width:auto">
       <option value="links">Links (downloads, videos, posts…)</option>
       <option value="merch">Merch discount</option>
-      <option value="chat">Chat panel</option>
     </select>
     <button type="button" class="btn ghost" id="add-section">+ Add section</button>
   </div>
@@ -497,15 +496,11 @@ __THEME__</style></head>
     ]);
   }
 
-  function renderChat() {
-    return el('div', { class: 'hint', text: 'Shows the chat panel to members of tiers that include this section. (The chat is a demo for now: messages stay in the visitor\'s own browser.) Nothing to fill in.' });
-  }
-
   function render() {
     root.textContent = '';
     if (!state.sections.length) root.appendChild(el('div', { class: 'empty', text: 'No sections yet — add one below.' }));
     state.sections.forEach(function (sec, i) {
-      var typeLabel = { links: 'Links', merch: 'Merch', chat: 'Chat' }[sec.type] || sec.type;
+      var typeLabel = { links: 'Links', merch: 'Merch' }[sec.type] || sec.type;
       var head = el('div', { class: 'sec-head' }, [
         field('Section title (shown to members)', sec, 'title', { max: 80 }),
         field('Key (tiers refer to this)', sec, 'key', { max: 32, key: true, placeholder: 'downloads' }),
@@ -516,7 +511,7 @@ __THEME__</style></head>
           el('button', { type: 'button', class: 'mini', text: '×', title: 'Delete section', on: { click: function () { state.sections.splice(i, 1); touch(); render(); } } })
         ])
       ]);
-      var body = sec.type === 'merch' ? renderMerch(sec) : sec.type === 'chat' ? renderChat() : renderLinks(sec);
+      var body = sec.type === 'merch' ? renderMerch(sec) : renderLinks(sec);
       root.appendChild(el('div', { class: 'sec' }, [head, body]));
     });
     renderTierCheck();
@@ -547,7 +542,7 @@ __THEME__</style></head>
     var base = type === 'links' ? 'section' : type;
     var n = 1, used = {}; state.sections.forEach(function (s) { used[s.key] = true; });
     var key = base; while (used[key]) { n++; key = base + '-' + n; }
-    var title = { links: 'New section', merch: 'Merch Discount', chat: 'Chat' }[type];
+    var title = { links: 'New section', merch: 'Merch Discount' }[type];
     var sec = { key: key, title: title, type: type };
     if (type === 'links') { sec.button = ''; sec.items = []; }
     if (type === 'merch') { sec.label = ''; sec.url = ''; sec.code = ''; }

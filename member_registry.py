@@ -488,7 +488,7 @@ if __name__ == "__main__":
         "holder_name":   "Test Member",
         "holder_email":  "test@example.com",
         "tier":          "DEMO",
-        "sections":      ["downloads", "bts", "chat"],
+        "sections":      ["downloads", "bts"],
         "issued_at":     datetime.now(timezone.utc).isoformat(),
         "expires_at":    "2026-12-31T00:00:00+00:00",
         "bundle_hash":   "abc123def456",

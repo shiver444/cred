@@ -834,7 +834,7 @@ def issue():
         days = int(data.get("expiry_days") or 31)
         sections = data.get("sections")
         if sections is None:
-            sections = ["downloads", "chat"]
+            sections = ["downloads"]
 
     try:
         result = _issue_and_fulfill(name, email, tier, days, sections, cfg=cfg,
@@ -3008,7 +3008,7 @@ def _dashboard_page() -> str:
             <div class="of c-days"><label>Days of access</label><input name="tier_expiry_days" type="number" value="{esc_html(str(t.get('expiry_days',31)))}"><span class="days-note">Until the event ends</span></div>
             {_cap_field(t)}
             <div class="of"><label>Kind of card</label>{_kind_select(k)}</div>
-            <div class="of wide"><label>What it unlocks (names of your Content sections, separated by commas)</label><input name="tier_sections" value="{esc_html(', '.join(t.get('sections',[])))}" placeholder="downloads, chat"></div>
+            <div class="of wide"><label>What it unlocks (names of your Content sections, separated by commas)</label><input name="tier_sections" value="{esc_html(', '.join(t.get('sections',[])))}" placeholder="downloads, merch"></div>
             <div class="of"><label>Card look</label><select name="tier_look">{looks_page.picker_options(cfg, look_sel)}</select></div>
           </div>
           {_event_panel(t)}
@@ -4613,6 +4613,8 @@ _sets_flag = threading.Lock()        # guards the two things below
 _sets_gate = threading.Lock()        # only one set check runs at a time
 _sets_wanted = set()                 # people (or "") who asked for a check while one was running
 _sets_more = 0                       # rewards still waiting after the last check (the cap was reached)
+_sets_blocked = {}                   # (set id, person) -> when the reward was refused (sold out, limit...): not retried for a while
+SETS_RETRY_BLOCKED_SECS = 6 * 3600
 SETS_PER_RUN = 40                    # most rewards one hourly / background check hands out
 SETS_PER_SAVE = 20                   # ... and one "Save" on the Sets screen
 _SETS_GIVEN_FILE = DATA_DIR / "sets_given.json"
@@ -4661,24 +4663,23 @@ def run_sets_now(limit=None, focus=None) -> int:
             _sets_wanted.add(key or "")
             return 0
     total = 0
-    try:
-        keys, lim = ([key] if key else []), limit
-        for _ in range(6):
-            try:
-                total += _run_sets_pass(lim, keys)
-            except Exception as e:
-                print(f"❌ Set check failed: {e}")
-            with _sets_flag:
-                if not _sets_wanted:
-                    break
-                keys = [k for k in _sets_wanted if k]
-                # Someone asked for a check of one person (a card was just issued): only that person.
-                # Someone asked for a general check: the same limit again.
-                lim = limit if "" in _sets_wanted else 0
-                _sets_wanted.clear()
-    finally:
+    keys, lim = ([key] if key else []), limit
+    for _ in range(6):
+        try:
+            total += _run_sets_pass(lim, keys)
+        except Exception as e:
+            print(f"❌ Set check failed: {e}")
         with _sets_flag:
-            _sets_gate.release()
+            if not _sets_wanted:
+                _sets_gate.release()          # released in the same step as the "nothing more wanted" check
+                return total
+            keys = [k for k in _sets_wanted if k]
+            # Someone asked for a check of one person (a card was just issued): only that person.
+            # Someone asked for a general check: the same limit again.
+            lim = limit if "" in _sets_wanted else 0
+            _sets_wanted.clear()
+    with _sets_flag:
+        _sets_gate.release()
     return total
 
 
@@ -4704,11 +4705,16 @@ def _run_sets_pass(limit, focus_keys) -> int:
     ready = email_sender.is_configured()
     note = ready and email_templates.clean_on(cfg.get("setdone_on"), True) == "1"
     n_focus, left = len(queue), 0
+    tnow = time.time()
+    for k in [k for k, t in _sets_blocked.items() if tnow - t > SETS_RETRY_BLOCKED_SECS]:
+        _sets_blocked.pop(k, None)
     for i, (s, person, _done) in enumerate(queue + rest):
+        pkey = limits.normalize_email(person["email"])
+        if i >= n_focus and (s["id"], pkey) in _sets_blocked:
+            continue                           # was refused recently: don't let it use up every hour's turn
         if i >= n_focus and limit is not None and (issued >= limit or attempts >= limit * 3):
             left = len(queue) + len(rest) - i
             break
-        pkey = limits.normalize_email(person["email"])
         if card_sets.rewarded(member_registry.list_all(), s, pkey, _given_load()):
             continue
         tier_cfg = get_tier(cfg, s["reward"])
@@ -4724,9 +4730,11 @@ def _run_sets_pass(limit, focus_keys) -> int:
                 extra={"from_set": {"id": s["id"], "name": s["name"], **({"notified": False} if note else {})}})
         except SignupBlocked as b:
             print(f"ℹ Set \u201c{s['name']}\u201d: reward not given to {person['email']}: {b.message}")
+            _sets_blocked[(s["id"], pkey)] = time.time()
             continue
         except Exception as e:
             print(f"❌ Set \u201c{s['name']}\u201d: reward failed for {person['email']}: {e}")
+            _sets_blocked[(s["id"], pkey)] = time.time()
             continue
         try:
             _given_add(s["id"], pkey)
@@ -4773,6 +4781,8 @@ def _retry_setdone(limit=20) -> int:
         except Exception:
             continue
         s = sets.get(fs.get("id"))
+        if age < timedelta(minutes=10):
+            continue                  # just issued: the first attempt may still be on its way
         if age > timedelta(days=3) or s is None or not e.get("holder_email"):
             member_registry.mark_set_notified(e["credential_id"])      # too late / set gone: stop trying
             continue

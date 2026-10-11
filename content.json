@@ -6,11 +6,6 @@
       "type": "links",
       "button": "↓ Download",
       "items": []
-    },
-    {
-      "key": "chat",
-      "title": "Chat",
-      "type": "chat"
     }
   ]
 }

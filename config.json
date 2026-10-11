@@ -23,8 +23,7 @@
       "price": 5,
       "expiry_days": 31,
       "sections": [
-        "downloads",
-        "chat"
+        "downloads"
       ]
     }
   ]

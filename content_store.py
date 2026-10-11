@@ -2,12 +2,11 @@
 Credential Protocol — members-only content
 
 What a member sees after they verify: a set of named sections, each one of
-three kinds —
+two kinds —
 
   links  — a list of items, each with a title, a link, and a short note
            (downloads, videos, posts... anything you can link to)
   merch  — a single discount: a label, a shop link and a code
-  chat   — the chat panel (a demo for now: messages stay in the browser)
 
 A links item can carry an uploaded file instead of a link: the file lives
 on the server (DATA_DIR/uploads/<id>.bin) and is only ever handed to a
@@ -26,8 +25,8 @@ A links section can also be a "teaser" (teaser: true): visitors who have no
 card yet see its item TITLES as a locked preview (never links, files or notes).
 
 A section's `key` is the name tiers refer to in their "Sections" field
-(e.g. a tier with sections "downloads, chat" unlocks the sections whose
-keys are `downloads` and `chat`).
+(e.g. a tier with sections "downloads, merch" unlocks the sections whose
+keys are `downloads` and `merch`).
 
 Stored as:
   {"sections": [
@@ -38,12 +37,11 @@ Stored as:
                  "file": {"id": "<24 hex>", "name": "ep1.mp4", "size": 123456},
                  "preview": {"id": "<24 hex>"}, "price": "$5", "buy_url": "https://..."}]},
      {"key": "merch", "title": "Merch Discount", "type": "merch",
-      "label": "...", "url": "https://...", "code": "..."},
-     {"key": "chat", "title": "Chat", "type": "chat"}
+      "label": "...", "url": "https://...", "code": "..."}
   ]}
 
 The older shape this project started with — {"downloads": [...], "bts":
-[...], "chat": true, "merch": {...}} — is still read fine (`normalize`), so
+[...], "merch": {...}} — is still read fine (`normalize`), so
 an existing content.json keeps working; saving from the dashboard writes
 the new shape.
 """
@@ -59,7 +57,7 @@ import timeline
 
 KEY_RE     = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
 FILE_ID_RE = re.compile(r"^[a-f0-9]{24}$")
-TYPES = ("links", "merch", "chat")
+TYPES = ("links", "merch")
 
 MAX_SECTIONS = 30
 MAX_ITEMS    = 200
@@ -72,7 +70,7 @@ MAX_PREVIEW_UPLOAD = 10 * 1024 * 1024
 MAX_PREVIEW_PIXELS = 40_000_000
 
 _LEGACY_TITLES = {"downloads": "Downloads", "bts": "Behind The Scenes",
-                  "merch": "Merch Discount", "chat": "Chat"}
+                  "merch": "Merch Discount"}
 _LEGACY_BUTTONS = {"downloads": "↓ Download"}
 
 
@@ -128,8 +126,6 @@ def normalize(raw) -> dict:
         m = raw["merch"]
         sections.append({"key": "merch", "title": _LEGACY_TITLES["merch"], "type": "merch",
                          "label": m.get("label", ""), "url": _legacy_url(m.get("url")), "code": m.get("code", "")})
-    if raw.get("chat"):
-        sections.append({"key": "chat", "title": _LEGACY_TITLES["chat"], "type": "chat"})
     return _clean({"sections": sections})
 
 
@@ -152,6 +148,8 @@ def _clean(data: dict, warnings: list = None) -> dict:
         if key in seen:
             warn.append(f"A second section with the key \"{key}\" was skipped — keys must be unique.")
             continue
+        if typ == "chat":
+            continue            # the chat panel was removed; an old saved one just disappears
         if typ not in TYPES:
             warn.append(f"Section \"{key}\" was skipped: unknown type \"{typ}\".")
             continue
@@ -294,7 +292,7 @@ def has_any_content(content: dict) -> bool:
             return True
         if s["type"] == "merch" and (s.get("label") or s.get("code") or s.get("url")):
             return True
-    return False   # (the chat panel alone doesn't count — it has nothing for you to add)
+    return False
 
 
 # ── Uploaded files ──────────────────────────────────────────────────────

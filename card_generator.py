@@ -748,7 +748,7 @@ if __name__ == "__main__":
         email       = "test@example.com",
         tier        = "MEMBER",
         expiry_days = 31,
-        sections    = ["downloads", "chat"],
+        sections    = ["downloads"],
     )
 
     bundle = bundle_credential(result)

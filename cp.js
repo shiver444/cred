@@ -547,40 +547,6 @@
     }
     .ca-video-title { font-size: 9px; letter-spacing: 1px; text-transform: uppercase; color: var(--ca-fg); }
     .ca-video-meta  { font-size: 8px; color: var(--ca-ash); margin-top: 3px; }
-    .ca-chat-messages {
-      height: 240px;
-      overflow-y: auto;
-      border: 1px solid var(--ca-line);
-      padding: 14px;
-      margin-bottom: 1px;
-      display: flex;
-      flex-direction: column;
-      gap: 12px;
-    }
-    .ca-msg-author { font-size: 7px; letter-spacing: 2px; color: var(--ca-accent-text); text-transform: uppercase; margin-bottom: 3px; }
-    .ca-msg-text   { font-size: 10px; color: var(--ca-ash); line-height: 1.5; }
-    .ca-chat-row   { display: flex; }
-    .ca-chat-input {
-      flex: 1;
-      background: transparent;
-      border: 1px solid var(--ca-line);
-      border-right: none;
-      color: inherit;
-      font-family: var(--ca-font);
-      font-size: 9px;
-      padding: 11px 14px;
-      outline: none;
-    }
-    .ca-chat-send {
-      background: ${accent};
-      border: none;
-      color: var(--ca-on-accent);
-      font-family: var(--ca-font);
-      font-size: 9px;
-      letter-spacing: 2px;
-      padding: 11px 16px;
-      cursor: pointer;
-    }
     .ca-modal-overlay {
       display: none;
       position: fixed; inset: 0;
@@ -717,10 +683,10 @@
     #credential-widget.ca-solid { background: var(--ca-bg); padding: 24px; border-radius: var(--ca-radius); }
     #credential-widget .ca-banner, #credential-widget .ca-drop-zone, #credential-widget .ca-modal,
     #credential-widget .ca-field, #credential-widget .ca-tier-option, #credential-widget .ca-dl-btn, #credential-widget .ca-thumb, #credential-widget .ca-card, #credential-widget .ca-day, #credential-widget .ca-slot, #credential-widget .ca-boss, #credential-widget .ca-boss-btn, #credential-widget .ca-lock-ico,
-    #credential-widget .ca-chat-messages, #credential-widget .ca-result, #credential-widget .ca-video-thumb,
+    #credential-widget .ca-result, #credential-widget .ca-video-thumb,
     #credential-widget .ca-qr-video-wrap, #credential-widget .ca-submit, #credential-widget .ca-close { border-radius: var(--ca-radius); }
-    #credential-widget .ca-token-input, #credential-widget .ca-chat-input { border-radius: var(--ca-radius) 0 0 var(--ca-radius); }
-    #credential-widget .ca-token-btn, #credential-widget .ca-chat-send { border-radius: 0 var(--ca-radius) var(--ca-radius) 0; }
+    #credential-widget .ca-token-input { border-radius: var(--ca-radius) 0 0 var(--ca-radius); }
+    #credential-widget .ca-token-btn { border-radius: 0 var(--ca-radius) var(--ca-radius) 0; }
     #credential-widget .ca-member-header, #credential-widget .ca-tabs { border-radius: var(--ca-radius) var(--ca-radius) 0 0; overflow: hidden; }
     #credential-widget .ca-panel { border-radius: 0 0 var(--ca-radius) var(--ca-radius); }
     #credential-widget .ca-submit-row .ca-submit { border-radius: var(--ca-radius) 0 0 var(--ca-radius); }
@@ -752,10 +718,6 @@
     #credential-widget.ca-clean .ca-dl-btn { font-size: 12px; font-weight: 600; letter-spacing: .02em; text-transform: none; }
     #credential-widget.ca-clean .ca-video-title { font-size: 13px; letter-spacing: 0; text-transform: none; }
     #credential-widget.ca-clean .ca-video-meta { font-size: 12px; }
-    #credential-widget.ca-clean .ca-msg-author { font-size: 11px; letter-spacing: .04em; }
-    #credential-widget.ca-clean .ca-msg-text { font-size: 13px; }
-    #credential-widget.ca-clean .ca-chat-input { font-size: 13px; }
-    #credential-widget.ca-clean .ca-chat-send { font-size: 12px; letter-spacing: .04em; }
     #credential-widget.ca-clean .ca-modal-title { font-size: 26px; font-weight: 600; letter-spacing: 0; text-transform: none; }
     #credential-widget.ca-clean .ca-modal-sub { font-size: 13px; letter-spacing: 0; text-transform: none; line-height: 1.6; }
     #credential-widget.ca-clean .ca-tier-option { font-size: 13px; letter-spacing: 0; text-transform: none; }
@@ -1516,7 +1478,7 @@
 
   // ── BUILD MEMBER AREA ──
   // `sections` is exactly what the server returned for this member:
-  // [{ key, title, type: 'links' | 'merch' | 'chat', … }]
+  // [{ key, title, type: 'links' | 'merch', … }]
   function buildMemberArea(sections, sets) {
     const tabsEl   = document.getElementById('ca-tabs')
     const panelsEl = document.getElementById('ca-panels')
@@ -1527,7 +1489,7 @@
     const shown = (sections || []).filter(sec => {
       if (sec.type === 'links') return sec.items && sec.items.length
       if (sec.type === 'merch') return sec.label || sec.code || sec.url
-      return sec.type === 'chat'
+      return false
     })
     // The member's card sets (collect these cards, get a reward): one more tab at the end.
     if (Array.isArray(sets) && sets.length) shown.push({ key: '__sets', title: 'Your sets', type: 'sets', sets })
@@ -1551,12 +1513,6 @@
       panelsEl.appendChild(panel)
     })
 
-    if (shown.some(s => s.type === 'chat')) {
-      const sendBtn   = document.getElementById('ca-chat-send')
-      const chatInput = document.getElementById('ca-chat-input')
-      if (sendBtn)   sendBtn.onclick = sendChat
-      if (chatInput) chatInput.onkeydown = e => { if (e.key === 'Enter') sendChat() }
-    }
   }
 
   function switchTab(key, btn) {
@@ -1779,39 +1735,7 @@
         </div>`
     }
 
-    if (sec.type === 'chat') {
-      return `${title}
-        <div class="ca-chat-messages" id="ca-chat-messages">
-          <div>
-            <div class="ca-msg-author">${esc(name)} // system</div>
-            <div class="ca-msg-text">Welcome. Demo chat — local only for now.</div>
-          </div>
-        </div>
-        <div class="ca-chat-row">
-          <input type="text" class="ca-chat-input" id="ca-chat-input" placeholder="Say something...">
-          <button class="ca-chat-send" id="ca-chat-send">Send</button>
-        </div>`
-    }
-
     return ''
-  }
-
-  // ── CHAT ──
-  function sendChat() {
-    const input = document.getElementById('ca-chat-input')
-    const msg   = input.value.trim()
-    if (!msg) return
-    const memberName = memberData
-      ? (memberData.holder_name || memberData.name || 'Member').toUpperCase()
-      : 'MEMBER'
-    const msgs = document.getElementById('ca-chat-messages')
-    const div  = document.createElement('div')
-    div.innerHTML = `
-      <div class="ca-msg-author">${esc(memberName)}</div>
-      <div class="ca-msg-text" style="color:inherit;">${esc(msg)}</div>`
-    msgs.appendChild(div)
-    msgs.scrollTop = msgs.scrollHeight
-    input.value = ''
   }
 
   // ── REQUEST CARD ──

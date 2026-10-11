@@ -196,13 +196,14 @@ Log in to the dashboard and open **Content** (top of the page). Here you
 decide what a member sees once they're verified:
 
 - A **section** is one tab in the member area. Give it a title and a
-  **key** (a short lowercase name such as `downloads`). Three kinds:
+  **key** (a short lowercase name such as `downloads`). Two kinds:
   **Links** (a list of items, each with a title, a link and a short note —
   downloads, videos, posts, anything you can link to), **Merch discount**
-  (a label, a shop link and a code), and the **Chat panel** (a demo for
-  now; messages stay in the visitor's browser).
+  (a label, a shop link and a code). There is no chat on purpose: use the
+  Bulletin board and emails to talk to your members, and if you really want a
+  chat, add your own chat service on your own page.
 - Which members get which sections: on the **Dashboard**, each tier has a
-  "Sections" field. List the keys that tier unlocks, e.g. `downloads, chat`.
+  "Sections" field. List the keys that tier unlocks, e.g. `downloads, merch`.
   The Content page shows who sees what, and flags a tier that names a
   section which doesn't exist.
 - **Thumbnails**: an item with a YouTube link gets that video's picture automatically.
