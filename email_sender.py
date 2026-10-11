@@ -924,6 +924,32 @@ def send_newitem_email(to_name, to_email, tier, credential_id, bundle_hash, titl
     return ok
 
 
+def build_setdone_email(to_name, reward_tier, set_name, pieces, credential_id, bundle_hash, overrides: dict = None,
+                        link_base=None) -> dict:
+    """"You completed the set": the creator's wording and a button that opens the
+    reward card's member area (the card itself is shown and downloadable there)."""
+    _refresh_branding()
+    subj_t, text_t = _tpl("setdone", overrides, email_templates.DEFAULT_SETDONE_SUBJECT,
+                          email_templates.DEFAULT_SETDONE_TEXT)
+    pieces = [str(p) for p in (pieces or [])]
+    values = {"name": to_name, "tier": reward_tier, "creator": CREATOR_NAME, "brand": CARD_TITLE,
+              "set": set_name, "reward": reward_tier, "pieces": ", ".join(pieces), "count": str(len(pieces))}
+    intro = _fill(text_t, values)
+    link = _personal_link(credential_id, bundle_hash, link_base)
+    html_body = _shell(set_name, intro, [("MEMBER", to_name.upper()), ("REWARD", reward_tier)], link, "◈ Open my card")
+    plain = (f"{CREATOR_NAME.upper()} — {CARD_TITLE.upper()}\n\n{intro}\n\n{link}\n\n{CARD_TITLE}\n")
+    return {"subject": _one_line(_fill(subj_t, values)), "html": html_body, "text": plain, "link": link}
+
+
+def send_setdone_email(to_name, to_email, reward_tier, set_name, pieces, credential_id, bundle_hash) -> bool:
+    if not BREVO_API_KEY:
+        return False
+    msg = build_setdone_email(to_name, reward_tier, set_name, pieces, credential_id, bundle_hash)
+    ok, detail = _send_simple(to_name, to_email, msg)
+    print(f"{'✔ Set-completed email sent to' if ok else '❌ Set-completed email failed for'} {to_email}" + ("" if ok else f": {detail}"))
+    return bool(ok)
+
+
 def build_ended_email(to_name, tier, overrides: dict = None) -> dict:
     """The note a member gets when the creator revokes their card."""
     _refresh_branding()
@@ -992,6 +1018,9 @@ def preview_kind(kind: str, tier: str, overrides: dict = None) -> dict:
         return build_lostlink_email(d["to_name"], [(tier, d["credential_id"], d["bundle_hash"])], overrides, base)
     if kind == "ended":
         return build_ended_email(d["to_name"], tier, overrides)
+    if kind == "setdone":
+        return build_setdone_email(d["to_name"], tier if tier != "MEMBER" else "SUPERCARD", "The Robot",
+                                   ["Head", "Arms", "Legs"], d["credential_id"], d["bundle_hash"], overrides, base)
     if kind == "newitem":
         return build_newitem_email(d["to_name"], tier, d["credential_id"], d["bundle_hash"],
                                    ["Door 12", "Door 13"], overrides, base,

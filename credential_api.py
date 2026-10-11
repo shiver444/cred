@@ -81,6 +81,7 @@ import email_templates
 import email_look
 import timeline
 import whats_on
+import card_sets
 import site_reader
 import backup
 import announcements
@@ -627,7 +628,7 @@ def _declined_email(cfg: dict, req: dict) -> None:
 
 def _issue_and_fulfill(name: str, email: str, tier: str, days: int, sections: list,
                         cfg: dict = None, payment_meta: dict = None, check=None,
-                        send_email: bool = True) -> dict:
+                        send_email: bool = True, extra: dict = None) -> dict:
     """
     The actual issue → bundle → card → registry → email pipeline, shared
     by the free path in /issue, /checkout's free-tier shortcut, and the
@@ -757,6 +758,7 @@ def _issue_and_fulfill(name: str, email: str, tier: str, days: int, sections: li
             "event":       event,
             "drop":        drop,
             "detail":      detail,
+            **(extra or {}),
         })
 
     # 5 — Email (skipped when the caller doesn't want one, e.g. the creator
@@ -777,6 +779,13 @@ def _issue_and_fulfill(name: str, email: str, tier: str, days: int, sections: li
             drop          = drop,
             detail        = detail,
         )
+
+    # 6 — Card sets: this card may have been the last piece of someone's set.
+    try:
+        if email and (cfg.get("sets") or _read_config_file().get("sets")):
+            _bg(run_sets_now)
+    except Exception as e:
+        print(f"❌ Set check failed: {e}")
 
     return {
         "credential_id":    result["credential_id"],
@@ -1881,7 +1890,9 @@ def admin_members():
             _dr = m.get("drop") if isinstance(m.get("drop"), dict) else {}
             _num = f' · #{esc_html(str(_dr.get("edition")))}' + (f' of {esc_html(str(_dr.get("of")))}' if _dr.get("of") else "") if _dr.get("edition") else ""
             tier_esc += f'<br><span class="small">collectible{_num}</span>'
-        if isinstance(m.get("payment"), dict) and m["payment"].get("comped"):
+        if isinstance(m.get("from_set"), dict) and m["from_set"].get("name"):
+            tier_esc += f'<br><span class="small">reward · {esc_html(str(m["from_set"]["name"]))}</span>'
+        elif isinstance(m.get("payment"), dict) and m["payment"].get("comped"):
             tier_esc += '<br><span class="small">given free</span>'
 
         revoke_cell = '—' if revoked else (
@@ -4354,6 +4365,15 @@ def member_content():
                 sec["items"] = items
             sections.append(sec)
         out = {"success": True, "sections": sections}
+        try:
+            _sets = card_sets.of_config(_read_config_file())
+            if _sets:
+                mine = card_sets.member_view(_sets, load_config().get("tiers") or [], member_registry.list_all(),
+                                             entry.get("holder_email"), entry.get("tier"))
+                if mine:
+                    out["sets"] = mine
+        except Exception as e:
+            print(f"❌ Sets for member page failed: {e}")
         note = announcements.public_current()
         if note:
             out["announcement"] = note
@@ -4515,6 +4535,111 @@ def members_page_builtin():
     return resp
 
 
+
+# ── Card sets (rules in card_sets.py) ──
+# Collect every piece of a set (by one email address) and the reward card is
+# issued automatically, once. Checked right after any card is issued and again
+# every hour (which also catches a set made after people already had pieces).
+_sets_lock = threading.RLock()
+
+def run_sets_now() -> int:
+    """Give every reward that is due. Returns how many were issued."""
+    raw = _read_config_file()
+    sets = card_sets.of_config(raw)
+    if not sets:
+        return 0
+    cfg = load_config()
+    issued = 0
+    with _sets_lock:
+        for s, person, _done in card_sets.due(sets, cfg.get("tiers") or [], member_registry.list_all()):
+            key = limits.normalize_email(person["email"])
+            if card_sets.rewarded(member_registry.list_all(), s, key):
+                continue
+            tier_cfg = get_tier(cfg, s["reward"])
+            if not tier_cfg:
+                continue
+            days = member_registry.clean_extend_days(tier_cfg.get("expiry_days", 31)) or 31
+            ready = email_sender.is_configured()
+            note = ready and email_templates.clean_on(cfg.get("setdone_on"), True) == "1"
+            try:
+                result = _issue_and_fulfill(
+                    person["name"] or "Member", person["email"], tier_cfg["name"], days, tier_cfg.get("sections", []), cfg=cfg,
+                    payment_meta={"comped": True, "set": s["id"]},
+                    check=lambda: _signup_check(cfg, tier_cfg, tier_cfg["name"], person["email"], public=False),
+                    send_email=bool(ready and not note),
+                    extra={"from_set": {"id": s["id"], "name": s["name"]}})
+            except SignupBlocked as b:
+                print(f"ℹ Set \u201c{s['name']}\u201d: reward not given to {person['email']}: {b.message}")
+                continue
+            except Exception as e:
+                print(f"❌ Set \u201c{s['name']}\u201d: reward failed for {person['email']}: {e}")
+                continue
+            issued += 1
+            print(f"✔ Set \u201c{s['name']}\u201d completed by {person['email']}: {tier_cfg['name']} issued")
+            if note:
+                try:
+                    email_sender.send_setdone_email(
+                        person["name"] or "Member", person["email"], card_sets.tier_label(cfg.get("tiers"), tier_cfg["name"]),
+                        s["name"], [card_sets.tier_label(cfg.get("tiers"), p) for p in s["pieces"]],
+                        result["credential_id"], result["bundle_hash"])
+                except Exception as e:
+                    print(f"❌ Set-completed email failed for {person['email']}: {e}")
+    return issued
+
+
+def _sets_state() -> dict:
+    raw = _read_config_file()
+    cfg = load_config()
+    tiers = cfg.get("tiers") or []
+    reg = member_registry.list_all()
+    out = []
+    for s in card_sets.of_config(raw):
+        c = card_sets.counts(s, reg)
+        out.append({**s, "problems": card_sets.problems(s, tiers), "waiting": card_sets.waiting_now(s, tiers, reg),
+                    "rewarded": c["rewarded"], "collecting": c["collecting"]})
+    return {"sets": out,
+            "cards": [{"name": t.get("name", ""), "label": t.get("label") or t.get("name", ""), "kind": card_kinds.clean_kind(t.get("kind")),
+                       "hidden": bool(t.get("hidden"))} for t in tiers if isinstance(t, dict)],
+            "email_ready": bool(email_sender.is_configured())}
+
+
+@app.route("/admin/sets", methods=["GET"])
+def admin_sets_page():
+    redirect_resp = require_admin_page("/admin/sets")
+    if redirect_resp:
+        return redirect_resp
+    import sets_page
+    cfg = load_config()
+    html = sets_page.render(
+        admin_theme.css(cfg["admin_style"], cfg["accent_color"], "wide"),
+        admin_theme.shell_js(cfg["admin_style"]),
+        admin_theme.body_attrs(cfg["admin_style"], "sets", cfg["card_title"]),
+        cfg["card_title"], _sets_state())
+    resp = app.response_class(html, mimetype="text/html")
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
+
+
+@app.route("/admin/sets", methods=["POST"])
+def admin_sets_save():
+    if not check_admin(request):
+        return err("Unauthorized", 401)
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict) or not isinstance(data.get("sets"), list):
+        return err("Send the list of sets.")
+    cfg = load_config()
+    raw = _read_config_file()
+    cleaned, warnings = card_sets.clean(data["sets"], cfg.get("tiers") or [], card_sets.of_config(raw))
+    save_config({"sets": cleaned})
+    try:
+        issued = run_sets_now()
+    except Exception as e:
+        print(f"❌ Set check failed: {e}")
+        issued = 0
+    state = _sets_state()
+    return jsonify({"success": True, "warnings": warnings, "issued": issued, **state})
+
+
 # ── GET /whats-on and /whats-on.ics ──
 # A public page (and calendar feed) listing what is coming up by date. Built
 # only from things the sign-up list already shows, plus the opening dates of
@@ -4595,6 +4720,10 @@ def _newitem_since(cfg: dict, now):
 def run_reminders_now(now=None) -> dict:
     """One pass of the reminder jobs (access ending, event starting soon, follow-ups);
     returns {"sent": n, "failed": n} for both together."""
+    try:
+        run_sets_now()
+    except Exception as e:
+        print(f"❌ Set check failed: {e}")
     cfg = load_config()
     out = {"sent": 0, "failed": 0}
     if not email_sender.is_configured():

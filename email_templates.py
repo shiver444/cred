@@ -22,6 +22,7 @@ Every email the creator edits lives under its own settings keys in config.json:
   alert        alert_email                                      (goes to the creator)
   lostlink     lostlink_on, lostlink_subject, lostlink_text     (a member asks for their link again)
   ended        ended_on, ended_subject, ended_text              (a card is revoked; off by default)
+  setdone      setdone_on, setdone_subject, setdone_text        (someone completed a set and got its reward card)
   newitem      newitem_on, newitem_subject, newitem_text       (something in the member area just opened; off by default)
   follow1..5   followN_on, followN_days, followN_for, followN_subject, followN_text
                                                                 (automatic follow-up emails; off by default)
@@ -66,6 +67,10 @@ DEFAULT_LOSTLINK_TEXT = ("{name} — here's the link you asked for. Use it to ge
 DEFAULT_ENDED_SUBJECT = "Your {tier} access has ended"
 DEFAULT_ENDED_TEXT = ("{name} — your {tier} access with {creator} has ended.\n"
                       "If you think this is a mistake, just reply or get in touch with {creator}.")
+
+DEFAULT_SETDONE_SUBJECT = "You completed {set}!"
+DEFAULT_SETDONE_TEXT = ("{name} — you collected every piece of {set} ({pieces}).\n"
+                        "Your {reward} is ready: open it from the button below.")
 
 DEFAULT_NEWITEM_SUBJECT = "New on {brand}: {items}"
 DEFAULT_NEWITEM_TEXT = ("{name} — something new just opened for you: {items}.\n"
@@ -221,6 +226,17 @@ def registry() -> list:
              _f("certificate_text", "Message", "area", MAX_TEXT, DEFAULT_CERT_TEXT),
          ],
          "note": "The certificate is attached and the button opens it."},
+        {"key": "setdone", "group": "cards", "title": "Set completed",
+         "when": "Sent when someone collects every piece of a set and gets its reward card.",
+         "chips": CHIPS_MEMBER + ("set", "reward", "pieces", "count"), "state": "on",
+         "fields": [
+             _f("setdone_on", "Send this email?", "select", 1, "1", options=(("1", "Yes"), ("0", "No")),
+                clean=lambda v: clean_on(v, True)),
+             _f("setdone_subject", "Subject", "text", MAX_SUBJECT, DEFAULT_SETDONE_SUBJECT),
+             _f("setdone_text", "Message", "area", MAX_TEXT, DEFAULT_SETDONE_TEXT),
+         ],
+         "note": ("Replaces the usual card email for the reward: the button opens their reward card. "
+                  "{tier} is the reward card. With this switched off they get the reward card's own email instead.")},
         {"key": "howtopay", "group": "payments", "title": "How to pay",
          "when": "Sent the moment someone asks for a paid card and pays by hand or with your own link.",
          "chips": CHIPS_MEMBER + ("price", "reference"), "state": "on",
@@ -345,7 +361,7 @@ def kind_of(key):
 
 
 # Newer emails only: their settings are saved by clean_new_from_form().
-NEW_KEYS = ("ticket", "collectible", "voucher", "certificate", "howtopay", "declined", "evremind", "alert", "lostlink", "ended", "newitem") + tuple(
+NEW_KEYS = ("ticket", "collectible", "voucher", "certificate", "howtopay", "declined", "evremind", "alert", "lostlink", "ended", "newitem", "setdone") + tuple(
     "follow%d" % n for n in range(1, FOLLOW_STEPS + 1))
 
 

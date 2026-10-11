@@ -86,6 +86,8 @@ can revoke any of them at any time.
   a countdown, or just "a surprise"). "Spread dates" fills a whole calendar in one go. An optional
   "something new opened" email, an "On sale from" date on any card, and a public "What's on" page with a
   calendar link.
+- Sets: pick a few cards to collect and a reward card; whoever holds every piece automatically gets the reward
+  (one email), and members see "3 of 5" progress with a slot for each card on their member page.
 - Email looks: one picker for every email (Dark, Light, Paper, Bold, or "Match my website", which reads your site's colors and type once), plus an optional logo at the top.
 - Follow-up emails: up to five automatic notes some days after someone joins (like a short
   welcome sequence), each limited to one card if you like, with a "stop these emails" link.

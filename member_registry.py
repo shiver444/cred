@@ -85,6 +85,8 @@ def _add_credential_locked(entry: dict):
         # "voucher" / "certificate": what it is for (`detail`: offer or title, terms or note...).
         # A voucher is used up once (`used_at`, like a ticket).
         **({"kind": entry["kind"], "detail": entry.get("detail") or {}} if entry.get("kind") in ("voucher", "certificate") else {}),
+        # A reward card given automatically for completing a set (card_sets.py): {id, name}.
+        **({"from_set": entry["from_set"]} if isinstance(entry.get("from_set"), dict) else {}),
         "revoked":          False,
         "revoked_at":       None,
         "verified_count":   0,

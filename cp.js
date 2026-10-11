@@ -453,6 +453,19 @@
     .ca-card { display: flex; flex-direction: column; gap: 8px; border: 1px solid var(--ca-line); padding: 8px; min-width: 0; }
     .ca-card .ca-thumb { width: 100%; height: auto; aspect-ratio: 1 / 1; flex: none; border: 0; }
     .ca-card .ca-dl-btn { text-align: center; }
+    /* card sets: "3 of 5" and the slots */
+    .ca-set { margin: 0 0 22px; }
+    .ca-set-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; margin-bottom: 6px; }
+    .ca-set-name { font-size: 13px; color: var(--ca-fg); overflow-wrap: anywhere; }
+    .ca-set-count { font-size: 11px; letter-spacing: 1px; color: var(--ca-accent-text); white-space: nowrap; }
+    .ca-set-bar { height: 5px; background: var(--ca-line); margin-bottom: 10px; }
+    .ca-set-bar i { display: block; height: 100%; background: ${accent}; }
+    .ca-slot { display: flex; flex-direction: column; gap: 4px; border: 1px dashed var(--ca-line); padding: 8px; min-width: 0; opacity: .7; }
+    .ca-slot.ca-got { border: 1px solid ${accent}; opacity: 1; }
+    .ca-slot-mark { font-size: 18px; line-height: 1; color: var(--ca-ash); }
+    .ca-slot.ca-got .ca-slot-mark { color: var(--ca-accent-text); }
+    .ca-set-reward { margin-top: 10px; font-size: 10px; letter-spacing: 1px; text-transform: uppercase; color: var(--ca-ash); }
+    .ca-set-reward.ca-got { color: var(--ca-accent-text); }
     /* locked / ended items and the calendar (the "when" rules from Content) */
     .ca-closed { opacity: .72; }
     .ca-closed.ca-ended .ca-track-title { text-decoration: line-through; }
@@ -681,7 +694,7 @@
     #credential-widget.ca-keycard .ca-banner-text { text-shadow: 0 0 12px ${accent}55; }
     #credential-widget.ca-solid { background: var(--ca-bg); padding: 24px; border-radius: var(--ca-radius); }
     #credential-widget .ca-banner, #credential-widget .ca-drop-zone, #credential-widget .ca-modal,
-    #credential-widget .ca-field, #credential-widget .ca-tier-option, #credential-widget .ca-dl-btn, #credential-widget .ca-thumb, #credential-widget .ca-card, #credential-widget .ca-day, #credential-widget .ca-lock-ico,
+    #credential-widget .ca-field, #credential-widget .ca-tier-option, #credential-widget .ca-dl-btn, #credential-widget .ca-thumb, #credential-widget .ca-card, #credential-widget .ca-day, #credential-widget .ca-slot, #credential-widget .ca-lock-ico,
     #credential-widget .ca-chat-messages, #credential-widget .ca-result, #credential-widget .ca-video-thumb,
     #credential-widget .ca-qr-video-wrap, #credential-widget .ca-submit, #credential-widget .ca-close { border-radius: var(--ca-radius); }
     #credential-widget .ca-token-input, #credential-widget .ca-chat-input { border-radius: var(--ca-radius) 0 0 var(--ca-radius); }
@@ -711,6 +724,8 @@
     #credential-widget.ca-clean .ca-track-title { font-size: 14px; }
     #credential-widget.ca-clean .ca-track-meta { font-size: 12px; letter-spacing: 0; }
     #credential-widget.ca-clean .ca-day-title { font-size: 13px; }
+    #credential-widget.ca-clean .ca-set-name { font-size: 15px; }
+    #credential-widget.ca-clean .ca-set-count, #credential-widget.ca-clean .ca-set-reward { font-size: 12px; letter-spacing: .02em; text-transform: none; }
     #credential-widget.ca-clean .ca-day-state, #credential-widget.ca-clean .ca-day-mon, #credential-widget.ca-clean .ca-cal-month, #credential-widget.ca-clean .ca-lock-ico { font-size: 11px; letter-spacing: .02em; }
     #credential-widget.ca-clean .ca-dl-btn { font-size: 12px; font-weight: 600; letter-spacing: .02em; text-transform: none; }
     #credential-widget.ca-clean .ca-video-title { font-size: 13px; letter-spacing: 0; text-transform: none; }
@@ -1340,7 +1355,7 @@
     if (res.status === 403) return null
     const body = await res.json()
     if (!body || !body.success) return null
-    return { sections: body.sections || [], card: body.card || null, announcement: body.announcement || null }
+    return { sections: body.sections || [], card: body.card || null, announcement: body.announcement || null, sets: Array.isArray(body.sets) ? body.sets : [] }
   }
 
   // The creator's pinned note, at the top of the member's area. Plain text only
@@ -1447,10 +1462,11 @@
     let sections = null
     let myCard = null
     let news = null
+    let mySets = []
     let unreachable = false
     try {
       const got = await loadMemberContent(data)
-      if (got) { sections = got.sections; myCard = got.card; news = got.announcement }
+      if (got) { sections = got.sections; myCard = got.card; news = got.announcement; mySets = got.sets }
     } catch(e) {
       unreachable = true
     }
@@ -1469,7 +1485,7 @@
     } else {
       renderNews(news)
       renderMyCard(myCard)
-      buildMemberArea(sections)
+      buildMemberArea(sections, mySets)
     }
 
     area.scrollIntoView && area.scrollIntoView({ behavior: 'smooth' })
@@ -1479,7 +1495,7 @@
   // ── BUILD MEMBER AREA ──
   // `sections` is exactly what the server returned for this member:
   // [{ key, title, type: 'links' | 'merch' | 'chat', … }]
-  function buildMemberArea(sections) {
+  function buildMemberArea(sections, sets) {
     const tabsEl   = document.getElementById('ca-tabs')
     const panelsEl = document.getElementById('ca-panels')
     tabsEl.innerHTML   = ''
@@ -1491,6 +1507,8 @@
       if (sec.type === 'merch') return sec.label || sec.code || sec.url
       return sec.type === 'chat'
     })
+    // The member's card sets (collect these cards, get a reward): one more tab at the end.
+    if (Array.isArray(sets) && sets.length) shown.push({ key: 'sets', title: 'Your sets', type: 'sets', sets })
 
     if (!shown.length) {
       panelsEl.innerHTML = '<div class="ca-panel active"><p style="color:#6b6058;font-size:10px;position:relative;">No content available yet.</p></div>'
@@ -1669,6 +1687,30 @@
       if (layout === 'calendar') return title + calendarHtml(cells)
       const items = cells.map(c => c.html).join('')
       return title + (grid ? `<div class="ca-grid">${items}</div>` : items)
+    }
+
+    if (sec.type === 'sets') {
+      const one = st => {
+        const total = Math.max(1, +st.total || 0), got = Math.max(0, +st.got || 0)
+        const slots = (st.slots || []).map(sl => `
+          <div class="ca-slot ${sl.got ? 'ca-got' : 'ca-miss'}">
+            <div class="ca-slot-mark">${sl.got ? '\u2713' : '\u00b7'}</div>
+            <div class="ca-day-title">${esc(sl.name)}</div>
+            <div class="ca-day-state">${sl.got ? 'Collected' : 'Missing'}</div>
+          </div>`).join('')
+        const rw = st.reward || {}
+        const line = rw.got ? `\u2713 You have the ${esc(rw.name)}`
+          : st.complete ? `All collected: your ${esc(rw.name)} is on its way`
+          : `Collect them all to get the ${esc(rw.name)}`
+        return `
+          <div class="ca-set">
+            <div class="ca-set-head"><span class="ca-set-name">${esc(st.name)}</span><span class="ca-set-count">${got} of ${total}</span></div>
+            <div class="ca-set-bar"><i style="width:${Math.min(100, Math.round(100 * got / total))}%"></i></div>
+            <div class="ca-cal">${slots}</div>
+            <div class="ca-set-reward${rw.got ? ' ca-got' : ''}">${line}</div>
+          </div>`
+      }
+      return title + sec.sets.map(one).join('')
     }
 
     if (sec.type === 'merch') {

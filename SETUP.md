@@ -281,6 +281,34 @@ upcoming events, drops opening, offers ending, sale dates and the opening dates 
 date order, plus a calendar link (`/whats-on.ics`) people can add to Google, Apple or Outlook calendars. It only
 shows things already public in the sign-up list. Cards marked "only I give it out" never appear.
 
+## Sets: collect these cards, get a reward
+
+A **set** is a few cards people collect. When one person holds **every piece**, they automatically get a **reward
+card** ("supercard") and one email about it. Think of a robot built from a head, arms and legs, or a "finished all
+three courses" badge. Open **Cards > Sets**, press **+ New set**, give it a name, choose the reward card, tick the
+cards to collect (at least two, at most twelve) and press **Save sets**.
+
+- The reward is usually a card you marked **Only me** (Cards > Advanced), so nobody can simply sign up for it.
+  Any card can be the reward, but it can't also be one of the pieces.
+- People are matched by **email address**, so the pieces can be bought under different names.
+- A piece counts once it was issued and not revoked. A ticket that was used, or a card that ran out or expired,
+  still counts: it was collected.
+- The reward is given **once per person per set**, even if they lose a piece later. Someone you already sent the
+  reward card to by hand does not get a second one.
+- Only people who finish the set **after you saved it** get the reward, so nobody is surprised by a mass mailing.
+  Tick "Also give the reward to people who already hold every piece" if you want those people rewarded too (the
+  screen says how many there are).
+- If you delete or rename a card that a set uses, the set is paused and the screen tells you which card is
+  missing. Pick the cards again and save.
+- The screen shows, for each set, how many people are collecting, how many were rewarded, and how many already
+  held every piece without being rewarded.
+- With email set up, the person gets one **Set completed** email (edit it under Settings > Emails) with a button
+  to the reward card. Switch it off and they get the reward card's normal email instead. Without email set up
+  the reward is still issued automatically and appears on their member page.
+- Members see a **Your sets** tab on their member page: each set with "3 of 5", a slot for every piece
+  (collected or missing) and what they get at the end. Only sets they have started show up.
+- Rewards are given right after someone's last piece is issued and checked again once an hour.
+
 Mind your storage: uploads live on the same Volume as your members and
 signing key, and the Volume has a fixed size (see your Railway plan). The
 Content page shows how much the uploads use. One file can be up to
@@ -369,6 +397,7 @@ Design → Branding, tick **Show my logo at the top of every email** (it is serv
   under Content) opens for a member. It is **off** until you switch it on, and only announces things that open
   *after* you switch it on, never your old calendar. Several items that open together arrive in one email
   ({items} lists the first few titles). Checked once an hour; has a "stop these emails" link.
+- **Set completed:** the email someone gets when they finish a set (see "Sets"). On by default; the button opens their reward card.
 
 *Follow-up emails (automatic):*
 
