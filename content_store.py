@@ -55,6 +55,7 @@ import time
 from pathlib import Path
 
 import config_store
+import timeline
 
 KEY_RE     = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
 FILE_ID_RE = re.compile(r"^[a-f0-9]{24}$")
@@ -65,7 +66,7 @@ MAX_ITEMS    = 200
 MAX_TEXT     = 300
 MAX_URL      = 2000
 MAX_PRICE    = 30
-LAYOUTS      = ("list", "grid")
+LAYOUTS      = ("list", "grid", "calendar")
 PREVIEW_SIDE = 480                 # px, longest side of a thumbnail
 MAX_PREVIEW_UPLOAD = 10 * 1024 * 1024
 MAX_PREVIEW_PIXELS = 40_000_000
@@ -139,7 +140,7 @@ def _clean(data: dict, warnings: list = None) -> dict:
     Anything dropped is described in `warnings` (when given), so the
     dashboard can tell the creator instead of silently losing their input."""
     warn = warnings if warnings is not None else []
-    out, seen = [], set()
+    out, seen, seen_ids = [], set(), set()
     for s in (data.get("sections") or [])[:MAX_SECTIONS]:
         if not isinstance(s, dict):
             continue
@@ -161,6 +162,8 @@ def _clean(data: dict, warnings: list = None) -> dict:
             sec["layout"] = _text(s.get("layout"), 10).lower() if _text(s.get("layout"), 10).lower() in LAYOUTS else "list"
             if s.get("teaser") is True:
                 sec["teaser"] = True
+            if timeline.clean_locked_view(s.get("locked_view")) == "mystery":
+                sec["locked_view"] = "mystery"
             items = []
             for it in (s.get("items") or [])[:MAX_ITEMS]:
                 if not isinstance(it, dict):
@@ -172,6 +175,22 @@ def _clean(data: dict, warnings: list = None) -> dict:
                 if _text(it.get("url"), MAX_URL) and not url:
                     warn.append(f"\"{title}\" in \"{key}\": the link isn't a valid http(s) or mailto address, so it was removed.")
                 item = {"title": title, "url": url, "note": _text(it.get("note"))}
+                # "When" rules (timeline.py): opens on a date / some days after joining, and an optional end.
+                opens, until = timeline.clean_opens(it.get("opens")), timeline.clean_until(it.get("until"))
+                if it.get("opens") and not opens:
+                    warn.append(f"\"{title}\" in \"{key}\": the opening date wasn't a valid date, so it opens right away.")
+                if opens:
+                    item["opens"] = opens
+                if until:
+                    item["until"] = until
+                if opens or until:
+                    iid = timeline.clean_id(it.get("id"))
+                    if not iid or iid in seen_ids:
+                        iid = secrets.token_hex(4)
+                        while iid in seen_ids:
+                            iid = secrets.token_hex(4)
+                    seen_ids.add(iid)
+                    item["id"] = iid
                 price = _text(it.get("price"), MAX_PRICE)
                 buy = safe_web_url(it.get("buy_url"))
                 if _text(it.get("buy_url"), MAX_URL) and not buy:
@@ -231,7 +250,7 @@ def teaser(content: dict, tiers: list) -> list:
     the tiers that unlock it. Titles only: no links, files, notes or pictures."""
     out = []
     for s in content.get("sections", []):
-        if s.get("type") != "links" or s.get("teaser") is not True:
+        if s.get("type") != "links" or s.get("teaser") is not True or s.get("locked_view") == "mystery":
             continue
         titles = [it["title"] for it in s.get("items", []) if it.get("title")]
         if not titles:
@@ -340,14 +359,20 @@ def referenced_ids(content: dict) -> set:
     return ids
 
 
-def find_preview_item(content: dict, preview_id: str, allowed_keys) -> dict:
+def _is_open(it: dict, issued_at, now=None) -> bool:
+    """False for an item that has not opened yet for this person, or has ended."""
+    return (not timeline.is_scheduled(it)) or timeline.state(it, issued_at, now) == "open"
+
+
+def find_preview_item(content: dict, preview_id: str, allowed_keys, issued_at=None, now=None) -> dict:
     """The item whose preview picture is `preview_id` — but only if it sits in
-    a section whose key is in `allowed_keys` (the member's tier)."""
+    a section whose key is in `allowed_keys` (the member's tier) and is open
+    for this person right now (see timeline.py)."""
     allowed = {str(k).strip().lower() for k in (allowed_keys or [])}
     for s in content.get("sections", []):
         if s.get("type") == "links" and s["key"] in allowed:
             for it in s.get("items", []):
-                if it.get("preview") and it["preview"]["id"] == preview_id:
+                if it.get("preview") and it["preview"]["id"] == preview_id and _is_open(it, issued_at, now):
                     return it
     return None
 
@@ -444,14 +469,16 @@ def make_preview_from_stored(file_id: str) -> dict:
         return None
 
 
-def find_file_item(content: dict, file_id: str, allowed_keys) -> dict:
+def find_file_item(content: dict, file_id: str, allowed_keys, issued_at=None, now=None) -> dict:
     """The item (and so the display name) for `file_id` — but only if it sits
-    in a section whose key is in `allowed_keys` (the member's tier)."""
+    in a section whose key is in `allowed_keys` (the member's tier) and is open
+    for this person right now (a file whose date has not come cannot be
+    downloaded, even with its address)."""
     allowed = {str(k).strip().lower() for k in (allowed_keys or [])}
     for s in content.get("sections", []):
         if s.get("type") == "links" and s["key"] in allowed:
             for it in s.get("items", []):
-                if it.get("file") and it["file"]["id"] == file_id:
+                if it.get("file") and it["file"]["id"] == file_id and _is_open(it, issued_at, now):
                     return it
     return None
 

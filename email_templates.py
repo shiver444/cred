@@ -22,6 +22,7 @@ Every email the creator edits lives under its own settings keys in config.json:
   alert        alert_email                                      (goes to the creator)
   lostlink     lostlink_on, lostlink_subject, lostlink_text     (a member asks for their link again)
   ended        ended_on, ended_subject, ended_text              (a card is revoked; off by default)
+  newitem      newitem_on, newitem_subject, newitem_text       (something in the member area just opened; off by default)
   follow1..5   followN_on, followN_days, followN_for, followN_subject, followN_text
                                                                 (automatic follow-up emails; off by default)
 
@@ -65,6 +66,12 @@ DEFAULT_LOSTLINK_TEXT = ("{name} — here's the link you asked for. Use it to ge
 DEFAULT_ENDED_SUBJECT = "Your {tier} access has ended"
 DEFAULT_ENDED_TEXT = ("{name} — your {tier} access with {creator} has ended.\n"
                       "If you think this is a mistake, just reply or get in touch with {creator}.")
+
+DEFAULT_NEWITEM_SUBJECT = "New on {brand}: {items}"
+DEFAULT_NEWITEM_TEXT = ("{name} — something new just opened for you: {items}.\n"
+                        "Open your member area to see it.")
+NEWITEM_WINDOW_DAYS = 3       # only things that opened in the last few days are ever announced
+NEWITEM_MAX_TITLES = 3        # {items} lists this many titles, then "and N more"
 
 # Follow-up emails: up to FOLLOW_STEPS automatic notes, each sent N days after
 # someone joins (off until switched on). Each can be limited to one card type.
@@ -263,6 +270,18 @@ def registry() -> list:
              _f("evremind_text", "Message", "area", MAX_TEXT, DEFAULT_EVREMIND_TEXT),
          ],
          "note": "Tickets already checked in, and tickets bought too late for the reminder, don't get one."},
+        {"key": "newitem", "group": "reminders", "title": "Something new opened",
+         "when": "Sent to members when an item with an opening date (in Content) opens for them.",
+         "chips": CHIPS_MEMBER + ("items", "count"), "state": "on",
+         "fields": [
+             _f("newitem_on", "Send this email?", "select", 1, "0", options=(("1", "Yes"), ("0", "No")),
+                clean=lambda v: clean_on(v, False)),
+             _f("newitem_subject", "Subject", "text", MAX_SUBJECT, DEFAULT_NEWITEM_SUBJECT),
+             _f("newitem_text", "Message", "area", MAX_TEXT, DEFAULT_NEWITEM_TEXT),
+         ],
+         "note": ("Off unless you switch it on. {items} is the title (or the first few titles) of what opened. It is checked once an hour. "
+                  "Only things that open after you switch it on are announced, so it never mails out your old calendar. "
+                  "Every email has a “stop these emails” link.")},
         {"key": "extended", "group": "reminders", "title": "Access extended",
          "when": "Sent when you press Extend on the Members page (with “email them” ticked).",
          "chips": CHIPS_MEMBER + ("expires", "days"), "state": None,
@@ -326,7 +345,7 @@ def kind_of(key):
 
 
 # Newer emails only: their settings are saved by clean_new_from_form().
-NEW_KEYS = ("ticket", "collectible", "voucher", "certificate", "howtopay", "declined", "evremind", "alert", "lostlink", "ended") + tuple(
+NEW_KEYS = ("ticket", "collectible", "voucher", "certificate", "howtopay", "declined", "evremind", "alert", "lostlink", "ended", "newitem") + tuple(
     "follow%d" % n for n in range(1, FOLLOW_STEPS + 1))
 
 

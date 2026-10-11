@@ -249,6 +249,38 @@ with `https://`). Members then see a **Buy** button on that item. This is a
 simple shop link: it does not unlock anything by itself, so send or
 publish the file after you get paid.
 
+**Opening dates and the calendar (the "time system").** Every item in a Links section has a
+**"When does it open?"** box. Leave it on *Right away*, or choose:
+
+- **On a date**: the item opens for everyone at that date and time (the time is yours, like an event time).
+- **Some days after the person joins**: a drip. Day 0 is right away, day 7 opens a week after *that person's*
+  card was issued, so everyone gets their own clock (a weekly lesson, a 30-day course).
+
+Tick **It closes again on a date** to end an item (an offer, a live stream). Before an item opens, a member
+sees its title (or, if you set **Before an item opens, members see: Only the date**, just "A surprise") and
+the date, with a countdown. They get **no link, file, picture, note or price** until it opens, and an uploaded
+file can't be downloaded early even by someone who guesses its address. After it ends they see the title and
+"Ended" but no link.
+
+Under **Show the items as** choose **A calendar (by opening date)** for a grid of day tiles under month
+headings (an advent calendar, "a new picture on the 1st"). Locked tiles are dimmed with a countdown.
+
+**Spread dates** fills in one date per item in order: start on a date and go every day, week or month (a
+short month uses its last day), or "day 0, 7, 14…" after joining. It only writes the dates onto the items, so
+you can still change any of them, and nothing repeats by itself later.
+
+If you tick the locked preview on a section, visitors see the titles of items with dates too; a "mystery"
+section is never shown in the preview.
+
+**On sale from.** Any card (membership, ticket, voucher, certificate) can have **On sale from** under
+**Advanced** on the Cards screen. Until then the sign-up list shows "Opens <date>" and the card can't be picked.
+Cards you send yourself under People are never held back. A limited drop keeps using its own opening time.
+
+**The "What's on" page.** Your site has a public page at `/whats-on` (the address is on Home) listing your
+upcoming events, drops opening, offers ending, sale dates and the opening dates of locked-preview items, in
+date order, plus a calendar link (`/whats-on.ics`) people can add to Google, Apple or Outlook calendars. It only
+shows things already public in the sign-up list. Cards marked "only I give it out" never appear.
+
 Mind your storage: uploads live on the same Volume as your members and
 signing key, and the Volume has a fixed size (see your Railway plan). The
 Content page shows how much the uploads use. One file can be up to
@@ -333,6 +365,10 @@ Design → Branding, tick **Show my logo at the top of every email** (it is serv
   checked in, revoked tickets, and tickets bought after the reminder time had
   already passed don't get one. One per ticket. The server checks about once an hour.
 - **Access extended:** see the next section.
+- **Something new opened:** a note when an item with an opening date (see "Opening dates and the calendar"
+  under Content) opens for a member. It is **off** until you switch it on, and only announces things that open
+  *after* you switch it on, never your old calendar. Several items that open together arrive in one email
+  ({items} lists the first few titles). Checked once an hour; has a "stop these emails" link.
 
 *Follow-up emails (automatic):*
 

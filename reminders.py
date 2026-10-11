@@ -216,3 +216,73 @@ def run_followups_once(steps, send, now=None, limit=None) -> dict:
         else:
             result["failed"] += 1
     return result
+
+
+# ── "Something new opened": a note when an item with an opening date opens ──
+# Checked every hour. For each member, everything that opened for THEM since the
+# last note (or since their card was issued, or since the creator switched the
+# email on, or in the last NEWITEM_WINDOW_DAYS, whichever is latest) is listed in
+# one email. Nothing old is ever announced, and "stop these emails" is honoured.
+
+def newitem_titles(content, entry, t0, t1) -> list:
+    """Titles of the items that opened for this member after t0 and up to t1."""
+    import content_store
+    import timeline
+    out = []
+    for sec in content_store.sections_for_member(content, entry.get("sections", [])):
+        if sec.get("type") != "links":
+            continue
+        for it in sec.get("items", []):
+            if timeline.is_scheduled(it) and timeline.opened_between(it, entry.get("issued_at"), t0, t1):
+                out.append((timeline.opens_utc(it, entry.get("issued_at")), str(it.get("title") or "").strip() or "something new"))
+    out.sort(key=lambda x: x[0])
+    return [t for _d, t in out]
+
+
+def newitem_due(registry, content, since, now=None) -> list:
+    """[(entry, titles, t1)] to email now. `since` is when the creator switched this on."""
+    import email_templates
+    now = now or datetime.now(timezone.utc)
+    floor = now - timedelta(days=email_templates.NEWITEM_WINDOW_DAYS)
+    out = []
+    for e in registry:
+        if e.get("revoked") or e.get("followups_off") or not e.get("holder_email"):
+            continue
+        issued, end = _parse(e.get("issued_at")), _parse(e.get("expires_at"))
+        if issued is None or (end is not None and end <= now):
+            continue
+        marks = [m for m in (_parse(e.get("newitem_upto")), since, issued, floor) if m is not None]
+        t0 = max(marks)
+        titles = newitem_titles(content, e, t0, now)
+        if titles:
+            out.append((e, titles, now))
+    return out
+
+
+def run_newitems_once(content, since, send, now=None, limit=None) -> dict:
+    """Send the "something new opened" emails that are due (at most `limit` per
+    call). `send(entry, titles)` returns True when the email really went out;
+    claimed first, marked only on success. {"sent", "failed"}."""
+    import email_templates
+    now = now or datetime.now(timezone.utc)
+    limit = email_templates.FOLLOW_MAX_PER_RUN if limit is None else limit
+    result = {"sent": 0, "failed": 0}
+    if since is None:
+        return result
+    for e, titles, t1 in newitem_due(member_registry.list_all(), content, since, now):
+        if result["sent"] + result["failed"] >= limit:
+            break
+        cid = e["credential_id"]
+        if not member_registry.claim_newitem(cid, now):
+            continue
+        try:
+            ok = bool(send(e, titles))
+        except Exception as ex:
+            print(f"❌ New-item email for {cid} failed: {ex}")
+            ok = False
+        if ok:
+            member_registry.mark_newitem(cid, t1, now)
+            result["sent"] += 1
+        else:
+            result["failed"] += 1
+    return result

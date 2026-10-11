@@ -384,6 +384,41 @@ def mark_followed_up(credential_id: str, step: int, now=None) -> bool:
     return False
 
 
+def claim_newitem(credential_id: str, now=None) -> bool:
+    """Ask for the right to send this member a "something new opened" email. True
+    means "go ahead": they haven't opted out and no attempt was made in the last
+    few hours (the attempt is recorded straight away). Follow with
+    mark_newitem() once it really went out."""
+    now = now or datetime.now(timezone.utc)
+    with _lock:
+        registry = _load()
+        for entry in registry:
+            if entry["credential_id"] != credential_id:
+                continue
+            if entry.get("revoked") or entry.get("followups_off"):
+                return False
+            last = _parse(entry.get("newitem_attempt_at"))
+            if last and now - last < timedelta(hours=RETRY_REMINDER_HOURS):
+                return False
+            entry["newitem_attempt_at"] = now.isoformat()
+            _save(registry)
+            return True
+    return False
+
+
+def mark_newitem(credential_id: str, upto, now=None) -> bool:
+    """Record that everything that opened up to `upto` has been announced to this member."""
+    with _lock:
+        registry = _load()
+        for entry in registry:
+            if entry["credential_id"] == credential_id:
+                entry["newitem_upto"] = upto.isoformat() if hasattr(upto, "isoformat") else str(upto)
+                entry.pop("newitem_attempt_at", None)
+                _save(registry)
+                return True
+    return False
+
+
 def set_followups_off(credential_id: str, off: bool = True) -> bool:
     """The member pressed "stop these emails" (or turned them back on). It
     covers every card held with the same email address."""

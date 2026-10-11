@@ -80,7 +80,12 @@ can revoke any of them at any time.
 - Announcements: write one note, pin it at the top of every member's page and/or email it
   to everyone, one tier, or one event's ticket holders. Every email is editable in
   one short list (welcome, ticket confirmation, collectible, voucher, certificate, how to pay, payment not confirmed,
-  event reminder, access-ending reminder, access extended, lost link, access ended), plus an alert to you when a payment is waiting.
+  event reminder, access-ending reminder, access extended, something new opened, lost link, access ended), plus an alert to you when a payment is waiting.
+- Opening dates: any members-only item can open on a date or some days after each person joins, and
+  close again; show them as a list, a grid or a calendar of day tiles (locked ones show only the date and
+  a countdown, or just "a surprise"). "Spread dates" fills a whole calendar in one go. An optional
+  "something new opened" email, an "On sale from" date on any card, and a public "What's on" page with a
+  calendar link.
 - Email looks: one picker for every email (Dark, Light, Paper, Bold, or "Match my website", which reads your site's colors and type once), plus an optional logo at the top.
 - Follow-up emails: up to five automatic notes some days after someone joins (like a short
   welcome sequence), each limited to one card if you like, with a "stop these emails" link.

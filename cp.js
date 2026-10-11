@@ -159,6 +159,8 @@
   tiers.forEach(t => { if (t && t.kind === 'ticket' && t.event && t.event.over) t.sold_out = true })
   // A collectible can only be claimed while its drop window is open.
   tiers.forEach(t => { if (t && t.kind === 'collectible' && t.drop && t.drop.state && t.drop.state !== 'open') t.sold_out = true })
+  // Not on sale yet ("On sale from" on the card): shown, but can't be picked.
+  tiers.forEach(t => { if (t && t.sale && t.sale.state === 'soon') t.sold_out = true })
   let selectedTier = tiers.find(t => !t.sold_out) || tiers[0]
   const isTicket = t => !!t && t.kind === 'ticket'
   const isCollectible = t => !!t && t.kind === 'collectible'
@@ -171,6 +173,7 @@
     if (t.sold_out) {
       if (isTicket(t) && t.event && t.event.over) return 'Event over'
       if (isVoucher(t) && t.voucher && t.voucher.over) return 'Offer ended'
+      if (t.sale && t.sale.state === 'soon') return t.sale.opens ? 'Opens ' + t.sale.opens : 'Not open yet'
       if (isCollectible(t) && t.drop && t.drop.state === 'soon') return t.drop.opens ? 'Opens ' + t.drop.opens : 'Not open yet'
       if (isCollectible(t) && t.drop && t.drop.state === 'closed') return 'Drop closed'
       return 'Sold out'
@@ -450,6 +453,22 @@
     .ca-card { display: flex; flex-direction: column; gap: 8px; border: 1px solid var(--ca-line); padding: 8px; min-width: 0; }
     .ca-card .ca-thumb { width: 100%; height: auto; aspect-ratio: 1 / 1; flex: none; border: 0; }
     .ca-card .ca-dl-btn { text-align: center; }
+    /* locked / ended items and the calendar (the "when" rules from Content) */
+    .ca-closed { opacity: .72; }
+    .ca-closed.ca-ended .ca-track-title { text-decoration: line-through; }
+    .ca-lock-ico { flex: 0 0 56px; width: 56px; height: 56px; display: flex; align-items: center; justify-content: center; text-align: center;
+                   border: 1px dashed var(--ca-line); color: var(--ca-ash); font-size: 8px; letter-spacing: 1px; text-transform: uppercase; }
+    .ca-card.ca-closed .ca-lock-ico { width: 100%; height: auto; aspect-ratio: 1 / 1; flex: none; }
+    .ca-cal-month { font-size: 10px; letter-spacing: 2px; text-transform: uppercase; color: var(--ca-ash); margin: 18px 0 8px; }
+    .ca-cal { display: grid; grid-template-columns: repeat(auto-fill, minmax(112px, 1fr)); gap: 8px; }
+    .ca-day { display: flex; flex-direction: column; gap: 4px; border: 1px solid var(--ca-line); padding: 8px; min-width: 0; }
+    .ca-day-num { font-size: 20px; line-height: 1; color: var(--ca-accent-text); }
+    .ca-day-mon { font-size: 8px; letter-spacing: 2px; text-transform: uppercase; color: var(--ca-ash); }
+    .ca-day-title { font-size: 11px; color: var(--ca-fg); overflow-wrap: anywhere; }
+    .ca-day-state { font-size: 8px; letter-spacing: 1px; text-transform: uppercase; color: var(--ca-ash); }
+    .ca-day .ca-dl-btn { text-align: center; margin-top: 4px; }
+    .ca-day.ca-open { border-color: ${accent}; }
+    .ca-day.ca-ended .ca-day-title { text-decoration: line-through; }
     .ca-track-title { font-size: 11px; margin-bottom: 3px; color: var(--ca-fg); }
     .ca-track-meta  { font-size: 8px; color: var(--ca-ash); letter-spacing: 1px; }
     .ca-dl-btn {
@@ -662,7 +681,7 @@
     #credential-widget.ca-keycard .ca-banner-text { text-shadow: 0 0 12px ${accent}55; }
     #credential-widget.ca-solid { background: var(--ca-bg); padding: 24px; border-radius: var(--ca-radius); }
     #credential-widget .ca-banner, #credential-widget .ca-drop-zone, #credential-widget .ca-modal,
-    #credential-widget .ca-field, #credential-widget .ca-tier-option, #credential-widget .ca-dl-btn, #credential-widget .ca-thumb, #credential-widget .ca-card,
+    #credential-widget .ca-field, #credential-widget .ca-tier-option, #credential-widget .ca-dl-btn, #credential-widget .ca-thumb, #credential-widget .ca-card, #credential-widget .ca-day, #credential-widget .ca-lock-ico,
     #credential-widget .ca-chat-messages, #credential-widget .ca-result, #credential-widget .ca-video-thumb,
     #credential-widget .ca-qr-video-wrap, #credential-widget .ca-submit, #credential-widget .ca-close { border-radius: var(--ca-radius); }
     #credential-widget .ca-token-input, #credential-widget .ca-chat-input { border-radius: var(--ca-radius) 0 0 var(--ca-radius); }
@@ -691,6 +710,8 @@
     #credential-widget.ca-clean .ca-panel-title { font-size: 16px; font-weight: 600; letter-spacing: 0; text-transform: none; }
     #credential-widget.ca-clean .ca-track-title { font-size: 14px; }
     #credential-widget.ca-clean .ca-track-meta { font-size: 12px; letter-spacing: 0; }
+    #credential-widget.ca-clean .ca-day-title { font-size: 13px; }
+    #credential-widget.ca-clean .ca-day-state, #credential-widget.ca-clean .ca-day-mon, #credential-widget.ca-clean .ca-cal-month, #credential-widget.ca-clean .ca-lock-ico { font-size: 11px; letter-spacing: .02em; }
     #credential-widget.ca-clean .ca-dl-btn { font-size: 12px; font-weight: 600; letter-spacing: .02em; text-transform: none; }
     #credential-widget.ca-clean .ca-video-title { font-size: 13px; letter-spacing: 0; text-transform: none; }
     #credential-widget.ca-clean .ca-video-meta { font-size: 12px; }
@@ -1505,19 +1526,101 @@
     document.getElementById('ca-panel-' + key).classList.add('active')
   }
 
+  // ── Items with a "when" rule (set in Content): locked, ended, and the calendar ──
+  function itemState(it) { return it && (it.state === 'locked' || it.state === 'ended') ? it.state : 'open' }
+  // "in 3 days" / "in 5 hours" / "in 12 min" from a UTC timestamp
+  function relIn(iso) {
+    const t = Date.parse(iso)
+    if (!isFinite(t)) return ''
+    const ms = t - Date.now()
+    if (ms <= 60000) return 'any moment now'
+    const min = Math.round(ms / 60000)
+    if (min < 60) return 'in ' + min + ' min'
+    const h = Math.round(min / 60)
+    if (h < 48) return 'in ' + h + (h === 1 ? ' hour' : ' hours')
+    const d = Math.round(h / 24)
+    return 'in ' + d + ' days'
+  }
+  function lockedWords(it) {
+    if (it.state === 'ended') return 'Ended' + (it.until_text ? ' ' + it.until_text : '')
+    const day = typeof it.day === 'number' ? (it.day > 0 ? 'Day ' + it.day + ' \u00b7 ' : '') : ''
+    const rel = relIn(it.opens_at)
+    return 'Opens ' + day + (it.opens_text || '') + (rel ? ' \u00b7 ' + rel : '')
+  }
+  // The big date of a calendar tile: from the creator's own date text (so a time zone can't shift the day)
+  function dayParts(it) {
+    if (typeof it.day === 'number') return `<div class="ca-day-num">${esc(String(it.day))}</div><div class="ca-day-mon">Day</div>`
+    const m = /^\w{3} (\d{2}) (\w{3}) (\d{4})/.exec(it.opens_text || '')
+    if (!m) return `<div class="ca-day-num">\u00b7</div><div class="ca-day-mon">any time</div>`
+    return `<div class="ca-day-num">${esc(m[1])}</div><div class="ca-day-mon">${esc(m[2])}</div>`
+  }
+  function closedHtml(it, st, layout) {
+    const label = st === 'locked' ? 'Locked' : 'Ended'
+    const name = it.title || 'A surprise'
+    const words = lockedWords(it)
+    if (layout === 'calendar') {
+      return `
+        <div class="ca-day ca-closed ca-${st}">
+          ${dayParts(it)}
+          <div class="ca-day-title">${esc(name)}</div>
+          <div class="ca-day-state">${esc(st === 'locked' ? label + (relIn(it.opens_at) ? ' \u00b7 ' + relIn(it.opens_at) : '') : words)}</div>
+        </div>`
+    }
+    if (layout === 'grid') {
+      return `
+        <div class="ca-card ca-closed ca-${st}">
+          <div class="ca-lock-ico">${label}</div>
+          <div>
+            <div class="ca-track-title">${esc(name)}</div>
+            <div class="ca-track-meta">${esc(words)}</div>
+          </div>
+        </div>`
+    }
+    return `
+        <div class="ca-track ca-closed ca-${st}">
+          <div class="ca-track-main"><div class="ca-lock-ico">${label}</div>
+            <div>
+              <div class="ca-track-title">${esc(name)}</div>
+              <div class="ca-track-meta">${esc(words)}</div>
+            </div>
+          </div>
+        </div>`
+  }
+  // Calendar: tiles in date order under month headings (a drip, "day N after joining", under one heading)
+  function calendarHtml(cells) {
+    const groups = []
+    const put = (label, html) => { let g = groups.find(x => x.label === label); if (!g) { g = { label, list: [] }; groups.push(g) } g.list.push(html) }
+    const key = c => c.it.opens_at ? Date.parse(c.it.opens_at) || 0 : -1
+    cells.map((c, i) => ({ c, i })).sort((a, b) => key(a.c) - key(b.c) || a.i - b.i).forEach(({ c }) => {
+      const it = c.it
+      let label = ''
+      if (typeof it.day === 'number') label = 'Opening over time'
+      else {
+        const m = /^\w{3} \d{2} (\w{3}) (\d{4})/.exec(it.opens_text || '')
+        label = m ? m[1] + ' ' + m[2] : 'Open now'
+      }
+      put(label, c.html)
+    })
+    return groups.map(g => `<div class="ca-cal-month">${esc(g.label)}</div><div class="ca-cal">${g.list.join('')}</div>`).join('')
+  }
+
   function buildPanel(sec) {
     const title = `<div class="ca-panel-title">${esc(sec.title || sec.key)}</div>`
 
     if (sec.type === 'links') {
-      const grid = sec.layout === 'grid'
-      const items = (sec.items || []).map(it => {
+      const layout = sec.layout === 'calendar' ? 'calendar' : sec.layout === 'grid' ? 'grid' : 'list'
+      const grid = layout === 'grid'
+      const cells = (sec.items || []).map(it => {
+        const st = itemState(it)
+        if (st !== 'open') return { it, st, html: closedHtml(it, st, layout) }
         // An uploaded file arrives as a short-lived download path on the API
         // (/member-file/…); anything else is a plain link the creator added.
         const isFile = typeof it.download === 'string' &&
                        /^\/member-file\/[a-f0-9]{24}\?t=[A-Za-z0-9_.=-]+$/.test(it.download)
         const url = isFile ? API_BASE + it.download : safeUrl(it.url)
         const fileInfo = isFile && it.file ? [it.file.name, fmtSize(it.file.size)].filter(Boolean).join(' · ') : ''
-        const meta = [it.note, fileInfo].filter(Boolean).join(' · ')
+        const until = it.until_text ? 'Until ' + it.until_text : ''
+        const meta = [it.note, fileInfo, until].filter(Boolean).join(' · ')
         // For sale: a Buy button (http/https only, opened in a new tab) replaces the download.
         const buyRaw = safeUrl(it.buy_url)
         const buyUrl = /^https?:\/\//i.test(buyRaw) ? buyRaw : ''
@@ -1539,20 +1642,32 @@
             <div class="ca-track-title">${esc(it.title)}</div>
             <div class="ca-track-meta">${esc(meta)}</div>
           </div>`
+        if (layout === 'calendar') {
+          const d = dayParts(it)
+          return { it, st, html: `
+        <div class="ca-day ca-open">
+          ${d}
+          <div class="ca-day-title">${esc(it.title)}</div>
+          ${meta ? `<div class="ca-day-state">${esc(meta)}</div>` : ''}
+          ${btn}
+        </div>` }
+        }
         if (grid) {
-          return `
+          return { it, st, html: `
         <div class="ca-card">
           ${thumb}
           ${text}
           ${btn}
-        </div>`
+        </div>` }
         }
-        return `
+        return { it, st, html: `
         <div class="ca-track">
           <div class="ca-track-main">${thumb}${text}</div>
           ${btn}
-        </div>`
-      }).join('')
+        </div>` }
+      })
+      if (layout === 'calendar') return title + calendarHtml(cells)
+      const items = cells.map(c => c.html).join('')
       return title + (grid ? `<div class="ca-grid">${items}</div>` : items)
     }
 

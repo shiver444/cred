@@ -79,6 +79,8 @@ import content_page
 import email_sender
 import email_templates
 import email_look
+import timeline
+import whats_on
 import site_reader
 import backup
 import announcements
@@ -544,6 +546,8 @@ def _signup_check(cfg: dict, tier_cfg: dict, tier: str, email: str, public: bool
             return ("event_not_ready", "This ticket isn't ready yet: the event has no date.")
         if card_kinds.is_over(ev):
             return ("event_over", "This event has already happened.")
+    if public and card_kinds.sale_state(tier_cfg) == "soon":
+        return ("sale_not_open", "This card isn't on sale yet: it opens " + card_kinds.sale_text(tier_cfg) + ".")
     if card_kinds.is_collectible(tier_cfg):
         state = card_kinds.drop_state(card_kinds.drop_of(tier_cfg))
         if state == "soon":
@@ -1197,11 +1201,11 @@ def unsubscribe_followups():
         return resp
     if request.method == "POST":
         member_registry.set_followups_off(m["credential_id"], True)
-        return _unsub_page("Done", "You won't get these follow-up emails any more. Your card and member area are not affected.")
+        return _unsub_page("Done", "You won't get these automatic emails (follow-ups and \u201csomething new opened\u201d) any more. Your card and member area are not affected.")
     form = ('<form method="post"><input type="hidden" name="id" value="%s"><input type="hidden" name="h" value="%s">'
             '<button type="submit">Stop these emails</button></form>'
             % (esc_html(m["credential_id"]), esc_html(request.values.get("h", "")[:64])))
-    return _unsub_page("Stop these emails?", "You will no longer get the follow-up emails. Your card and member area are not affected.", form)
+    return _unsub_page("Stop these emails?", "You will no longer get the automatic emails (follow-ups and \u201csomething new opened\u201d). Your card and member area are not affected.", form)
 
 
 # ── POST /verify ──
@@ -2391,6 +2395,8 @@ def admin_dashboard_save():
     ct_notes         = request.form.getlist("tier_cert_note")
     ct_bottoms       = request.form.getlist("tier_cert_bottom")
     tier_hiddens     = request.form.getlist("tier_hidden")
+    sale_ats         = request.form.getlist("tier_sale_at")
+    sale_tzs         = request.form.getlist("tier_sale_tz")
     have_kinds       = "tier_kind" in request.form
     tier_show_spots  = request.form.getlist("tier_show_spots")
     tier_per_email   = request.form.getlist("tier_per_email")
@@ -2468,9 +2474,14 @@ def admin_dashboard_save():
                 ct_titles[i] if i < len(ct_titles) else "", ct_notes[i] if i < len(ct_notes) else "",
                 ct_bottoms[i] if i < len(ct_bottoms) else "")
             hidden = (tier_hiddens[i] if i < len(tier_hiddens) else "0") == "1"
+            sale = (card_kinds.clean_sale(sale_ats[i] if i < len(sale_ats) else "", sale_tzs[i] if i < len(sale_tzs) else 0)
+                    if "tier_sale_at" in request.form else card_kinds.sale_of(old_t))
         else:
             voucher, cert = card_kinds.voucher_of(old_t), card_kinds.cert_of(old_t)
             hidden = bool(old_t.get("hidden"))
+            sale = card_kinds.sale_of(old_t)
+        if kind == "collectible":
+            sale = None       # a drop uses its own opening time
         if kind == "voucher" and not voucher["name"]:
             logo_notes.append(f"Voucher \u201c{name.upper()}\u201d needs an offer (like \u201cOne free coffee\u201d) so people know what it is for.")
         if kind == "certificate" and not cert["title"]:
@@ -2485,6 +2496,7 @@ def admin_dashboard_save():
             **({"kind": "voucher", "voucher": voucher} if kind == "voucher" else {}),
             **({"kind": "certificate", "cert": cert} if kind == "certificate" else {}),
             **({"hidden": True} if hidden else {}),
+            **({"sale_opens": sale} if sale else {}),
             "label":       (tier_labels[i] if i < len(tier_labels) else "").strip(),
             "price":       price,
             "expiry_days": expiry_days,
@@ -2813,6 +2825,7 @@ def _dashboard_page() -> str:
     def _adv_panel(t: dict) -> str:
         mode = limits.per_email_mode(t)
         show = t.get("show_spots_left", True) is not False
+        sale_v = card_kinds.sale_of(t) or {}
         def sel(cond): return "selected" if cond else ""
         return f"""
           <details class="offer-adv">
@@ -2831,6 +2844,12 @@ def _dashboard_page() -> str:
                   <option value="0" {sel(not t.get("hidden"))}>Anyone, from the sign-up list</option>
                   <option value="1" {sel(bool(t.get("hidden")))}>Only me: I give it out myself (not in the sign-up list)</option>
                 </select>
+              </div>
+              <div class="design-field sale-field">
+                <label>On sale from (optional)</label>
+                <input name="tier_sale_at" type="datetime-local" value="{esc_html(sale_v.get('at', ''))}">
+                <input type="hidden" name="tier_sale_tz" value="{esc_html(str(sale_v.get('tz', 0)))}">
+                <div class="hint">Until then people see "Opens <i>date</i>" and can't pick it. Cards you send yourself are never held back.</div>
               </div>
               <div class="design-field">
                 <label>Cards per email address</label>
@@ -3163,6 +3182,7 @@ def _dashboard_page() -> str:
   .offer.is-ticket .c-days .days-note, .offer.is-collectible .c-days .days-note, .offer.is-certificate .c-days .days-note {{ display:block; }}
   .offer .event-block, .offer .drop-block, .offer .voucher-block, .offer .cert-block {{ display:none; margin-top:14px; }}
   .offer.is-ticket .event-block, .offer.is-collectible .drop-block, .offer.is-voucher .voucher-block, .offer.is-certificate .cert-block {{ display:flex; }}
+  .offer.is-collectible .sale-field {{ display:none; }}
   .lbl-edition, .lbl-tickets, .lbl-vouchers, .lbl-certs {{ display:none; }}
   .offer.is-collectible .lbl-edition, .offer.is-ticket .lbl-tickets, .offer.is-voucher .lbl-vouchers, .offer.is-certificate .lbl-certs {{ display:inline; }}
   .offer.is-collectible .lbl-members, .offer.is-ticket .lbl-members, .offer.is-voucher .lbl-members, .offer.is-certificate .lbl-members {{ display:none; }}
@@ -3229,6 +3249,12 @@ def _dashboard_page() -> str:
   <div class="hint">Paste these two lines into the page of your site where you want the member widget. Open this dashboard at your real public address before copying, because the address below comes from the page you are on.</div>
   <pre class="embed-code" id="embed-code"></pre>
   <button type="button" class="copy-btn" id="embed-copy">Copy</button>
+
+  <h2>Your "What's on" page</h2>
+  <div class="hint">A public page that lists your events, drops and opening dates in date order, with a calendar link people can subscribe to. It only shows things that are already public. Cards marked "only I give it out" never appear.</div>
+  <pre class="embed-code" id="wo-url"></pre>
+  <a class="copy-btn" id="wo-open" href="/whats-on" target="_blank" rel="noopener" style="text-decoration:none;display:inline-block;">Open it</a>
+  <button type="button" class="copy-btn" id="wo-copy">Copy the address</button>
   </section>
 
   <form method="POST" action="/admin/dashboard" enctype="multipart/form-data">
@@ -3432,6 +3458,17 @@ def _dashboard_page() -> str:
     // closing script tag has to be assembled from pieces, since a literal
     // one inside this inline script would end it early.
     (function() {{
+      const wo = window.location.origin + '/whats-on';
+      document.getElementById('wo-url').textContent = wo;
+      document.getElementById('wo-copy').addEventListener('click', function () {{
+        const b = this;
+        const ok = () => {{ b.textContent = 'Copied \\u2713'; setTimeout(() => {{ b.textContent = 'Copy the address'; }}, 1800); }};
+        if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(wo).then(ok, () => {{}});
+        else {{ const ta = document.createElement('textarea'); ta.value = wo; document.body.appendChild(ta); ta.select();
+               try {{ document.execCommand('copy'); ok(); }} catch (e) {{}} ta.remove(); }}
+      }});
+    }})();
+    (function() {{
       const code = '<div id="credential-widget"></div>\\n<' + 'script src="' +
                    window.location.origin + '/cp.js"></' + 'script>';
       document.getElementById('embed-code').textContent = code;
@@ -3493,6 +3530,8 @@ def _dashboard_page() -> str:
         }}
         const vu = box.querySelector('[name="tier_voucher_until"]'), vz = box.querySelector('[name="tier_voucher_tz"]');
         if (vu && vz && vu.value) {{ const w = new Date(vu.value); if (!isNaN(w)) vz.value = String(w.getTimezoneOffset()); }}
+        const sa = box.querySelector('[name="tier_sale_at"]'), sz = box.querySelector('[name="tier_sale_tz"]');
+        if (sa && sz && sa.value) {{ const w = new Date(sa.value); if (!isNaN(w)) sz.value = String(w.getTimezoneOffset()); }}
         const o = box.querySelector('[name="tier_drop_opens"]'), c = box.querySelector('[name="tier_drop_closes"]'), dz = box.querySelector('[name="tier_drop_tz"]');
         const dv = o && o.value ? o.value : (c && c.value ? c.value : '');
         if (dz && dv) {{ const w = new Date(dv); if (!isNaN(w)) dz.value = String(w.getTimezoneOffset()); }}
@@ -3502,7 +3541,7 @@ def _dashboard_page() -> str:
         const box = boxOf(e.target);
         if (!box) return;
         if (e.target.name === 'tier_kind') {{ sync(box, true); return; }}
-        if (e.target.name === 'tier_event_start' || e.target.name === 'tier_drop_opens' || e.target.name === 'tier_drop_closes' || e.target.name === 'tier_voucher_until') setTz(box);
+        if (e.target.name === 'tier_event_start' || e.target.name === 'tier_drop_opens' || e.target.name === 'tier_drop_closes' || e.target.name === 'tier_voucher_until' || e.target.name === 'tier_sale_at') setTz(box);
       }});
       body.addEventListener('click', (e) => {{
         if (e.target.classList.contains('remove-tier')) {{ boxOf(e.target).remove(); refresh(); }}
@@ -4180,7 +4219,8 @@ def get_config():
                         **({"kind": "ticket", "event": card_kinds.public_event(t)} if card_kinds.is_ticket(t) else {}),
                         **({"kind": "collectible", "drop": card_kinds.public_drop(t)} if card_kinds.is_collectible(t) else {}),
                         **({"kind": "voucher", "voucher": card_kinds.public_voucher(t)} if card_kinds.is_voucher(t) else {}),
-                        **({"kind": "certificate", "cert": card_kinds.public_cert(t)} if card_kinds.is_certificate(t) else {})}
+                        **({"kind": "certificate", "cert": card_kinds.public_cert(t)} if card_kinds.is_certificate(t) else {}),
+                        **({"sale": card_kinds.public_sale(t)} if card_kinds.public_sale(t) else {})}
                        for t in shown]
     # An optional locked preview of the members-only content: item titles only,
     # for the sections the creator marked as a teaser (never links or files).
@@ -4291,7 +4331,14 @@ def member_content():
             sec = dict(sec)
             if sec.get("type") == "links":
                 items = []
+                mystery = sec.get("locked_view") == "mystery"
                 for it in sec.get("items", []):
+                    if timeline.is_scheduled(it):
+                        st = timeline.state(it, entry.get("issued_at"))
+                        if st != "open":
+                            items.append(timeline.closed_item(it, st, entry.get("issued_at"), mystery))
+                            continue
+                        it = timeline.open_item(it, entry.get("issued_at"))
                     it = dict(it)
                     f = it.pop("file", None)
                     pv = it.pop("preview", None)
@@ -4370,7 +4417,7 @@ def member_preview(pid):
         return r
     cid = _check_file_token(request.args.get("t", ""), pid)
     entry = _member_entry(cid) if cid else None
-    if not entry or not content_store.find_preview_item(content_store.load(), pid, entry.get("sections", [])):
+    if not entry or not content_store.find_preview_item(content_store.load(), pid, entry.get("sections", []), entry.get("issued_at")):
         return denied()
     return _send_thumb(pid)
 
@@ -4392,7 +4439,7 @@ def member_file(fid):
     entry = _member_entry(cid) if cid else None
     if not entry:
         return denied()
-    item = content_store.find_file_item(content_store.load(), fid, entry.get("sections", []))
+    item = content_store.find_file_item(content_store.load(), fid, entry.get("sections", []), entry.get("issued_at"))
     path = content_store.path_for(fid)
     if not item or path is None or not path.is_file():
         return denied()
@@ -4468,6 +4515,39 @@ def members_page_builtin():
     return resp
 
 
+# ── GET /whats-on and /whats-on.ics ──
+# A public page (and calendar feed) listing what is coming up by date. Built
+# only from things the sign-up list already shows, plus the opening dates of
+# locked-preview items; see whats_on.py. Cards marked "only I give it out" never appear.
+def _whats_on_rows():
+    cfg = config_store.read_config() or {}
+    try:
+        content = content_store.load()
+    except Exception:
+        content = {"sections": []}
+    return cfg, whats_on.entries(cfg, content)
+
+@app.route("/whats-on", methods=["GET"])
+def whats_on_page():
+    cfg, rows = _whats_on_rows()
+    name = str(cfg.get("creator_name") or "Members")
+    members = public_url.effective_members_page(cfg.get("members_page")) or "/members"
+    html = whats_on.render_page(rows, name, str(cfg.get("accent_color") or ""), public_url.base_url(), members)
+    resp = make_response(html)
+    resp.headers["Content-Type"] = "text/html; charset=utf-8"
+    resp.headers["Cache-Control"] = "no-cache"
+    return resp
+
+@app.route("/whats-on.ics", methods=["GET"])
+def whats_on_ics():
+    cfg, rows = _whats_on_rows()
+    name = str(cfg.get("creator_name") or "Members")
+    resp = make_response(whats_on.render_ics(rows, name))
+    resp.headers["Content-Type"] = "text/calendar; charset=utf-8"
+    resp.headers["Cache-Control"] = "no-cache"
+    return resp
+
+
 @app.route("/cp.js", methods=["GET"])
 def serve_widget():
     from flask import send_file
@@ -4493,6 +4573,25 @@ def _send_followup(entry: dict, step: dict) -> bool:
         step["n"], entry.get("holder_name", ""), entry.get("holder_email", ""), entry.get("tier", ""),
         entry["credential_id"], entry.get("bundle_hash", ""))
 
+def _send_newitem(entry: dict, titles: list) -> bool:
+    return email_sender.send_newitem_email(
+        entry.get("holder_name", ""), entry.get("holder_email", ""), entry.get("tier", ""),
+        entry["credential_id"], entry.get("bundle_hash", ""), titles)
+
+def _newitem_since(cfg: dict, now):
+    """When the "something new opened" email was switched on (None while it is off).
+    Remembered, so switching it on never announces things that opened earlier."""
+    saved = _read_config_file()
+    if email_templates.clean_on(cfg.get("newitem_on"), False) != "1":
+        if saved.get("newitem_since"):
+            save_config({"newitem_since": ""})
+        return None
+    since = reminders._parse(saved.get("newitem_since"))
+    if since is None:
+        save_config({"newitem_since": now.isoformat()})
+        return now
+    return since
+
 def run_reminders_now(now=None) -> dict:
     """One pass of the reminder jobs (access ending, event starting soon, follow-ups);
     returns {"sent": n, "failed": n} for both together."""
@@ -4511,6 +4610,10 @@ def run_reminders_now(now=None) -> dict:
     steps = email_templates.follow_steps(cfg)
     if steps:
         r = reminders.run_followups_once(steps, _send_followup, now)
+        out["sent"] += r["sent"]; out["failed"] += r["failed"]
+    since = _newitem_since(cfg, now or datetime.now(timezone.utc))
+    if since is not None:
+        r = reminders.run_newitems_once(content_store.load(), since, _send_newitem, now)
         out["sent"] += r["sent"]; out["failed"] += r["failed"]
     return out
 

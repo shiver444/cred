@@ -346,3 +346,42 @@ def detail_of(tier) -> dict:
     if is_certificate(tier):
         return card_cert(tier)
     return {}
+
+
+# ── "On sale from" (any card kind) ──
+# A tier can keep `sale_opens` = {"at": "YYYY-MM-DDTHH:MM", "tz": minutes}: before
+# that moment the card shows "Opens <date>" in the sign-up list and cannot be
+# picked. It only holds back the public sign-up list; a card you give out
+# yourself ("Send a card") is never held back. A collectible keeps using its own
+# drop opening time instead.
+
+def clean_sale(at="", tz=0):
+    """{"at","tz"} for a valid date, else None (no sale date)."""
+    a = _local(at)
+    return {"at": a, "tz": _tz(tz)} if a else None
+
+
+def sale_of(tier):
+    t = tier.get("sale_opens") if isinstance(tier, dict) else None
+    return clean_sale(t.get("at"), t.get("tz")) if isinstance(t, dict) else None
+
+
+def sale_state(tier, now=None) -> str:
+    """"soon" (not on sale yet) or "open"."""
+    sale = sale_of(tier)
+    if not sale or is_collectible(tier):
+        return "open"
+    now = now or datetime.now(timezone.utc)
+    return "soon" if _utc(sale["at"], sale["tz"]) > now else "open"
+
+
+def sale_text(tier) -> str:
+    sale = sale_of(tier)
+    return _stamp(sale["at"]) if sale else ""
+
+
+def public_sale(tier) -> dict:
+    """What the sign-up list is told: {} when there is no pending sale date."""
+    if sale_state(tier) != "soon":
+        return {}
+    return {"state": "soon", "opens": sale_text(tier)}

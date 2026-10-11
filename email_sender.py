@@ -870,6 +870,60 @@ def send_followup_email(step, to_name, to_email, tier, credential_id, bundle_has
     return ok
 
 
+def _items_text(titles) -> str:
+    """"A", "A and B", "A, B and C", "A, B, C and 2 more" (never more than a few)."""
+    t = [str(x).strip() for x in (titles or []) if str(x).strip()]
+    n = email_templates.NEWITEM_MAX_TITLES
+    if not t:
+        return "something new"
+    if len(t) == 1:
+        return t[0]
+    shown, rest = t[:n], len(t) - n
+    if rest > 0:
+        return ", ".join(shown) + f" and {rest} more"
+    return ", ".join(shown[:-1]) + " and " + shown[-1]
+
+
+def build_newitem_email(to_name, tier, credential_id, bundle_hash, titles, overrides: dict = None,
+                        link_base=None, unsub_base=None) -> dict:
+    """"Something new just opened": the creator's wording, the titles, a button to
+    the member area and a "stop these emails" link."""
+    _refresh_branding()
+    subj_t, text_t = _tpl("newitem", overrides, email_templates.DEFAULT_NEWITEM_SUBJECT,
+                          email_templates.DEFAULT_NEWITEM_TEXT)
+    titles = list(titles or [])
+    values = {"name": to_name, "tier": tier, "creator": CREATOR_NAME, "brand": CARD_TITLE,
+              "items": _items_text(titles), "count": str(max(1, len(titles)))}
+    intro = _fill(text_t, values)
+    link = _personal_link(credential_id, bundle_hash, link_base)
+    stop = unsubscribe_link(credential_id, bundle_hash, unsub_base)
+    stop_html = (f'<div style="font-size:11px;line-height:1.6;color:#8a8176;margin-top:12px;">'
+                 f'You get this because you hold a {_esc(tier)} card from {_esc(CREATOR_NAME)}. '
+                 f'<a href="{_esc(stop, quote=True)}" style="color:#8a8176;">Stop these emails</a></div>')
+    html_body = _shell("Something new", intro, [], link, "◈ Open member area", extra_html=stop_html)
+    plain = (f"{CREATOR_NAME.upper()} — {CARD_TITLE.upper()}\n\n{intro}\n\n{link}\n\n"
+             f"Stop these emails: {stop}\n")
+    return {"subject": _one_line(_fill(subj_t, values)), "html": html_body, "text": plain,
+            "link": link, "unsubscribe": stop}
+
+
+def send_newitem_email(to_name, to_email, tier, credential_id, bundle_hash, titles) -> bool:
+    if not BREVO_API_KEY:
+        return False
+    msg = build_newitem_email(to_name, tier, credential_id, bundle_hash, titles)
+    payload = {
+        "sender": {"name": FROM_NAME, "email": FROM_EMAIL},
+        "to": [{"email": to_email, "name": to_name}],
+        "subject": msg["subject"], "htmlContent": msg["html"], "textContent": msg["text"],
+    }
+    if msg["unsubscribe"].startswith("http"):
+        payload["headers"] = {"List-Unsubscribe": f"<{msg['unsubscribe']}>",
+                              "List-Unsubscribe-Post": "List-Unsubscribe=One-Click"}
+    ok, detail = _post_to_brevo(payload)
+    print(f"{'✔ New-item email sent to' if ok else '❌ New-item email failed for'} {to_email}" + ("" if ok else f": {detail}"))
+    return ok
+
+
 def build_ended_email(to_name, tier, overrides: dict = None) -> dict:
     """The note a member gets when the creator revokes their card."""
     _refresh_branding()
@@ -938,6 +992,10 @@ def preview_kind(kind: str, tier: str, overrides: dict = None) -> dict:
         return build_lostlink_email(d["to_name"], [(tier, d["credential_id"], d["bundle_hash"])], overrides, base)
     if kind == "ended":
         return build_ended_email(d["to_name"], tier, overrides)
+    if kind == "newitem":
+        return build_newitem_email(d["to_name"], tier, d["credential_id"], d["bundle_hash"],
+                                   ["Door 12", "Door 13"], overrides, base,
+                                   (public_url.base_url() or "https://your-site.example"))
     if kind.startswith("follow") and kind[6:].isdigit():
         return build_followup_email(int(kind[6:]), d["to_name"], tier, d["credential_id"], d["bundle_hash"], overrides, base,
                                     (public_url.base_url() or "https://your-site.example"))

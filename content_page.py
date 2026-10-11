@@ -103,6 +103,12 @@ _TEMPLATE = r"""<!DOCTYPE html>
   .sale { display:flex; gap:8px; flex-wrap:wrap; }
   .sale > div { flex:1 1 160px; }
   .sale > div.price { flex:0 1 120px; }
+  .when-box summary { cursor:pointer; color:var(--accent-text); font-size:12px; margin:4px 0; }
+  .when-row { display:flex; gap:8px; flex-wrap:wrap; align-items:flex-end; margin-top:6px; }
+  .when-row > div { flex:1 1 160px; }
+  .when-row > div.narrow { flex:0 1 120px; }
+  .spread-box { border:1px dashed var(--dash); padding:8px 12px; margin:10px 0; }
+  .spread-box summary { cursor:pointer; color:var(--accent-text); font-size:12px; }
   #storage-info { border:1px solid var(--line); background:var(--panel); padding:14px 16px; margin:14px 0; border-radius:var(--radius, 0); }
   .stor-head { display:flex; justify-content:space-between; gap:10px; align-items:baseline; flex-wrap:wrap; font-size:12px; color:var(--fg); }
   .stor-head span { color:var(--muted); font-size:11px; }
@@ -322,13 +328,136 @@ __THEME__</style></head>
     return wrap;
   }
 
+  // ── "When does it open?" (timeline.py is the server side of this) ──
+  function pad2(n) { return (n < 10 ? '0' : '') + n; }
+  function localStamp(d) { return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate()) + 'T' + pad2(d.getHours()) + ':' + pad2(d.getMinutes()); }
+  function tomorrowAt9() { var d = new Date(); d.setDate(d.getDate() + 1); d.setHours(9, 0, 0, 0); return localStamp(d); }
+  function tzOf(v) { var d = new Date(v); return isNaN(d.getTime()) ? 0 : d.getTimezoneOffset(); }
+  function daysIn(y, m0) { return new Date(y, m0 + 1, 0).getDate(); }
+  // `count` typed dates from `start` ("YYYY-MM-DDTHH:MM"), one per step: the same rule as timeline.spread
+  function spreadDates(count, start, step) {
+    var m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/.exec(start || '');
+    if (!m || ['day', 'week', 'month'].indexOf(step) < 0) return [];
+    var y = +m[1], mo = +m[2] - 1, dd = +m[3], hh = +m[4], mi = +m[5], out = [];
+    for (var i = 0; i < Math.min(count, 400); i++) {
+      var Y, M, D;
+      if (step === 'month') {
+        var t = mo + i; Y = y + Math.floor(t / 12); M = t % 12; D = Math.min(dd, daysIn(Y, M));
+      } else {
+        var d = new Date(y, mo, dd + i * (step === 'week' ? 7 : 1), hh, mi); Y = d.getFullYear(); M = d.getMonth(); D = d.getDate();
+      }
+      out.push(Y + '-' + pad2(M + 1) + '-' + pad2(D) + 'T' + pad2(hh) + ':' + pad2(mi));
+    }
+    return out;
+  }
+  function itemWhen(it) {
+    var wrap = el('div', { class: 'wide' });
+    var box = el('details', { class: 'when-box' });
+    var mode = it.opens && it.opens.mode ? it.opens.mode : 'now';
+    if (it.opens || it.until) box.setAttribute('open', '');
+    box.appendChild(el('summary', { text: 'When does it open? (optional)' }));
+    var sel = el('select', { 'data-role': 'when-mode' }, [
+      el('option', { value: 'now', text: 'Right away' }),
+      el('option', { value: 'date', text: 'On a date' }),
+      el('option', { value: 'after', text: 'Some days after the person joins' })
+    ]);
+    sel.value = mode;
+    sel.addEventListener('change', function () {
+      if (sel.value === 'now') delete it.opens;
+      else if (sel.value === 'date') it.opens = { mode: 'date', at: tomorrowAt9(), tz: tzOf(tomorrowAt9()) };
+      else it.opens = { mode: 'after', days: 7 };
+      touch(); render();
+    });
+    var row = el('div', { class: 'when-row' }, [el('div', {}, [el('label', { text: 'Opens' }), sel])]);
+    if (mode === 'date') {
+      var di = el('input', { type: 'datetime-local', 'data-role': 'when-date' });
+      di.value = it.opens.at || '';
+      di.addEventListener('change', function () { it.opens = { mode: 'date', at: di.value, tz: tzOf(di.value) }; touch(); });
+      row.appendChild(el('div', {}, [el('label', { text: 'Date and time (your time)' }), di]));
+    } else if (mode === 'after') {
+      var ni = el('input', { type: 'number', min: '0', max: '3650', step: '1', 'data-role': 'when-days' });
+      ni.value = String(it.opens.days == null ? 0 : it.opens.days);
+      ni.addEventListener('input', function () { it.opens = { mode: 'after', days: Math.max(0, Math.min(3650, parseInt(ni.value, 10) || 0)) }; touch(); });
+      var nd = el('div', { class: 'narrow' }, [el('label', { text: 'Days after joining' }), ni]);
+      row.appendChild(nd);
+    }
+    var hasEnd = !!it.until;
+    var ck = el('input', { type: 'checkbox', style: 'width:auto', 'data-role': 'when-until-on' });
+    ck.checked = hasEnd;
+    ck.addEventListener('change', function () {
+      if (ck.checked) { var d = new Date(); d.setDate(d.getDate() + 30); d.setHours(0, 0, 0, 0); var v = localStamp(d); it.until = { at: v, tz: tzOf(v) }; }
+      else delete it.until;
+      touch(); render();
+    });
+    box.appendChild(row);
+    var row2 = el('div', { class: 'when-row' }, [
+      el('label', { style: 'display:flex;gap:8px;align-items:center;text-transform:none;letter-spacing:0;margin:0' }, [ck, el('span', { text: 'It closes again on a date' })])
+    ]);
+    if (hasEnd) {
+      var ui = el('input', { type: 'datetime-local', 'data-role': 'when-until' });
+      ui.value = it.until.at || '';
+      ui.addEventListener('change', function () { it.until = { at: ui.value, tz: tzOf(ui.value) }; touch(); });
+      row2.appendChild(el('div', {}, [ui]));
+    }
+    box.appendChild(row2);
+    box.appendChild(el('div', { class: 'hint', text: 'Until it opens, members see the date (and the title, unless the section hides it). They get no link, file or note before then.' }));
+    wrap.appendChild(box);
+    return wrap;
+  }
+  // "Spread dates": fill in one opening date per item, in order
+  function spreadBox(sec) {
+    var box = el('details', { class: 'spread-box' });
+    box.appendChild(el('summary', { text: 'Spread dates over all items (a calendar, a weekly lesson…)' }));
+    var kind = el('select', { 'data-role': 'sp-kind' }, [
+      el('option', { value: 'date', text: 'On dates' }),
+      el('option', { value: 'after', text: 'Days after the person joins' })
+    ]);
+    var start = el('input', { type: 'datetime-local', 'data-role': 'sp-start' }); start.value = tomorrowAt9();
+    var step = el('select', { 'data-role': 'sp-step' }, [
+      el('option', { value: 'day', text: 'every day' }), el('option', { value: 'week', text: 'every week' }),
+      el('option', { value: 'month', text: 'every month (same day)' })
+    ]);
+    var day0 = el('input', { type: 'number', min: '0', max: '3650', 'data-role': 'sp-day0' }); day0.value = '0';
+    var every = el('input', { type: 'number', min: '1', max: '3650', 'data-role': 'sp-every' }); every.value = '7';
+    var info = el('div', { class: 'upmsg', 'data-role': 'sp-msg' });
+    var dateRow = el('div', { class: 'when-row' }, [el('div', {}, [el('label', { text: 'First opens' }), start]), el('div', {}, [el('label', { text: 'Then' }), step])]);
+    var afterRow = el('div', { class: 'when-row' }, [el('div', { class: 'narrow' }, [el('label', { text: 'First on day' }), day0]), el('div', { class: 'narrow' }, [el('label', { text: 'Then every (days)' }), every])]);
+    function show() { dateRow.style.display = kind.value === 'date' ? '' : 'none'; afterRow.style.display = kind.value === 'after' ? '' : 'none'; }
+    kind.addEventListener('change', show); show();
+    var apply = el('button', { type: 'button', class: 'small', 'data-role': 'sp-apply', text: 'Fill in the dates', on: { click: function () {
+      var items = sec.items || [];
+      if (!items.length) { info.className = 'upmsg err'; info.textContent = 'Add the items first.'; return; }
+      if (kind.value === 'date') {
+        var ds = spreadDates(items.length, start.value, step.value);
+        if (!ds.length) { info.className = 'upmsg err'; info.textContent = 'Pick the first date.'; return; }
+        items.forEach(function (it, i) { it.opens = { mode: 'date', at: ds[i], tz: tzOf(ds[i]) }; });
+      } else {
+        var d0 = Math.max(0, parseInt(day0.value, 10) || 0), ev = Math.max(1, parseInt(every.value, 10) || 1);
+        items.forEach(function (it, i) { it.opens = { mode: 'after', days: Math.min(3650, d0 + i * ev) }; });
+      }
+      touch(); render();
+    } } });
+    var clear = el('button', { type: 'button', class: 'small', 'data-role': 'sp-clear', text: 'Clear all dates', on: { click: function () {
+      (sec.items || []).forEach(function (it) { delete it.opens; delete it.until; }); touch(); render();
+    } } });
+    box.appendChild(kind); box.appendChild(dateRow); box.appendChild(afterRow);
+    box.appendChild(el('div', { class: 'when-row' }, [apply, clear]));
+    box.appendChild(info);
+    box.appendChild(el('div', { class: 'hint', text: 'This only writes one date on each item (you can still change any of them). Nothing repeats by itself later.' }));
+    return box;
+  }
+
   function renderLinks(sec) {
     var box = el('div');
     box.appendChild(field('Button text on each item (optional, e.g. "↓ Download")', sec, 'button', { max: 30 }));
-    var lay = el('select', {}, [el('option', { value: 'list', text: 'A list' }), el('option', { value: 'grid', text: 'A grid of pictures' })]);
-    lay.value = sec.layout === 'grid' ? 'grid' : 'list';
+    var lay = el('select', { 'data-role': 'layout' }, [el('option', { value: 'list', text: 'A list' }), el('option', { value: 'grid', text: 'A grid of pictures' }), el('option', { value: 'calendar', text: 'A calendar (by opening date)' })]);
+    lay.value = sec.layout === 'grid' || sec.layout === 'calendar' ? sec.layout : 'list';
     lay.addEventListener('change', function () { sec.layout = lay.value; touch(); });
     box.appendChild(el('div', {}, [el('label', { text: 'Show the items as' }), lay]));
+    var lv = el('select', { 'data-role': 'locked-view' }, [el('option', { value: 'title', text: 'Its title and date' }), el('option', { value: 'mystery', text: 'Only the date (a mystery)' })]);
+    lv.value = sec.locked_view === 'mystery' ? 'mystery' : 'title';
+    lv.addEventListener('change', function () { if (lv.value === 'mystery') sec.locked_view = 'mystery'; else delete sec.locked_view; touch(); });
+    box.appendChild(el('div', {}, [el('label', { text: 'Before an item opens, members see' }), lv]));
     var tz = el('input', { type: 'checkbox', style: 'width:auto' });
     tz.checked = !!sec.teaser;
     tz.addEventListener('change', function () { if (tz.checked) sec.teaser = true; else delete sec.teaser; touch(); });
@@ -336,12 +465,14 @@ __THEME__</style></head>
       tz, el('span', { text: 'Show the item titles to visitors as a locked preview (no links, files or notes)' })
     ]));
     sec.items = sec.items || [];
+    if (sec.items.length) box.appendChild(spreadBox(sec));
     if (!sec.items.length) box.appendChild(el('div', { class: 'empty', text: 'No items yet.' }));
     sec.items.forEach(function (it, i) {
       box.appendChild(el('div', { class: 'item' }, [
         el('div', { class: 'fields' }, [
           field('Title', it, 'title', { max: 160, placeholder: 'Episode 12 — Raw Footage' }),
           itemSource(it),
+          itemWhen(it),
           itemPreview(it),
           field('Short note (optional)', it, 'note', { wide: true, placeholder: 'Raw footage, 12 minutes' }),
           itemSale(it)
