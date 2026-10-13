@@ -86,7 +86,7 @@ can revoke any of them at any time.
   a countdown, or just "a surprise"). "Spread dates" fills a whole calendar in one go. An optional
   "something new opened" email, an "On sale from" date on any card, and a public "What's on" page with a
   calendar link.
-- Recipes: six plain-question starting points (membership with weekly/monthly/yearly/custom length, event ticket, collectible or numbered edition for photo sets, bottles, albums and prints, collect-and-reward, discount codes, certificate) that build the cards, rewards and codes for you
+- Recipes: seven plain-question starting points (membership with weekly/monthly/yearly/custom length, event ticket, collectible or numbered edition for photo sets, bottles, albums and prints, release in parts (an EP: a new part opens every week, a bonus for those who collect them all), collect-and-reward, discount codes, certificate) that build the cards, rewards and codes for you
 - Sets: pick the cards to collect (every one, any few, or the same card several times) and a reward (a card, or a voucher such as "15% off" created right there); whoever completes it automatically gets the reward
   (one email), and members see "3 of 5" progress with a slot for each card on their member page.
 - Claim codes: make batches of one-time codes (CSV or a printable QR sheet) that give a card to whoever claims them, optionally with a fixed number per code (bottle 112 = #112)

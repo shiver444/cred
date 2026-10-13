@@ -4978,12 +4978,26 @@ def admin_recipes_make():
         updates["sets"] = cleaned
     code_batch = None
     c = p.get("codes")
+    shelves = p.get("sections") or []
     with _claim_lock:
         data = _claims_load() if c else None
         if c:
             code_batch, made, problem = claim_codes.make_batch(data, c["name"], c["tier"], c["count"], c["numbered"], c["start"], c["size"], [])
             if problem:
                 return err(problem)
+        if shelves:
+            # Empty shelves in Content for the new cards to unlock (the creator adds the files there afterwards).
+            try:
+                content = content_store.load()
+                have = {x.get("key") for x in (content.get("sections") or [])}
+                if any(x["key"] in have for x in shelves):
+                    return err("Those Content sections already exist. Try again.")
+                stored, _w = content_store.save({"sections": list(content.get("sections") or []) + shelves})
+                if not all(x["key"] in {y.get("key") for y in stored.get("sections", [])} for x in shelves):
+                    return err("The Content sections could not be made. Nothing was changed.", 500)
+            except Exception as e:
+                print(f"❌ Recipe: the Content sections could not be saved: {e}")
+                return err("The Content sections could not be saved. Nothing was changed.", 500)
         save_config(updates)
         if c:
             try:
@@ -5005,6 +5019,8 @@ def admin_recipes_make():
         nxt.append({"label": "Set up payment", "url": "/admin/dashboard#/s/payment", "note": "Paid cards need a way to be paid: set it up here."})
     if p["tiers"] and p["tiers"][0].get("kind") == "ticket":
         nxt.append({"label": "Open check-in", "url": "/admin/checkin", "note": "On the day, scan or look up tickets here."})
+    if shelves:
+        nxt.insert(0, {"label": "Add the music (or photos, videos)", "url": "/admin/content", "note": "Each part has its own empty shelf here. Put the files in the right one."})
     if p.get("set"):
         nxt.append({"label": "See the set", "url": "/admin/sets", "note": "Shows how many people are collecting and who got the reward."})
     nxt.append({"label": "See your cards", "url": "/admin/dashboard#/s/tiers", "note": "Change the look, the price, the wording and more."})

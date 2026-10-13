@@ -296,6 +296,14 @@ press the button: the cards, rewards and codes behind it are built for you, and 
   ticked by default: each code then carries its own number (bottle 37's code always gives No. 37) and the next batch starts
   from another number. Untick it for a collectible with no numbers: you can leave the copies empty for no limit, and the
   codes are plain.
+- **Release in parts:** for an EP, a photo book or a course where a new part opens every week. Give the release a name, list the
+  parts separated by commas ("Song 1, Song 2, Song 3, Song 4"), say when the first one opens (empty = right now) and how often
+  a new one opens (every week, every day, every two weeks, every 30 days, or a number of days), and the price of each part (0 =
+  free). It makes one collectible card per part (not numbered, each opening on its own date), one empty **shelf** in Content
+  for each part, and, if you leave the bonus ticked, a hidden bonus card that is given out by itself to everyone who
+  collects all the parts. The bonus unlocks every part, its own "extras" shelf (for example the 2 bonus tracks) and anything
+  already in Content that you tick. Afterwards open **Content** and put the music in the right shelves. Fans claim each part
+  themselves once it has opened, so tell them on the Bulletin board or by email when a new part is out.
 - **Collect and get a reward:** the same card several times, or several different cards (all or any few); the reward is a voucher
   such as "15% off your next order" that is created for you. It also lets people get the card to collect more than once.
 - **Discount or gift codes:** one-time codes for an offer; put one on each receipt, package or flyer.

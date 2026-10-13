@@ -12,21 +12,23 @@ returns either {"problem": "what to fix, in plain words"} or what to create:
      "edits":  {CARD NAME: {changes to an existing card}} (only the "collect" recipe, to allow repeat sign-ups),
      "set":    a raw set dict for card_sets.clean (or None),
      "codes":  {"name", "tier", "count", "numbered", "start", "size"} (or None),
+     "sections": [empty Content sections ("shelves") to add, only the "series" recipe],
      "lines":  ["what was made", ...]}
 
 credential_api.py (`POST /admin/recipes/make`) saves it. Nothing is saved when anything is wrong.
 
-The six recipes: membership, ticket, edition (numbered bottles / albums / prints), collect (collect and get a
+The seven recipes: membership, ticket, edition (collectible, numbered or not: bottles / albums / prints), series
+(release in parts, a new part opens every week, a bonus for those who collect them all), collect (collect and get a
 reward), discount (one-time discount or gift codes), certificate.
 """
 
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import card_kinds
 import limits
 
-RECIPES = ("membership", "ticket", "edition", "collect", "discount", "certificate")
+RECIPES = ("membership", "ticket", "edition", "series", "collect", "discount", "certificate")
 MAX_NAME = 40                 # the card's internal name (capitals)
 MAX_LABEL = 60                # what people see
 MAX_CODES = 1000              # one batch of claim codes (claim_codes.MAX_PER_BATCH)
@@ -254,6 +256,100 @@ def _edition(a, ctx):
         lines.append(f"{count} numbered codes for your labels (numbers {start} to {start + count - 1})" if numbered
                      else f"{count} codes to print or send (no numbers)")
     return {"tiers": [tier], "set": None, "codes": codes, "lines": lines, "price": price}
+
+
+# ── 3b. Release in parts (an EP, a photo book, a course: a new part opens every week) ──
+MAX_PARTS = 12
+GAPS = {"weekly": 7, "daily": 1, "biweekly": 14, "monthly": 30}
+
+
+def _slug(title, taken) -> str:
+    """A Content section key (lowercase letters, numbers, - or _; up to 32) that is not in `taken`."""
+    base = re.sub(r"[^a-z0-9]+", "-", str(title).lower()).strip("-")[:28] or "part"
+    key, n = base, 2
+    while key in taken:
+        suffix = f"-{n}"
+        key, n = base[:32 - len(suffix)] + suffix, n + 1
+    return key
+
+
+def _series(a, ctx):
+    name = text(a.get("name"), MAX_LABEL)
+    if not name:
+        return {"problem": "Give the release a name, for example \"Midnight EP\"."}
+    names, seen = [], set()
+    for raw in str(a.get("parts") if a.get("parts") is not None else "").replace("\n", ",").split(","):
+        n = text(raw, 40, commas=False)
+        if n and n.upper() not in seen:
+            seen.add(n.upper())
+            names.append(n)
+    if not 2 <= len(names) <= MAX_PARTS:
+        return {"problem": f"List the parts, separated by commas: at least 2 and at most {MAX_PARTS}. For example \"Song 1, Song 2, Song 3, Song 4\"."}
+    price = money(a.get("price"))
+    if price is None:
+        return {"problem": "The price must be a number (0 for free)."}
+    gap = str(a.get("gap") or "weekly")
+    if gap == "custom":
+        days = whole(a.get("gap_days"), 1, 365)
+        if days is None:
+            return {"problem": "How many days between parts? Enter a whole number from 1 to 365."}
+    elif gap in GAPS:
+        days = GAPS[gap]
+    else:
+        return {"problem": "Choose how often a new part opens."}
+    tz = card_kinds._tz(a.get("tz") or 0)
+    first = card_kinds._local(a.get("starts_at"))
+    if str(a.get("starts_at") or "").strip() and not first:
+        return {"problem": "When does the first part open? Pick a date and time, or leave it empty for right now."}
+    if first:
+        base = datetime.strptime(first, "%Y-%m-%dT%H:%M")
+        first_text = f"on {base.strftime('%d %b %Y, %H:%M')}"
+    else:
+        # right now, in the creator's own time (tz = minutes behind UTC, as a browser reports it)
+        base = (datetime.now(timezone.utc) - timedelta(minutes=tz)).replace(tzinfo=None, second=0, microsecond=0)
+        first_text = "right away"
+    bonus_on = a.get("bonus") is not False and str(a.get("bonus")).strip().lower() not in ("0", "false", "no", "off")
+    bonus_name = text(a.get("bonus_name"), MAX_LABEL) or text(f"{name} Deluxe", MAX_LABEL)
+    numbered = bonus_on and flag(a.get("bonus_numbered"))
+    bonus_size = None
+    if numbered:
+        bonus_size = whole(a.get("bonus_size"), 1, limits.MAX_MEMBERS_CEILING)
+        if bonus_size is None:
+            return {"problem": "How many numbered bonus editions will there be? Enter a whole number (for example 100), or untick the numbering."}
+    taken_keys = {str(k) for k in (ctx.get("sections") or {})}
+    if len(taken_keys) + len(names) + (1 if bonus_on else 0) > 30:
+        return {"problem": "You have too many sections in Content already to add more. Remove some you don't use first."}
+    shelves, tiers, taken_names = [], [], _names(ctx["tiers"])
+    for i, part in enumerate(names):
+        label = text(f"{name}: {part}", MAX_LABEL)
+        key = _slug(label, taken_keys | {x["key"] for x in shelves})
+        shelves.append({"key": key, "title": text(label, 80), "type": "links", "button": "", "layout": "list", "items": []})
+        opens = "" if (i == 0 and not first) else (base + timedelta(days=days * i)).strftime("%Y-%m-%dT%H:%M")
+        tier = {"name": unique_name(label, taken_names + _names(tiers)), "kind": "collectible", "label": label, "price": price,
+                "expiry_days": FOREVER, "sections": [key], "per_email": "one_ever",
+                "drop": card_kinds.clean_drop(label, opens, "", "", tz, "", False)}
+        tiers.append(tier)
+    lines = [f"Release “{name}”: {len(names)} parts, a new one opens every {days} days, starting {first_text}"]
+    for t in tiers:
+        d = t["drop"]
+        lines.append(f"{t['label']}" + (f" (opens {card_kinds._stamp(d['opens_at'])})" if d["opens_at"] else " (open now)"))
+    lines.append(f"{len(names)} empty shelves in Content, one for each part: put the music, photos or videos there")
+    s, bonus_tier = None, None
+    if bonus_on:
+        bkey = _slug(f"{bonus_name} extras", taken_keys | {x["key"] for x in shelves})
+        shelves.append({"key": bkey, "title": text(f"{bonus_name}: extras", 80), "type": "links", "button": "", "layout": "list", "items": []})
+        extra = _unlocks(a, ctx)
+        bonus_tier = {"name": unique_name(bonus_name, taken_names + _names(tiers)), "kind": "collectible", "hidden": True, "label": bonus_name,
+                      "price": 0, "expiry_days": FOREVER, "sections": [x["sections"][0] for x in tiers] + [bkey] + [k for k in extra if k not in [t["sections"][0] for t in tiers]],
+                      "per_email": "one_ever", "drop": card_kinds.clean_drop(bonus_name, "", "", "", tz, "", numbered)}
+        if bonus_size:
+            bonus_tier["max_members"] = bonus_size
+        tiers.append(bonus_tier)
+        sname = text(f"{name}: collect all {len(names)} parts", 60)
+        s = {"name": sname, "pieces": [t["name"] for t in tiers[:len(names)]], "need": 0, "reward": bonus_tier["name"], "include_existing": False}
+        lines.append(f"Bonus “{bonus_name}”" + (f" (numbered, {bonus_size} copies)" if numbered else "") + f": given out by itself to everyone who collects all {len(names)} parts")
+        lines.append("A shelf for the bonus extras (for example the 2 extra tracks)")
+    return {"tiers": tiers, "set": s, "codes": None, "sections": shelves, "lines": lines, "price": price}
 
 
 # ── 4. Collect and get a reward ──
