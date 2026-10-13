@@ -325,6 +325,42 @@ cards to collect (at least two, at most twelve) and press **Save sets**.
 - If the "Set completed" email fails (email down for a moment), it is tried again on the hourly check for up to
   3 days.
 
+## Claim codes: one-time codes for a card
+
+A **claim code** is a one-time code for a card. Make a batch ("200 codes for the Founders pass"), print or send the
+codes (flyers, bottle labels, tickets, packaging, giveaways) and let people claim their card themselves, without
+you knowing their email in advance. Open **Cards > Codes**.
+
+- **Make codes:** name the batch ("Bottle labels spring 2027"), choose the card, how many (1 to 1000 per batch, 20000
+  in total) and press **Make codes**. Codes look like `K7M2P-Q9X4T` (no look-alike letters, so no 0/O or 1/I/L mix-ups).
+- **Give them out:** each batch has **Download list (CSV)** (code, link, status, who claimed it) and **Printable
+  sheet** (one QR tile per unused code, ready to print and cut). A code's QR opens your claim page with the code
+  already filled in. The plain address people can type a code into is shown at the top of the screen (`/claim` on
+  your site).
+- **Claiming:** the person enters name and email and gets the card (the normal card email goes out if email is set
+  up). The code is then **used up**. If two people try the same code at the same moment, only one gets it.
+- **A code always works**, even when that email already holds the card. It still stops when the card is sold out (even for someone who already holds it), or
+  its window (a drop that closed, an event that is over) has passed; in that case the code is **not** used up.
+  A card set to "Only I give it out" is fine: codes are exactly how you hand it out. A paid card claimed with a code
+  is free for that person (you decide who gets codes).
+- **Numbered codes:** for a collectible, tick **Give every code its own fixed number**. Bottle 112's code always gives
+  collectible #112 of the edition, whoever claims it and whenever. Numbers must fit the edition size and can't be
+  used twice; the screen tells you if they don't. Numbers printed on unclaimed codes are kept free: normal signups for the same
+  card skip them. If someone lowers the edition size or hands out a number by hand afterwards, that one code says the number
+  can't be given out any more and stays unused.
+- **Cancel unused codes** stops every unused code of a batch (claimed ones stay claimed, cancelled numbers become free
+  again). **Remove batch** is only for a batch nobody has claimed from.
+- If the codes file is ever damaged, nothing is overwritten: the screens say so, a copy is kept as `claim_codes.damaged.json`, and you
+  can restore a backup.
+- **People** shows which cards came from a code ("code · Bottle labels"). Claimed pieces of a **set** count like any
+  other card.
+- Someone who types wrong codes over and over (10 wrong in 15 minutes) has to wait a bit. Codes are about 8 x 10^14
+  possibilities, so guessing one is not realistic.
+- Codes live in `claim_codes.json` on your Volume and are part of every backup. **Keep the printed sheets and the CSV
+  private** until you hand the codes out: anyone holding an unused code can claim a card with it.
+- What a code proves: that the card was claimed with a real code from you. A QR on a bottle can be photographed, so a
+  copied code is claimed by whoever uses it first; use tamper-evident labels where that matters.
+
 Mind your storage: uploads live on the same Volume as your members and
 signing key, and the Volume has a fixed size (see your Railway plan). The
 Content page shows how much the uploads use. One file can be up to

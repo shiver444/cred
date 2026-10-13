@@ -88,6 +88,7 @@ can revoke any of them at any time.
   calendar link.
 - Sets: pick a few cards to collect and a reward card; whoever holds every piece automatically gets the reward
   (one email), and members see "3 of 5" progress with a slot for each card on their member page.
+- Claim codes: make batches of one-time codes (CSV or a printable QR sheet) that give a card to whoever claims them, optionally with a fixed number per code (bottle 112 = #112)
 - Email looks: one picker for every email (Dark, Light, Paper, Bold, or "Match my website", which reads your site's colors and type once), plus an optional logo at the top.
 - Follow-up emails: up to five automatic notes some days after someone joins (like a short
   welcome sequence), each limited to one card if you like, with a "stop these emails" link.

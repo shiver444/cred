@@ -87,6 +87,8 @@ def _add_credential_locked(entry: dict):
         **({"kind": entry["kind"], "detail": entry.get("detail") or {}} if entry.get("kind") in ("voucher", "certificate") else {}),
         # A reward card given automatically for completing a set (card_sets.py): {id, name}.
         **({"from_set": entry["from_set"]} if isinstance(entry.get("from_set"), dict) else {}),
+        # Claimed with a claim code (claim_codes.py): {batch, name}.
+        **({"claim": entry["claim"]} if isinstance(entry.get("claim"), dict) else {}),
         "revoked":          False,
         "revoked_at":       None,
         "verified_count":   0,

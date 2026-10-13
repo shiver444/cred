@@ -82,6 +82,7 @@ import email_look
 import timeline
 import whats_on
 import card_sets
+import claim_codes
 import site_reader
 import backup
 import announcements
@@ -194,6 +195,7 @@ _rate = security.SlidingLimiter()
 
 # (path or prefix ending in "/", bucket name, hits allowed per visitor, window in seconds)
 _PUBLIC_RULES = [
+    ("/claim",          "claim",  60,  600),
     ("/issue",          "signup", 10,  600),
     ("/checkout",       "signup", 10,  600),
     ("/resend-link",    "link",   5,   3600),
@@ -645,6 +647,8 @@ def _issue_and_fulfill(name: str, email: str, tier: str, days: int, sections: li
 
     cfg = cfg or load_config()
     design = resolve_tier_design(cfg, tier)
+    extra = dict(extra or {})
+    fixed_number = extra.pop("edition", None)      # a claim code that carries its own number (bottle 112 -> #112)
 
     # An event ticket works until its event ends, whatever number of days the
     # caller passed; its event details are signed into the card and shown on it.
@@ -700,7 +704,24 @@ def _issue_and_fulfill(name: str, email: str, tier: str, days: int, sections: li
             from member_registry import list_all as _reg_all
             used = [int((e.get("drop") or {}).get("edition") or 0) for e in _reg_all()
                     if str(e.get("tier") or "").upper() == str(tier).upper()]
-            drop = card_kinds.card_drop(tier_cfg_t, max(used + [0]) + 1, limits.tier_max(tier_cfg_t))
+            size = limits.tier_max(tier_cfg_t)
+            if isinstance(fixed_number, int) and fixed_number > 0:
+                if fixed_number in used or (size is not None and fixed_number > size):
+                    raise SignupBlocked("number_taken", f"Number {fixed_number} of this edition can't be given out any more. Please contact the creator.")
+                number = fixed_number
+            else:
+                # Numbers printed on unclaimed claim codes are kept free for those codes.
+                try:
+                    with _claim_lock:
+                        held = _claims_held_numbers(tier)
+                except Exception:
+                    held = set()
+                number = max(used + [0]) + 1
+                while number in held:
+                    number += 1
+                if size is not None and number > size:
+                    raise SignupBlocked("sold_out", "Sorry, this edition is sold out.")
+            drop = card_kinds.card_drop(tier_cfg_t, number, limits.tier_max(tier_cfg_t))
 
         # 1 — Issue
         result = issue_credential(
@@ -758,7 +779,7 @@ def _issue_and_fulfill(name: str, email: str, tier: str, days: int, sections: li
             "event":       event,
             "drop":        drop,
             "detail":      detail,
-            **(extra or {}),
+            **extra,
         })
 
     # 5 — Email (skipped when the caller doesn't want one, e.g. the creator
@@ -1892,6 +1913,8 @@ def admin_members():
             tier_esc += f'<br><span class="small">collectible{_num}</span>'
         if isinstance(m.get("from_set"), dict) and m["from_set"].get("name"):
             tier_esc += f'<br><span class="small">reward · {esc_html(str(m["from_set"]["name"]))}</span>'
+        if isinstance(m.get("claim"), dict) and m["claim"].get("name"):
+            tier_esc += f'<br><span class="small">code · {esc_html(str(m["claim"]["name"]))}</span>'
         elif isinstance(m.get("payment"), dict) and m["payment"].get("comped"):
             tier_esc += '<br><span class="small">given free</span>'
 
@@ -4843,6 +4866,375 @@ def admin_sets_save():
         issued = 0
     state = _sets_state()
     return jsonify({"success": True, "warnings": warnings, "issued": issued, "more": _sets_more, **state})
+
+
+# ── Claim codes (rules in claim_codes.py, screens in codes_page.py) ──
+# The creator makes a batch of one-time codes for a card; whoever enters a code on /claim
+# (name + email) gets that card and the code is used up. Codes live in DATA_DIR/claim_codes.json.
+_claim_lock = threading.RLock()
+_CLAIM_FILE = DATA_DIR / "claim_codes.json"
+_claim_guard = claim_codes.FailGuard(10, 900)
+
+
+class ClaimsFileError(Exception):
+    pass
+
+
+_claims_bad = False        # True while claim_codes.json exists but can't be read: nothing is written over it then
+
+
+def _claims_load() -> dict:
+    """A missing file is simply "no codes yet". A file that exists but can't be read is kept as
+    claim_codes.damaged.json and NOT overwritten (saving is refused until it reads again)."""
+    global _claims_bad
+    if not _CLAIM_FILE.exists():
+        _claims_bad = False
+        return claim_codes.empty()
+    try:
+        raw = json.loads(_CLAIM_FILE.read_text(encoding="utf-8"))
+        if not isinstance(raw, dict):
+            raise ValueError("not a dict")
+        _claims_bad = False
+        return claim_codes.clean_data(raw)
+    except Exception as e:
+        _claims_bad = True
+        try:
+            keep = _CLAIM_FILE.with_name("claim_codes.damaged.json")
+            if not keep.exists():
+                keep.write_bytes(_CLAIM_FILE.read_bytes())
+        except Exception:
+            pass
+        print(f"❌ claim_codes.json can't be read ({e}); claim codes are paused until it is fixed.")
+        raise ClaimsFileError("damaged")
+
+
+def _claims_save(data: dict):
+    if _claims_bad:
+        raise ClaimsFileError("damaged")
+    fd, tmp = tempfile.mkstemp(prefix=".claims-", suffix=".tmp", dir=str(_CLAIM_FILE.parent))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(data, f)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, _CLAIM_FILE)
+    except BaseException:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
+
+
+@app.errorhandler(ClaimsFileError)
+def _claims_damaged(_e):
+    if request.path == "/claim":
+        resp = _claim_page(message="Claiming is paused for a moment. Please try again a little later.", show_form=False)
+        resp.status_code = 503
+        return resp
+    msg = "The claim code list can't be read right now, so nothing was changed. Your codes are kept safe: restore a backup from the Backup screen."
+    if request.method == "GET" and request.path.startswith("/admin/"):
+        return app.response_class(f"<!doctype html><meta charset=utf-8><title>Codes</title><body style='font:16px system-ui;max-width:34em;margin:3em auto;padding:0 1em'><p>{msg}</p><p><a href='/admin'>Back</a></p>", status=500, mimetype="text/html")
+    return err(msg, 500)
+
+
+def _claims_held_numbers(tier) -> set:
+    """Fixed numbers of this card still waiting on an unclaimed code (caller holds _claim_lock)."""
+    data = _claims_load()
+    t = str(tier).upper()
+    return {c["n"] for c in data["codes"].values()
+            if c["n"] and c["state"] in ("new", "pending") and data["batches"].get(c["b"], {}).get("tier", "").upper() == t}
+
+
+def _claim_url() -> str:
+    base = public_url.base_url()
+    return (base + "/claim") if base else "/claim"
+
+
+def _codes_state() -> dict:
+    cfg = load_config()
+    with _claim_lock:
+        data = _claims_load()
+    return {"batches": claim_codes.summary(data),
+            "cards": [{"name": t.get("name", ""), "label": t.get("label") or t.get("name", ""), "kind": card_kinds.clean_kind(t.get("kind")),
+                       "hidden": bool(t.get("hidden")), "size": limits.tier_max(t)} for t in (cfg.get("tiers") or []) if isinstance(t, dict)],
+            "claim_url": _claim_url()}
+
+
+@app.route("/admin/codes", methods=["GET"])
+def admin_codes_page():
+    redirect_resp = require_admin_page("/admin/codes")
+    if redirect_resp:
+        return redirect_resp
+    import codes_page
+    cfg = load_config()
+    html = codes_page.render(
+        admin_theme.css(cfg["admin_style"], cfg["accent_color"], "wide"),
+        admin_theme.shell_js(cfg["admin_style"]),
+        admin_theme.body_attrs(cfg["admin_style"], "codes", cfg["card_title"]),
+        cfg["card_title"], _codes_state())
+    resp = app.response_class(html, mimetype="text/html")
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
+
+
+@app.route("/admin/codes/make", methods=["POST"])
+def admin_codes_make():
+    if not check_admin(request):
+        return err("Unauthorized", 401)
+    d = request.get_json(silent=True)
+    if not isinstance(d, dict):
+        return err("Send the batch details.")
+    cfg = load_config()
+    tier_cfg = get_tier(cfg, str(d.get("tier") or ""))
+    if not tier_cfg:
+        return err("Choose one of your cards.")
+    numbered = bool(d.get("numbered")) and card_kinds.is_collectible(tier_cfg)
+    taken = [int((e.get("drop") or {}).get("edition") or 0) for e in member_registry.list_all()
+             if str(e.get("tier") or "").upper() == str(tier_cfg["name"]).upper()] if numbered else []
+    with _claim_lock:
+        data = _claims_load()
+        batch, made, problem = claim_codes.make_batch(data, d.get("name"), tier_cfg["name"], d.get("count"), numbered,
+                                                      d.get("start"), limits.tier_max(tier_cfg), taken)
+        if problem:
+            return err(problem)
+        _claims_save(data)
+    return ok({"made": len(made), "batch": batch, **_codes_state()})
+
+
+def _batch_or_none(batch_id):
+    batch_id = str(batch_id or "")
+    with _claim_lock:
+        data = _claims_load()
+    return data, data["batches"].get(batch_id)
+
+
+@app.route("/admin/codes/list", methods=["GET"])
+def admin_codes_list():
+    if not check_admin(request):
+        return err("Unauthorized", 401)
+    data, b = _batch_or_none(request.args.get("batch"))
+    if not b:
+        return err("That batch doesn't exist.", 404)
+    return ok({"codes": claim_codes.codes_of(data, b["id"])})
+
+
+@app.route("/admin/codes/csv", methods=["GET"])
+def admin_codes_csv():
+    redirect_resp = require_admin_page("/admin/codes")
+    if redirect_resp:
+        return redirect_resp
+    data, b = _batch_or_none(request.args.get("batch"))
+    if not b:
+        return err("That batch doesn't exist.", 404)
+    url = _claim_url()
+    lines = [",".join(claim_codes.csv_cell(h) for h in ("code", "link", "number", "status", "claimed_by", "claimed_at"))]
+    for r in claim_codes.codes_of(data, b["id"]):
+        lines.append(",".join(claim_codes.csv_cell(v) for v in (
+            r["shown"], f"{url}?code={r['code']}", r["number"] or "", "unused" if r["state"] == "new" else "claimed" if r["state"] == "used" else r["state"],
+            r["email"], r["at"][:19].replace("T", " "))))
+    fname = re.sub(r"[^A-Za-z0-9_-]+", "_", b["name"]).strip("_")[:40] or "codes"
+    resp = app.response_class("\r\n".join(lines) + "\r\n", mimetype="text/csv")
+    resp.headers["Content-Disposition"] = f'attachment; filename="codes_{fname}.csv"'
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
+
+
+@app.route("/admin/codes/print", methods=["GET"])
+def admin_codes_print():
+    redirect_resp = require_admin_page("/admin/codes")
+    if redirect_resp:
+        return redirect_resp
+    import codes_page
+    data, b = _batch_or_none(request.args.get("batch"))
+    if not b:
+        return err("That batch doesn't exist.", 404)
+    cfg = load_config()
+    url = _claim_url()
+    tiles = [{"code": r["shown"], "number": r["number"], "svg": claim_codes.qr_svg(f"{url}?code={r['code']}")}
+             for r in claim_codes.codes_of(data, b["id"]) if r["state"] == "new"]
+    label = card_sets.tier_label(cfg.get("tiers"), b["tier"])
+    resp = app.response_class(codes_page.render_sheet(b["name"], label, tiles, url), mimetype="text/html")
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
+
+
+@app.route("/admin/codes/cancel", methods=["POST"])
+def admin_codes_cancel():
+    if not check_admin(request):
+        return err("Unauthorized", 401)
+    d = request.get_json(silent=True)
+    d = d if isinstance(d, dict) else {}
+    with _claim_lock:
+        data = _claims_load()
+        if str(d.get("batch") or "") not in data["batches"]:
+            return err("That batch doesn't exist.", 404)
+        n = claim_codes.cancel(data, str(d["batch"]))
+        _claims_save(data)
+    return ok({"cancelled": n, **_codes_state()})
+
+
+@app.route("/admin/codes/delete", methods=["POST"])
+def admin_codes_delete():
+    if not check_admin(request):
+        return err("Unauthorized", 401)
+    d = request.get_json(silent=True)
+    d = d if isinstance(d, dict) else {}
+    with _claim_lock:
+        data = _claims_load()
+        if not claim_codes.delete_batch(data, str(d.get("batch") or "")):
+            return err("Only a batch nobody has claimed from can be removed. Cancel its unused codes instead.")
+        _claims_save(data)
+    return ok(_codes_state())
+
+
+# ── The public claim page ──
+def _claim_page(**kw):
+    import codes_page
+    cfg = load_config()
+    html = codes_page.render_claim(creator=cfg.get("creator_name") or "", accent=cfg.get("accent_color") or "", **kw)
+    resp = make_response(html)
+    resp.headers["Content-Type"] = "text/html; charset=utf-8"
+    resp.headers["Cache-Control"] = "no-store"
+    resp.headers["X-Frame-Options"] = "DENY"
+    return resp
+
+
+_CLAIM_MESSAGES = {
+    "unknown": "That code isn't right. Check it and try again.",
+    "used": "This code has already been used.",
+    "pending": "This code is being used right now. If that wasn't you, try again in a few minutes.",
+    "cancelled": "This code is no longer valid.",
+}
+
+
+def _claim_info(code: str):
+    """(status, card label, number, edition size) for the form on the claim page."""
+    with _claim_lock:
+        data = _claims_load()
+    status, rec, batch = claim_codes.lookup(data, code)
+    if status != "ok":
+        return status, "", None, None
+    cfg = load_config()
+    t = get_tier(cfg, batch["tier"])
+    if not t:
+        return "unknown", "", None, None
+    return "ok", card_sets.tier_label(cfg.get("tiers"), t["name"]), rec["n"], (limits.tier_max(t) if rec["n"] else None)
+
+
+@app.route("/claim", methods=["GET"])
+def claim_get():
+    raw = request.args.get("code") or ""
+    code = claim_codes.normalize(raw)
+    if not raw.strip():
+        return _claim_page()
+    if not code:
+        return _claim_page(code=raw[:24], message=_CLAIM_MESSAGES["unknown"])
+    status, label, number, of = _claim_info(code)
+    if status != "ok":
+        return _claim_page(code=claim_codes.fmt(code), message=_CLAIM_MESSAGES[status], show_form=status == "unknown")
+    return _claim_page(code=claim_codes.fmt(code), card=label, number=number, of=of)
+
+
+@app.route("/claim", methods=["POST"])
+def claim_post():
+    raw = request.form.get("code") or ""
+    name = (request.form.get("name") or "").strip()
+    email = (request.form.get("email") or "").strip().lower()
+    if (request.form.get("company") or "").strip():
+        return _claim_page(message="Something went wrong. Please try again.")      # a robot filled the hidden box
+    key = (request.headers.get("X-Forwarded-For", "").split(",")[-1].strip() or request.remote_addr or "?")
+    wait = _claim_guard.wait(key)
+    if wait:
+        mins = max(1, (wait + 59) // 60)
+        resp = _claim_page(code=raw[:24], message=f"Too many wrong codes. Please try again in about {mins} minute{'s' if mins != 1 else ''}.")
+        resp.status_code = 429
+        return resp
+    code = claim_codes.normalize(raw)
+    if not code:
+        _claim_guard.fail(key)
+        return _claim_page(code=raw[:24], name=name, email=email, message=_CLAIM_MESSAGES["unknown"])
+    if not name or len(name) > 100:
+        return _claim_page(code=claim_codes.fmt(code), name=name, email=email, message="Please enter your name.")
+    if (len(email) > 254 or "@" not in email[1:] or email.count("@") != 1 or "." not in email.split("@")[1]
+            or any(c in email for c in " \r\n<>,;")):
+        return _claim_page(code=claim_codes.fmt(code), name=name, email=email, message="That doesn't look like an email address.")
+    with _claim_lock:
+        data = _claims_load()
+        status, rec, batch = claim_codes.reserve(data, code)
+        if status == "ok":
+            mine = rec["at"]
+            _claims_save(data)
+    if status != "ok":
+        if status == "unknown":
+            _claim_guard.fail(key)
+        return _claim_page(code=claim_codes.fmt(code), message=_CLAIM_MESSAGES[status], show_form=status == "unknown")
+
+    def give_back():
+        with _claim_lock:
+            d2 = _claims_load()
+            claim_codes.release(d2, code, at=mine)
+            _claims_save(d2)
+
+    # A card already went out on this code (the server stopped before the code was marked used): mark it used now.
+    from member_registry import list_all as _reg_all
+    done_before = next((e for e in _reg_all() if isinstance(e.get("claim"), dict) and e["claim"].get("code") == code), None)
+    if done_before:
+        with _claim_lock:
+            d4 = _claims_load()
+            claim_codes.finish(d4, code, done_before.get("holder_email") or "", done_before.get("credential_id") or "")
+            _claims_save(d4)
+        return _claim_page(code=claim_codes.fmt(code), message=_CLAIM_MESSAGES["used"], show_form=False)
+
+    allowed, _w = _rate.hit(("signup-all",), SIGNUP_LIMIT_PER_HOUR, 3600)
+    if not allowed:
+        give_back()
+        return _claim_page(code=claim_codes.fmt(code), name=name, email=email, message="We're getting a lot of claims right now. Please try again in a little while.")
+
+    cfg = load_config()
+    tier_cfg = get_tier(cfg, batch["tier"])
+    if not tier_cfg:
+        give_back()
+        return _claim_page(code=claim_codes.fmt(code), name=name, email=email, message="This card isn't available any more. Please contact the creator.", show_form=False)
+
+    def check():
+        # A code works even when this email already holds the card, but sold out and closed windows still stop it:
+        # when the only problem is "already has it", the same checks run again for a stranger's email.
+        blocked = _signup_check(cfg, tier_cfg, tier_cfg["name"], email, public=False)
+        if blocked and blocked[0] == "already_member":
+            blocked = _signup_check(cfg, tier_cfg, tier_cfg["name"], f"claim-{secrets.token_hex(6)}@claim.invalid", public=False)
+        return blocked
+
+    try:
+        result = _issue_and_fulfill(
+            name, email, tier_cfg["name"], _reward_days(tier_cfg), tier_cfg.get("sections", []), cfg=cfg,
+            payment_meta={"comped": True, "code": batch["id"]}, check=check, send_email=bool(email_sender.is_configured()),
+            extra={"claim": {"batch": batch["id"], "name": batch["name"], "code": code}, **({"edition": rec["n"]} if rec["n"] else {})})
+    except SignupBlocked as b:
+        give_back()
+        return _claim_page(code=claim_codes.fmt(code), name=name, email=email, message=b.message, show_form=b.reason not in ("sold_out", "event_over", "voucher_ended", "drop_closed", "number_taken"))
+    except Exception as e:
+        print(f"❌ Claim failed: {e}")
+        give_back()
+        return _claim_page(code=claim_codes.fmt(code), name=name, email=email, message="Something went wrong on our side. Your code was not used: please try again in a moment.")
+
+    for _try in range(3):
+        try:
+            with _claim_lock:
+                d3 = _claims_load()
+                claim_codes.finish(d3, code, email, result["credential_id"])
+                _claims_save(d3)
+            break
+        except Exception as e:
+            time.sleep(0.3)
+            print(f"❌ Could not record that code {code[:3]}… as used (try {_try + 1}): {e}")
+    members_page = public_url.effective_members_page(cfg.get("members_page"))
+    link = ""
+    if members_page:
+        sep = "&" if "?" in members_page else "?"
+        link = f"{members_page}{sep}id={_q(result['credential_id'], safe='')}&h={_q(result['bundle_hash'][:32], safe='')}"
+    return _claim_page(done={"link": link, "emailed": bool(result.get("email_sent")), "card": card_sets.tier_label(cfg.get("tiers"), tier_cfg["name"]),
+                             "number": rec["n"], "of": limits.tier_max(tier_cfg) if rec["n"] else None})
 
 
 # ── GET /whats-on and /whats-on.ics ──

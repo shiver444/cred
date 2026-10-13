@@ -61,7 +61,7 @@ GROUPS = [
     {"id": "people", "label": "People", "icon": "members", "items": [
         ("members", "Members", "/admin/members", ""), ("checkin", "Check-in", "/admin/checkin", "tickets")]},
     {"id": "cards", "label": "Cards", "icon": "cards", "items": [
-        ("tiers", "Cards", _D + "tiers", ""), ("sets", "Sets", "/admin/sets", "")]},
+        ("tiers", "Cards", _D + "tiers", ""), ("sets", "Sets", "/admin/sets", ""), ("codes", "Codes", "/admin/codes", "")]},
     {"id": "content", "label": "Content", "icon": "content", "items": [
         ("content", "Content", "/admin/content", ""), ("announce", "Bulletin board", "/admin/announce", "")]},
     {"id": "design", "label": "Design", "icon": "design", "items": [
