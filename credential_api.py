@@ -4358,6 +4358,7 @@ def _decorate_sets(mine: list, cfg: dict, registry: list, email: str):
     one leaked link open them all."""
     held_all = card_sets.held_by(registry, email)
     prices = {str(t.get("name") or "").strip().upper(): t.get("price") for t in (cfg.get("tiers") or []) if isinstance(t, dict)}
+    arts = {}
     for st in mine:
         rw = st.get("reward") or {}
         for sl, big in [(x, False) for x in st.get("slots", [])] + [(rw, True)]:
@@ -4365,7 +4366,9 @@ def _decorate_sets(mine: list, cfg: dict, registry: list, email: str):
             if not sl.get("got"):
                 continue
             try:
-                art = _card_art(cfg, tier, 720 if big else 320, square=not big)
+                if (tier, big) not in arts:
+                    arts[(tier, big)] = _card_art(cfg, tier, 720 if big else 320, square=not big)
+                art = arts[(tier, big)]
                 if art:
                     sl["art"] = art
                 try:
@@ -4774,9 +4777,16 @@ def _run_sets_pass(limit, focus_keys) -> int:
 def _send_setdone(name, email, cfg, s, reward_tier, cid, bundle_hash) -> bool:
     """The "you completed a set" email. Marks the reward card as notified when it went out."""
     try:
+        need = card_sets.target(s)
+        if len(s["pieces"]) == 1:
+            shown = [card_sets.tier_label(cfg.get("tiers"), s["pieces"][0])]
+        else:
+            held = card_sets.held_by(member_registry.list_all(), email)
+            mine = [p for p in s["pieces"] if str(p).upper() in held] or list(s["pieces"])
+            shown = [card_sets.tier_label(cfg.get("tiers"), p) for p in (mine if need < len(s["pieces"]) else s["pieces"])]
         ok = email_sender.send_setdone_email(
             name or "Member", email, card_sets.tier_label(cfg.get("tiers"), reward_tier),
-            s["name"], [card_sets.tier_label(cfg.get("tiers"), p) for p in s["pieces"]], cid, bundle_hash)
+            s["name"], shown, cid, bundle_hash, count=need)
     except Exception as e:
         print(f"❌ Set-completed email failed for {email}: {e}")
         return False
@@ -4820,10 +4830,11 @@ def _sets_state() -> dict:
     tiers = cfg.get("tiers") or []
     reg = member_registry.list_all()
     given = _given_load()
+    ppl = card_sets.people(reg)
     out = []
     for s in card_sets.of_config(raw):
-        c = card_sets.counts(s, reg, given)
-        out.append({**s, "problems": card_sets.problems(s, tiers), "waiting": card_sets.waiting_now(s, tiers, reg, given),
+        c = card_sets.counts(s, reg, given, ppl=ppl)
+        out.append({**s, "problems": card_sets.problems(s, tiers), "waiting": card_sets.waiting_now(s, tiers, reg, given, ppl=ppl),
                     "rewarded": c["rewarded"], "collecting": c["collecting"]})
     return {"sets": out,
             "cards": [{"name": t.get("name", ""), "label": t.get("label") or t.get("name", ""), "kind": card_kinds.clean_kind(t.get("kind")),
@@ -4857,15 +4868,44 @@ def admin_sets_save():
         return err("Send the list of sets.")
     cfg = load_config()
     raw = _read_config_file()
-    cleaned, warnings = card_sets.clean(data["sets"], cfg.get("tiers") or [], card_sets.of_config(raw))
-    save_config({"sets": cleaned})
+    tiers_now = [t for t in (cfg.get("tiers") or []) if isinstance(t, dict)]
+    # "Create a voucher for the reward" on the Sets screen: a hidden (only-I-give-it-out) voucher card is
+    # made, but only when the set that asked for it is valid, so a half-filled set never leaves a stray card.
+    make = {}
+    for r in data["sets"][:card_sets.MAX_SETS]:
+        nr = r.get("new_reward") if isinstance(r, dict) else None
+        if not isinstance(nr, dict) or str(r.get("reward") or "").strip():
+            continue
+        title = " ".join(re.sub(r"[\x00-\x1f\x7f,]", " ", str(nr.get("title") or "")).split())[:40]
+        if not title:
+            continue
+        taken = {str(t.get("name") or "").strip().upper() for t in tiers_now} | set(make)
+        name, n = title.upper(), 2
+        while name in taken:
+            name, n = f"{title.upper()[:36]} {n}", n + 1
+        try:
+            days = min(3650, max(1, int(nr.get("days"))))
+        except (TypeError, ValueError, OverflowError):
+            days = 90
+        make[name] = {"name": name, "kind": "voucher", "hidden": True, "label": title, "price": 0, "expiry_days": days, "sections": [],
+                      "voucher": card_kinds.clean_voucher(title, nr.get("terms") or "", "", 0, ""), "per_email": "one_ever"}
+        r["reward"] = name
+    cleaned, warnings = card_sets.clean(data["sets"], tiers_now + list(make.values()), card_sets.of_config(raw))
+    used = {str(s["reward"]).upper() for s in cleaned}
+    new_cards = [t for n, t in make.items() if n in used]
+    if new_cards:
+        base = raw["tiers"] if isinstance(raw.get("tiers"), list) else tiers_now
+        save_config({"tiers": [dict(t) for t in base if isinstance(t, dict)] + new_cards, "sets": cleaned})   # one write: a voucher is never saved without its set
+    else:
+        save_config({"sets": cleaned})
     try:
         issued = run_sets_now(SETS_PER_SAVE)
     except Exception as e:
         print(f"❌ Set check failed: {e}")
         issued = 0
     state = _sets_state()
-    return jsonify({"success": True, "warnings": warnings, "issued": issued, "more": _sets_more, **state})
+    return jsonify({"success": True, "warnings": warnings, "issued": issued, "more": _sets_more,
+                    "created": [t["label"] for t in new_cards], **state})
 
 
 # ── Claim codes (rules in claim_codes.py, screens in codes_page.py) ──

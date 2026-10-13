@@ -287,7 +287,22 @@ shows things already public in the sign-up list. Cards set to "Only me" never ap
 A **set** is a few cards people collect. When one person holds **every piece**, they automatically get a **reward
 card** ("supercard") and one email about it. Think of a robot built from a head, arms and legs, or a "finished all
 three courses" badge. Open **Cards > Sets**, press **+ New set**, give it a name, choose the reward card, tick the
-cards to collect (at least two, at most twelve) and press **Save sets**.
+cards to collect (up to twelve) and press **Save sets**.
+
+**Three ways to use a set**, set by the **How many** box under the cards:
+
+- **Every card in a list** (leave the box empty, two or more cards): head, arms and legs, then the robot.
+- **Any few of a list** (two or more cards, type a smaller number): any 3 of my 5 wines. Each different card counts once.
+- **The same card, several times** (tick one card, type 1 to 20): "collect the coffee stamp 5 times, get a free coffee".
+  Every copy counts. People get extra copies from **claim codes** (a code always works, even if they already hold the card),
+  or from you under People. To let people sign up for it again on their own, set that card's one-per-email rule
+  to unlimited under Cards, Advanced. Typing 1 means "get this card, get that reward".
+
+**A discount as the reward:** in the reward list choose **+ Create a new voucher as the reward**, type what it is
+("15% off your next order"), the small print and how many days it stays valid. Saving makes a voucher card (only you
+can give it out) and uses it as the reward. People show it and you press **Use** at the check-in page, as with any voucher.
+The three buttons under the list ("Every card in a list", "The same card, 5 times", "Get one card, get a reward")
+start a set with those choices filled in. A reward is given once per person per set; it does not repeat every 5th time.
 
 - The reward is usually a card set to **Only me** (on the card press **Advanced**, then **Who can get this card?**), so nobody can simply sign up for it.
   Any card can be the reward, but it can't also be one of the pieces.

@@ -66,16 +66,22 @@ _TEMPLATE = r"""<!DOCTYPE html>
   .msg { font-size:12px; }
   .msg.ok { color:var(--ok); } .msg.err { color:var(--bad); }
   .empty { color:var(--muted); font-size:13px; padding:8px 0; }
+  .newreward { border-left:3px solid var(--accent-text); padding:2px 0 6px 12px; margin:10px 0; }
+  input[type=number] { background:var(--field); border:1px solid var(--line); color:var(--fg); font-family:var(--font); font-size:14px; padding:9px 10px; box-sizing:border-box; border-radius:var(--radius, 0); }
 __THEME__</style></head>
 <body __BODY_ATTRS__>
   __NAV__
   <h1>__TITLE__ — Sets</h1>
-  <div class="hint">A <b>set</b> is a few cards people collect. When someone has <b>every piece</b>, they automatically get the <b>reward card</b> and one email about it. Think of a robot built from head, arms and legs, or a "completed all three courses" badge.</div>
+  <div class="hint">A <b>set</b> is something people collect to earn a <b>reward card</b>, which they get automatically with one email. Three ways to use it: <b>every card in a list</b> (a robot built from head, arms and legs), <b>any few of a list</b> (any 3 of my 5 wines), or <b>the same card several times</b> ("collect the stamp 5 times, get a free coffee"). The reward can be a <b>voucher</b> such as "15% off your next order": you can create it right here.</div>
   <div class="hint">People are matched by <b>email address</b> (they can use different names). A card still counts after it ran out or a ticket was used, but not if you revoked it. The reward is given <b>once per person</b>. The reward is usually a card set to <b>Only me</b> (on the card press <b>Advanced</b>, then <b>Who can get this card?</b>), so nobody can just sign up for it.</div>
   <div id="needcards"></div>
   <div id="sets"></div>
   <div class="bar">
     <button type="button" class="btn ghost" id="add">+ New set</button>
+    <span class="hint">or start from:</span>
+    <button type="button" class="small" id="tpl-all">Every card in a list</button>
+    <button type="button" class="small" id="tpl-same">The same card, 5 times</button>
+    <button type="button" class="small" id="tpl-one">Get one card, get a reward</button>
     <button type="button" class="btn" id="save">Save sets</button>
     <span class="msg" id="msg" role="status" aria-live="polite"></span>
   </div>
@@ -107,19 +113,24 @@ __THEME__</style></head>
 
   function renderNeed() {
     var n = document.getElementById('needcards'); n.textContent = '';
-    if (cards.length < 3) n.appendChild(el('div', { class: 'warn', text: 'A set needs at least three cards: two to collect and one reward. Make them under Cards first (the reward can be a certificate, a collectible, a ticket, anything).' }));
+    if (cards.length < 1) n.appendChild(el('div', { class: 'warn', text: 'Make the card people collect under Cards first (a collectible, a pass, anything). The reward can be created here as a voucher.' }));
   }
   function renderSet(s, i) {
     var name = el('input', { type: 'text', maxlength: '60', placeholder: 'The Robot', 'data-role': 'name' }); name.value = s.name || '';
     name.addEventListener('input', function () { s.name = name.value; touch(); });
     var reward = el('select', { 'data-role': 'reward' });
     reward.appendChild(el('option', { value: '', text: 'Choose the reward card…' }));
+    reward.appendChild(el('option', { value: '__new__', text: '+ Create a new voucher as the reward (like "15% off")' }));
     cards.forEach(function (c) {
       if (has(s.pieces, c.name)) return;
       reward.appendChild(el('option', { value: c.name, text: c.label && up(c.label) !== up(c.name) ? c.label + ' (' + c.name + ')' : c.name }));
     });
-    reward.value = s.reward && !has(s.pieces, s.reward) && cardOf(s.reward) ? cardOf(s.reward).name : '';
-    reward.addEventListener('change', function () { s.reward = reward.value; touch(); });
+    reward.value = s.reward && !has(s.pieces, s.reward) && cardOf(s.reward) ? cardOf(s.reward).name : (s.new_reward ? '__new__' : '');
+    reward.addEventListener('change', function () {
+      if (reward.value === '__new__') { s.reward = ''; s.new_reward = s.new_reward || { title: '', terms: '', days: 90 }; }
+      else { s.reward = reward.value; s.new_reward = null; }
+      touch(); render();
+    });
     var head = el('div', { class: 'set-head' }, [
       el('div', {}, [el('label', { class: 'l', text: 'Name of the set' }), name]),
       el('div', {}, [el('label', { class: 'l', text: 'Reward (given when the set is complete)' }), reward]),
@@ -139,10 +150,35 @@ __THEME__</style></head>
       grid.appendChild(el('label', { class: 'pc' + (isReward ? ' off' : '') }, [cb, el('span', { text: c.label && up(c.label) !== up(c.name) ? c.label : c.name }),
         c.hidden ? el('small', { text: 'only me' }) : null]));
     });
+    var picked = (s.pieces || []).length;
+    var needIn = el('input', { type: 'number', min: '1', max: picked === 1 ? '20' : String(Math.max(1, picked - 1)), 'data-role': 'need',
+      placeholder: picked > 1 ? 'all ' + picked : '1', style: 'width:110px' });
+    needIn.value = s.need ? String(s.need) : '';
+    needIn.addEventListener('input', function () { s.need = needIn.value; touch(); });
+    var needHint = picked === 0 ? 'Tick the card or cards people collect.'
+      : picked === 1 ? 'One card: how many copies must a person hold? Every copy counts. People get extra copies from claim codes (a code always works), or from you under People. To let people sign up for it again on their own, set the card\'s one-per-email rule to unlimited under Cards, Advanced.'
+      : 'Leave empty to need every card (' + picked + '), or type a smaller number to reward "any ' + (s.need && s.need < picked ? s.need : 'few') + ' of these". Each different card counts once.';
+    var need = el('div', {}, [
+      el('label', { class: 'l', text: picked === 1 ? 'How many copies?' : 'How many must they collect?' }), needIn,
+      el('div', { class: 'hint', text: needHint })]);
+    var nr = null;
+    if (s.new_reward) {
+      var t1 = el('input', { type: 'text', maxlength: '40', placeholder: '15% off your next order', 'data-role': 'nr-title' }); t1.value = s.new_reward.title || '';
+      t1.addEventListener('input', function () { s.new_reward.title = t1.value; touch(); });
+      var t2 = el('input', { type: 'text', maxlength: '60', placeholder: 'Show this when you order (optional)', 'data-role': 'nr-terms' }); t2.value = s.new_reward.terms || '';
+      t2.addEventListener('input', function () { s.new_reward.terms = t2.value; touch(); });
+      var t3 = el('input', { type: 'number', min: '1', max: '3650', 'data-role': 'nr-days', style: 'width:110px' }); t3.value = s.new_reward.days || 90;
+      t3.addEventListener('input', function () { s.new_reward.days = t3.value; touch(); });
+      nr = el('div', { class: 'newreward' }, [
+        el('div', { class: 'hint', text: 'This makes a voucher card (only you can give it out) when you save. You can restyle it later under Cards.' }),
+        el('label', { class: 'l', text: 'What is the reward?' }), t1,
+        el('label', { class: 'l', text: 'Small print' }), t2,
+        el('label', { class: 'l', text: 'Valid for how many days after they earn it?' }), t3]);
+    }
     var inc = el('input', { type: 'checkbox', 'data-role': 'existing' }); inc.checked = !!s.include_existing;
     inc.addEventListener('change', function () { s.include_existing = inc.checked; touch(); });
-    var box = el('div', { class: 'set' }, [head,
-      el('label', { class: 'l', text: 'Cards to collect (pick at least two)' }), grid,
+    var box = el('div', { class: 'set' }, [head, nr,
+      el('label', { class: 'l', text: 'Card(s) to collect' }), grid, need,
       el('label', { class: 'opt' }, [inc, el('span', { text: 'Also give the reward to people who already hold every piece' + (s.waiting ? ' (' + s.waiting + ' right now)' : '') + '. Left unticked, only people who finish the set from now on get it.' })])]);
     if (s.id) {
       var bits = [(s.collecting || 0) + ' collecting', (s.rewarded || 0) + ' rewarded'];
@@ -159,7 +195,12 @@ __THEME__</style></head>
     renderNeed();
   }
   document.getElementById('add').addEventListener('click', function () {
-    sets.push({ name: '', pieces: [], reward: '', include_existing: false }); touch(); render();
+    sets.push({ name: '', pieces: [], need: '', reward: '', include_existing: false }); touch(); render();
+  });
+  [['tpl-all', 'Every card in a list', ''], ['tpl-same', 'The same card, 5 times', 5], ['tpl-one', 'Get one card, get a reward', 1]].forEach(function (t) {
+    document.getElementById(t[0]).addEventListener('click', function () {
+      sets.push({ name: '', pieces: [], need: t[2], reward: '', new_reward: { title: '', terms: '', days: 90 }, include_existing: false }); touch(); render();
+    });
   });
   function showWarnings(list) {
     var w = document.getElementById('warnings'); w.textContent = '';
@@ -171,14 +212,15 @@ __THEME__</style></head>
   saveBtn.addEventListener('click', function () {
     saveBtn.disabled = true; say('Saving…', true);
     fetch('/admin/sets', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ sets: sets.map(function (s) { return { id: s.id, name: s.name, pieces: s.pieces, reward: s.reward, include_existing: !!s.include_existing }; }) }) })
+      body: JSON.stringify({ sets: sets.map(function (s) { return { id: s.id, name: s.name, pieces: s.pieces, need: parseInt(s.need, 10) || 0, reward: s.reward,
+        new_reward: (!s.reward && s.new_reward) ? s.new_reward : undefined, include_existing: !!s.include_existing }; }) }) })
       .then(function (r) { return r.json().then(function (j) { return { status: r.status, body: j }; }); })
       .then(function (res) {
         saveBtn.disabled = false;
         if (res.status === 401) { say('You were logged out. Log in again, then save.', false); return; }
         if (!res.body.success) { say(res.body.error || 'Save failed.', false); return; }
         sets = res.body.sets; cards = res.body.cards || cards; dirty = false; render(); showWarnings(res.body.warnings);
-        say('Saved.' + (res.body.issued ? ' ' + res.body.issued + (res.body.issued === 1 ? ' reward was' : ' rewards were') + ' given out right now.' : '') + (res.body.more ? ' ' + res.body.more + ' more will go out over the next hour or so.' : ''), true);
+        say('Saved.' + (res.body.created && res.body.created.length ? ' Created the voucher "' + res.body.created.join('", "') + '".' : '') + (res.body.issued ? ' ' + res.body.issued + (res.body.issued === 1 ? ' reward was' : ' rewards were') + ' given out right now.' : '') + (res.body.more ? ' ' + res.body.more + ' more will go out over the next hour or so.' : ''), true);
       }).catch(function () { saveBtn.disabled = false; say('Could not reach the server. Nothing was saved.', false); });
   });
   window.addEventListener('beforeunload', function (e) { if (dirty) { e.preventDefault(); e.returnValue = ''; } });

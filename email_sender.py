@@ -925,7 +925,7 @@ def send_newitem_email(to_name, to_email, tier, credential_id, bundle_hash, titl
 
 
 def build_setdone_email(to_name, reward_tier, set_name, pieces, credential_id, bundle_hash, overrides: dict = None,
-                        link_base=None) -> dict:
+                        link_base=None, count=None) -> dict:
     """"You completed the set": the creator's wording and a button that opens the
     reward card's member area (the card itself is shown and downloadable there)."""
     _refresh_branding()
@@ -933,7 +933,7 @@ def build_setdone_email(to_name, reward_tier, set_name, pieces, credential_id, b
                           email_templates.DEFAULT_SETDONE_TEXT)
     pieces = [str(p) for p in (pieces or [])]
     values = {"name": to_name, "tier": reward_tier, "creator": CREATOR_NAME, "brand": CARD_TITLE,
-              "set": set_name, "reward": reward_tier, "pieces": ", ".join(pieces), "count": str(len(pieces))}
+              "set": set_name, "reward": reward_tier, "pieces": ", ".join(pieces), "count": str(count if count else len(pieces))}
     intro = _fill(text_t, values)
     link = _personal_link(credential_id, bundle_hash, link_base)
     html_body = _shell(set_name, intro, [("MEMBER", to_name.upper()), ("REWARD", reward_tier)], link, "◈ Open my card")
@@ -941,10 +941,10 @@ def build_setdone_email(to_name, reward_tier, set_name, pieces, credential_id, b
     return {"subject": _one_line(_fill(subj_t, values)), "html": html_body, "text": plain, "link": link}
 
 
-def send_setdone_email(to_name, to_email, reward_tier, set_name, pieces, credential_id, bundle_hash) -> bool:
+def send_setdone_email(to_name, to_email, reward_tier, set_name, pieces, credential_id, bundle_hash, count=None) -> bool:
     if not BREVO_API_KEY:
         return False
-    msg = build_setdone_email(to_name, reward_tier, set_name, pieces, credential_id, bundle_hash)
+    msg = build_setdone_email(to_name, reward_tier, set_name, pieces, credential_id, bundle_hash, count=count)
     ok, detail = _send_simple(to_name, to_email, msg)
     print(f"{'✔ Set-completed email sent to' if ok else '❌ Set-completed email failed for'} {to_email}" + ("" if ok else f": {detail}"))
     return bool(ok)

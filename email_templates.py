@@ -69,7 +69,7 @@ DEFAULT_ENDED_TEXT = ("{name} — your {tier} access with {creator} has ended.\n
                       "If you think this is a mistake, just reply or get in touch with {creator}.")
 
 DEFAULT_SETDONE_SUBJECT = "You completed {set}!"
-DEFAULT_SETDONE_TEXT = ("{name} — you collected every piece of {set} ({pieces}).\n"
+DEFAULT_SETDONE_TEXT = ("{name} — you completed {set} ({pieces}).\n"
                         "Your {reward} is ready: open it from the button below.")
 
 DEFAULT_NEWITEM_SUBJECT = "New on {brand}: {items}"
