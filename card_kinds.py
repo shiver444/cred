@@ -225,21 +225,22 @@ def sample_event() -> dict:
 # size is the tier's max_members; the edition number a card gets is stored with
 # the card. Times are typed local times plus `tz`, exactly as for events.
 
-def clean_drop(name="", opens_at="", closes_at="", note="", tz=0, bottom="") -> dict:
+def clean_drop(name="", opens_at="", closes_at="", note="", tz=0, bottom="", numbered=True) -> dict:
     """The drop details of a collectible tier, cleaned for saving. A closing time
     that is not after the opening time is dropped."""
     opens, closes = _local(opens_at), _local(closes_at)
     if opens and closes and closes <= opens:
         closes = ""
     return {"name": _text(name, MAX_NAME), "opens_at": opens, "closes_at": closes,
-            "note": _text(note, MAX_NOTE), "tz": _tz(tz), "bottom": _text(bottom, MAX_BOTTOM)}
+            "note": _text(note, MAX_NOTE), "tz": _tz(tz), "bottom": _text(bottom, MAX_BOTTOM),
+            "numbered": numbered is not False}
 
 
 def drop_of(tier) -> dict:
     """A tier's drop details, always a complete dict."""
     d = tier.get("drop") if isinstance(tier, dict) else None
     d = d if isinstance(d, dict) else {}
-    return clean_drop(d.get("name"), d.get("opens_at"), d.get("closes_at"), d.get("note"), d.get("tz"), d.get("bottom"))
+    return clean_drop(d.get("name"), d.get("opens_at"), d.get("closes_at"), d.get("note"), d.get("tz"), d.get("bottom"), d.get("numbered", True))
 
 
 def drop_state(drop, now=None) -> str:
@@ -268,6 +269,8 @@ def public_drop(tier) -> dict:
 def card_drop(tier, edition: int, of=None) -> dict:
     """The drop details as stored on an issued collectible and shown on its card."""
     d = drop_of(tier)
+    if not d["numbered"]:
+        edition = 0          # an unnumbered collectible: nothing to show on the card
     return {"name": d["name"], "note": d["note"], "edition": int(edition),
             "of": int(of) if of else 0, "bottom": d["bottom"] or DEFAULT_DROP_BOTTOM}
 

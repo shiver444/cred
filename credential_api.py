@@ -83,6 +83,7 @@ import timeline
 import whats_on
 import card_sets
 import claim_codes
+import recipes
 import site_reader
 import backup
 import announcements
@@ -654,6 +655,8 @@ def _issue_and_fulfill(name: str, email: str, tier: str, days: int, sections: li
     # caller passed; its event details are signed into the card and shown on it.
     tier_cfg_t = get_tier(cfg, tier)
     kind, event, ends_at, drop, detail = "pass", None, None, None, None
+    if tier_cfg_t and card_kinds.clean_kind(tier_cfg_t.get("kind")) == "pass" and days >= recipes.FOREVER:
+        ends_at = card_kinds.NEVER           # a membership set to "forever" never ends
     if card_kinds.is_certificate(tier_cfg_t):
         # A certificate never expires.
         kind, ends_at, detail = "certificate", card_kinds.NEVER, card_kinds.card_cert(tier_cfg_t)
@@ -705,7 +708,12 @@ def _issue_and_fulfill(name: str, email: str, tier: str, days: int, sections: li
             used = [int((e.get("drop") or {}).get("edition") or 0) for e in _reg_all()
                     if str(e.get("tier") or "").upper() == str(tier).upper()]
             size = limits.tier_max(tier_cfg_t)
-            if isinstance(fixed_number, int) and fixed_number > 0:
+            if not card_kinds.drop_of(tier_cfg_t)["numbered"]:
+                # Not numbered: no number on the card, but the limit (if any) still counts every copy given out.
+                if size is not None and sum(1 for e in _reg_all() if str(e.get("tier") or "").upper() == str(tier).upper()) >= size:
+                    raise SignupBlocked("sold_out", "Sorry, this edition is sold out.")
+                number = 0
+            elif isinstance(fixed_number, int) and fixed_number > 0:
                 if fixed_number in used or (size is not None and fixed_number > size):
                     raise SignupBlocked("number_taken", f"Number {fixed_number} of this edition can't be given out any more. Please contact the creator.")
                 number = fixed_number
@@ -1416,6 +1424,11 @@ def admin_members_issue():
     raw_days = data.get("days")
     if raw_days in (None, ""):
         days = member_registry.clean_extend_days(tier_cfg.get("expiry_days", 31)) or 31
+        try:
+            if int(tier_cfg.get("expiry_days") or 0) >= recipes.FOREVER:
+                days = recipes.FOREVER            # a membership set to "forever"
+        except (TypeError, ValueError, OverflowError):
+            pass
     else:
         days = member_registry.clean_extend_days(raw_days)
         if days is None:
@@ -2498,7 +2511,8 @@ def admin_dashboard_save():
             drop = card_kinds.clean_drop(
                 dr_names[i] if i < len(dr_names) else "", dr_opens[i] if i < len(dr_opens) else "",
                 dr_closes[i] if i < len(dr_closes) else "", dr_notes[i] if i < len(dr_notes) else "",
-                dr_tzs[i] if i < len(dr_tzs) else 0, dr_bottoms[i] if i < len(dr_bottoms) else "")
+                dr_tzs[i] if i < len(dr_tzs) else 0, dr_bottoms[i] if i < len(dr_bottoms) else "",
+                card_kinds.drop_of(old_t)["numbered"])      # the Cards screen has no numbering switch: keep what the recipe chose
         else:
             drop = card_kinds.drop_of(old_t)
         if have_kinds:
@@ -2759,15 +2773,17 @@ def _dashboard_page() -> str:
     theme_js = admin_theme.shell_js(cfg["admin_style"])
     body_attrs = admin_theme.body_attrs(cfg["admin_style"], "dashboard", cfg["card_title"])
     # A big shortcut for the door: Check-in lives under People, which is easy to miss on a phone.
-    home_checkin = ""
+    home_checkin = (
+        '<style>.home-checkin{display:block;margin:0 0 18px;padding:14px 16px;border:1px solid var(--accent-text,#0a7);'
+        'border-radius:var(--radius,8px);text-decoration:none;color:var(--fg,inherit);background:var(--bg,transparent);}'
+        '.home-checkin b{display:block;color:var(--accent-text,#0a7);font-size:1.05em;}'
+        '.home-checkin span{display:block;font-size:.88em;opacity:.75;margin-top:2px;}</style>'
+        '<a class="home-checkin home-recipes" href="/admin/recipes"><b>Make something new →</b>'
+        '<span>A membership, tickets, numbered bottles or albums, a reward, discount codes or a certificate: answer a few questions and it is built for you.</span></a>')
     if card_kinds.any_redeemable(cfg.get("tiers")):
-        home_checkin = (
+        home_checkin += (
             '<a class="home-checkin" href="/admin/checkin"><b>Check-in at the door →</b>'
-            '<span>Scan or paste a ticket to let someone in.</span></a>'
-            '<style>.home-checkin{display:block;margin:0 0 18px;padding:14px 16px;border:1px solid var(--accent-text,#0a7);'
-            'border-radius:var(--radius,8px);text-decoration:none;color:var(--fg,inherit);background:var(--bg,transparent);}'
-            '.home-checkin b{display:block;color:var(--accent-text,#0a7);font-size:1.05em;}'
-            '.home-checkin span{display:block;font-size:.88em;opacity:.75;margin-top:2px;}</style>')
+            '<span>Scan or paste a ticket to let someone in.</span></a>')
 
     try:
         from member_registry import stats
@@ -4876,19 +4892,12 @@ def admin_sets_save():
         nr = r.get("new_reward") if isinstance(r, dict) else None
         if not isinstance(nr, dict) or str(r.get("reward") or "").strip():
             continue
-        title = " ".join(re.sub(r"[\x00-\x1f\x7f,]", " ", str(nr.get("title") or "")).split())[:40]
+        title = recipes.text(nr.get("title"), 40, commas=False)
         if not title:
             continue
-        taken = {str(t.get("name") or "").strip().upper() for t in tiers_now} | set(make)
-        name, n = title.upper(), 2
-        while name in taken:
-            name, n = f"{title.upper()[:36]} {n}", n + 1
-        try:
-            days = min(3650, max(1, int(nr.get("days"))))
-        except (TypeError, ValueError, OverflowError):
-            days = 90
-        make[name] = {"name": name, "kind": "voucher", "hidden": True, "label": title, "price": 0, "expiry_days": days, "sections": [],
-                      "voucher": card_kinds.clean_voucher(title, nr.get("terms") or "", "", 0, ""), "per_email": "one_ever"}
+        v = recipes.voucher_tier(title, nr.get("terms"), nr.get("days"), [t.get("name") for t in tiers_now] + list(make))
+        name = v["name"]
+        make[name] = v
         r["reward"] = name
     cleaned, warnings = card_sets.clean(data["sets"], tiers_now + list(make.values()), card_sets.of_config(raw))
     used = {str(s["reward"]).upper() for s in cleaned}
@@ -4906,6 +4915,101 @@ def admin_sets_save():
     state = _sets_state()
     return jsonify({"success": True, "warnings": warnings, "issued": issued, "more": _sets_more,
                     "created": [t["label"] for t in new_cards], **state})
+
+
+# ── Recipes (rules in recipes.py, screen in recipes_page.py) ──
+# A few plain questions build everything behind them: the card(s), the set, the batch of claim codes.
+def _recipes_state() -> dict:
+    cfg = load_config()
+    try:
+        secs = [{"key": x["key"], "title": x.get("title") or x["key"]} for x in (content_store.load().get("sections") or []) if x.get("key")]
+    except Exception:
+        secs = []
+    return {"cards": [{"name": t.get("name", ""), "label": t.get("label") or t.get("name", ""), "kind": card_kinds.clean_kind(t.get("kind")),
+                       "hidden": bool(t.get("hidden"))} for t in (cfg.get("tiers") or []) if isinstance(t, dict)],
+            "sections": secs, "claim_url": _claim_url()}
+
+
+@app.route("/admin/recipes", methods=["GET"])
+def admin_recipes_page():
+    redirect_resp = require_admin_page("/admin/recipes")
+    if redirect_resp:
+        return redirect_resp
+    import recipes_page
+    cfg = load_config()
+    html = recipes_page.render(
+        admin_theme.css(cfg["admin_style"], cfg["accent_color"], "wide"),
+        admin_theme.shell_js(cfg["admin_style"]),
+        admin_theme.body_attrs(cfg["admin_style"], "recipes", cfg["card_title"]),
+        cfg["card_title"], _recipes_state())
+    resp = app.response_class(html, mimetype="text/html")
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
+
+
+@app.route("/admin/recipes/make", methods=["POST"])
+def admin_recipes_make():
+    if not check_admin(request):
+        return err("Unauthorized", 401)
+    d = request.get_json(silent=True)
+    if not isinstance(d, dict):
+        return err("Send the answers.")
+    recipe, answers = str(d.get("recipe") or ""), d.get("answers")
+    cfg = load_config()
+    raw = _read_config_file()
+    base = [dict(t) for t in (raw["tiers"] if isinstance(raw.get("tiers"), list) else (cfg.get("tiers") or [])) if isinstance(t, dict)]
+    try:
+        secs = {x["key"]: x.get("title") or x["key"] for x in (content_store.load().get("sections") or []) if x.get("key")}
+    except Exception:
+        secs = {}
+    p = recipes.plan(recipe, answers, {"tiers": base, "sections": secs})
+    if p.get("problem"):
+        return err(p["problem"])
+    edits = p.get("edits") or {}
+    for t in base:
+        t.update(edits.get(str(t.get("name")), {}))
+    all_tiers = base + p["tiers"]
+    updates = {"tiers": all_tiers}
+    old_sets = card_sets.of_config(raw)
+    if p.get("set"):
+        cleaned, warnings = card_sets.clean(old_sets + [p["set"]], all_tiers, old_sets)
+        if len(cleaned) != len(old_sets) + 1:
+            return err((warnings or ["That set could not be made."])[0])
+        updates["sets"] = cleaned
+    code_batch = None
+    c = p.get("codes")
+    with _claim_lock:
+        data = _claims_load() if c else None
+        if c:
+            code_batch, made, problem = claim_codes.make_batch(data, c["name"], c["tier"], c["count"], c["numbered"], c["start"], c["size"], [])
+            if problem:
+                return err(problem)
+        save_config(updates)
+        if c:
+            try:
+                _claims_save(data)
+            except Exception as e:
+                print(f"❌ Recipe: the cards were saved but the codes were not: {e}")
+                return err("Your cards were created, but the codes could not be saved. Make them under Cards, Codes.", 500)
+    issued = 0
+    if p.get("set"):
+        try:
+            issued = run_sets_now(SETS_PER_SAVE)
+        except Exception as e:
+            print(f"❌ Set check failed: {e}")
+    nxt = []
+    if code_batch:
+        nxt += [{"label": "Print the codes", "url": f"/admin/codes/print?batch={code_batch['id']}", "note": "A sheet of QR codes: print it, cut it, stick one on each item."},
+                {"label": "Download the codes (spreadsheet)", "url": f"/admin/codes/csv?batch={code_batch['id']}", "note": "For your own emails or a printer. Keep it private."}]
+    if (p.get("price") or 0) > 0:
+        nxt.append({"label": "Set up payment", "url": "/admin/dashboard#/s/payment", "note": "Paid cards need a way to be paid: set it up here."})
+    if p["tiers"] and p["tiers"][0].get("kind") == "ticket":
+        nxt.append({"label": "Open check-in", "url": "/admin/checkin", "note": "On the day, scan or look up tickets here."})
+    if p.get("set"):
+        nxt.append({"label": "See the set", "url": "/admin/sets", "note": "Shows how many people are collecting and who got the reward."})
+    nxt.append({"label": "See your cards", "url": "/admin/dashboard#/s/tiers", "note": "Change the look, the price, the wording and more."})
+    return ok({"lines": p["lines"], "next": nxt, "batch": code_batch["id"] if code_batch else None, "claim_url": _claim_url() if code_batch else "",
+               "issued": issued})
 
 
 # ── Claim codes (rules in claim_codes.py, screens in codes_page.py) ──
@@ -5029,7 +5133,7 @@ def admin_codes_make():
     tier_cfg = get_tier(cfg, str(d.get("tier") or ""))
     if not tier_cfg:
         return err("Choose one of your cards.")
-    numbered = bool(d.get("numbered")) and card_kinds.is_collectible(tier_cfg)
+    numbered = bool(d.get("numbered")) and card_kinds.is_collectible(tier_cfg) and card_kinds.drop_of(tier_cfg)["numbered"]
     taken = [int((e.get("drop") or {}).get("edition") or 0) for e in member_registry.list_all()
              if str(e.get("tier") or "").upper() == str(tier_cfg["name"]).upper()] if numbered else []
     with _claim_lock:

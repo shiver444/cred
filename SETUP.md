@@ -282,6 +282,28 @@ upcoming events, drops opening, offers ending, sale dates and the opening dates 
 date order, plus a calendar link (`/whats-on.ics`) people can add to Google, Apple or Outlook calendars. It only
 shows things already public in the sign-up list. Cards set to "Only me" never appear.
 
+## Recipes: the easy way to start
+
+Open **Cards > Recipes** (or "Make something new" on Home). Pick what you want to do, answer a few plain questions and
+press the button: the cards, rewards and codes behind it are built for you, and the screen tells you what to do next.
+
+- **Membership:** name, price (0 = free), how long it lasts (one week, one month, three months, one year, forever, or a number
+  of days you choose), an optional free trial, who can sign up (anyone, or only people you invite with codes), an optional
+  limit and which parts of your Content it unlocks.
+- **Event ticket:** name, start (and end), place, price, how many tickets, who can get one (or invitation codes).
+- **Collectible or numbered edition:** for photo sets, albums, wine bottles, art prints. Name, how many copies, price, and how
+  people get theirs: you print a code for each one, anyone can sign up, or you give them out. The box **Number each copy** is
+  ticked by default: each code then carries its own number (bottle 37's code always gives No. 37) and the next batch starts
+  from another number. Untick it for a collectible with no numbers: you can leave the copies empty for no limit, and the
+  codes are plain.
+- **Collect and get a reward:** the same card several times, or several different cards (all or any few); the reward is a voucher
+  such as "15% off your next order" that is created for you. It also lets people get the card to collect more than once.
+- **Discount or gift codes:** one-time codes for an offer; put one on each receipt, package or flyer.
+- **Certificate:** never expires; one-time codes or given out by you.
+
+Everything a recipe makes can be changed later under Cards, Sets and Codes. A recipe never changes your existing cards,
+except that "collect the same card" can let that card be got more than once by the same person (you can untick that).
+
 ## Sets: collect these cards, get a reward
 
 A **set** is a few cards people collect. When one person holds **every piece**, they automatically get a **reward
