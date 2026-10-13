@@ -5141,7 +5141,7 @@ def claim_post():
     raw = request.form.get("code") or ""
     name = (request.form.get("name") or "").strip()
     email = (request.form.get("email") or "").strip().lower()
-    if (request.form.get("company") or "").strip():
+    if (request.form.get("hp_x9f3") or "").strip():
         return _claim_page(message="Something went wrong. Please try again.")      # a robot filled the hidden box
     key = (request.headers.get("X-Forwarded-For", "").split(",")[-1].strip() or request.remote_addr or "?")
     wait = _claim_guard.wait(key)

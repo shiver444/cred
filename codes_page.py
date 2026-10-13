@@ -60,8 +60,11 @@ def render_claim(*, creator: str, accent: str, code: str = "", card: str = "", n
     """The page a visitor sees. `done` = {"link": members-page link, "emailed": bool, "card": label} after a successful claim."""
     acc = accent if (accent or "").startswith("#") and len(accent) in (4, 7) and all(c in "0123456789abcdefABCDEF" for c in accent[1:]) else "#2a6df4"
     hx = acc[1:] if len(acc) == 7 else "".join(ch * 2 for ch in acc[1:])
-    lum = (0.299 * int(hx[0:2], 16) + 0.587 * int(hx[2:4], 16) + 0.114 * int(hx[4:6], 16)) / 255
-    on_acc = "#111" if lum > 0.6 else "#fff"
+    def _lin(v):
+        v = int(v, 16) / 255
+        return v / 12.92 if v <= 0.03928 else ((v + 0.055) / 1.055) ** 2.4
+    lum = 0.2126 * _lin(hx[0:2]) + 0.7152 * _lin(hx[2:4]) + 0.0722 * _lin(hx[4:6])
+    on_acc = "#111" if (lum + 0.05) / (0.0 + 0.05 + 0.0067) >= (1.05) / (lum + 0.05) else "#fff"   # whichever of near-black / white reads better
     msg = f'<div class="msg {"ok" if good else "err"}">{esc_html(message)}</div>' if message else ""
     if done:
         link = esc_html(done.get("link") or "")
@@ -80,7 +83,7 @@ def render_claim(*, creator: str, accent: str, code: str = "", card: str = "", n
   <label>Your code<input name="code" value="{esc_html(code)}" maxlength="24" autocapitalize="characters" autocomplete="off" spellcheck="false" required placeholder="ABCDE-FGHJK"></label>
   <label>Your name<input name="name" value="{esc_html(name)}" maxlength="100" autocomplete="name" required></label>
   <label>Your email<input name="email" type="email" value="{esc_html(email)}" maxlength="254" autocomplete="email" required></label>
-  <div class="hp" aria-hidden="true"><label>Leave this empty<input name="company" tabindex="-1" autocomplete="off"></label></div>
+  <div class="hp" aria-hidden="true"><label>Leave this empty<input name="hp_x9f3" tabindex="-1" autocomplete="off" data-lpignore="true" data-1p-ignore></label></div>
   <button class="btn" type="submit">Get my card</button>
 </form>"""
         body = f"<h2>Claim your card</h2>{what}{msg}{form}"
