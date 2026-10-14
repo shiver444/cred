@@ -3597,7 +3597,7 @@ def _dashboard_page() -> str:
         if (e.target.name === 'tier_event_start' || e.target.name === 'tier_drop_opens' || e.target.name === 'tier_drop_closes' || e.target.name === 'tier_voucher_until' || e.target.name === 'tier_sale_at') setTz(box);
       }});
       body.addEventListener('click', (e) => {{
-        if (e.target.classList.contains('remove-tier')) {{ boxOf(e.target).remove(); refresh(); }}
+        if (e.target.classList.contains('remove-tier')) {{ const f = e.target.closest('form'); boxOf(e.target).remove(); refresh(); if (f) f.dispatchEvent(new Event('input', {{ bubbles: true }})); }}   // a removed card must raise the Save bar
       }});
       document.getElementById('add-tier').addEventListener('click', () => {{ chooser.classList.toggle('open'); }});
       chooser.addEventListener('click', (e) => {{
@@ -3641,12 +3641,14 @@ def _dashboard_page() -> str:
       document.getElementById('remove-global-bg').addEventListener('click', () => {{
         bgClear.value = '1';
         bgInput.value = '';
+        bgClear.dispatchEvent(new Event('input', {{ bubbles: true }}));
         document.getElementById('global-bg-state').textContent = 'removed — takes effect when you save';
       }});
       bgInput.addEventListener('change', () => {{ if (bgInput.files[0]) {{ bgClear.value = '0'; document.getElementById('global-bg-state').textContent = 'new picture chosen'; }} }});
       document.getElementById('remove-global-logo').addEventListener('click', () => {{
         clear.value = '1';
         fileInput.value = '';
+        clear.dispatchEvent(new Event('input', {{ bubbles: true }}));
         const thumb = document.getElementById('global-logo-thumb');
         if (thumb) {{
           const span = document.createElement('span');
@@ -5056,8 +5058,9 @@ def admin_recipes_make():
             print(f"❌ Set check failed: {e}")
     nxt = []
     if code_batch:
-        nxt += [{"label": "Print the codes", "url": f"/admin/codes/print?batch={code_batch['id']}", "note": "A sheet of QR codes: print it, cut it, stick one on each item."},
-                {"label": "Download the codes (spreadsheet)", "url": f"/admin/codes/csv?batch={code_batch['id']}", "note": "For your own emails or a printer. Keep it private."}]
+        nxt += [{"label": "See the codes on screen", "url": f"/admin/codes?open={code_batch['id']}", "note": "Every code and its link, ready to copy and paste into your own emails or messages."},
+                {"label": "Print the codes", "url": f"/admin/codes/print?batch={code_batch['id']}", "note": "A sheet of QR codes: print it, cut it, stick one on each item."},
+                {"label": "Download the codes (text file)", "url": f"/admin/codes/txt?batch={code_batch['id']}", "note": "Opens in Notepad. One code and link per line. Keep it private."}]
     if (p.get("price") or 0) > 0:
         nxt.append({"label": "Set up payment", "url": "/admin/dashboard#/s/payment", "note": "Paid cards need a way to be paid: set it up here."})
     if p["tiers"] and p["tiers"][0].get("kind") == "ticket":
@@ -5239,6 +5242,25 @@ def admin_codes_csv():
     fname = re.sub(r"[^A-Za-z0-9_-]+", "_", b["name"]).strip("_")[:40] or "codes"
     resp = app.response_class("\r\n".join(lines) + "\r\n", mimetype="text/csv")
     resp.headers["Content-Disposition"] = f'attachment; filename="codes_{fname}.csv"'
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
+
+
+@app.route("/admin/codes/txt", methods=["GET"])
+def admin_codes_txt():
+    """The unused codes as a plain text file (opens in Notepad): one per line, the code then its link."""
+    redirect_resp = require_admin_page("/admin/codes")
+    if redirect_resp:
+        return redirect_resp
+    data, b = _batch_or_none(request.args.get("batch"))
+    if not b:
+        return err("That batch doesn't exist.", 404)
+    url = _claim_url()
+    lines = [f"{r['shown']}  {url}?code={r['code']}" + (f"  (No. {r['number']})" if r["number"] else "")
+             for r in claim_codes.codes_of(data, b["id"]) if r["state"] == "new"]
+    fname = re.sub(r"[^A-Za-z0-9_-]+", "_", b["name"]).strip("_")[:40] or "codes"
+    resp = app.response_class("\r\n".join(lines) + "\r\n", mimetype="text/plain")
+    resp.headers["Content-Disposition"] = f'attachment; filename="codes_{fname}.txt"'
     resp.headers["Cache-Control"] = "no-store"
     return resp
 

@@ -378,8 +378,10 @@ you knowing their email in advance. Open **Cards > Codes**.
 
 - **Make codes:** name the batch ("Bottle labels spring 2027"), choose the card, how many (1 to 1000 per batch, 20000
   in total) and press **Make codes**. Codes look like `K7M2P-Q9X4T` (no look-alike letters, so no 0/O or 1/I/L mix-ups).
-- **Give them out:** each batch has **Download list (CSV)** (code, link, status, who claimed it) and **Printable
-  sheet** (one QR tile per unused code, ready to print and cut). A code's QR opens your claim page with the code
+- **Give them out:** each batch has **Show codes** (every code and its link on screen, with **Copy all links** and
+  **Copy all codes** buttons to paste into your own emails), **Download (text file)** (opens in Notepad: one code and
+  link per line), **Download (spreadsheet file)** (CSV, for Excel or Google Sheets) and **Printable sheet** (one QR
+  tile per unused code, ready to print and cut). A code's QR opens your claim page with the code
   already filled in. The plain address people can type a code into is shown at the top of the screen (`/claim` on
   your site).
 - **Claiming:** the person enters name and email and gets the card (the normal card email goes out if email is set
@@ -401,7 +403,7 @@ you knowing their email in advance. Open **Cards > Codes**.
   other card.
 - Someone who types wrong codes over and over (10 wrong in 15 minutes) has to wait a bit. Codes are about 8 x 10^14
   possibilities, so guessing one is not realistic.
-- Codes live in `claim_codes.json` on your Volume and are part of every backup. **Keep the printed sheets and the CSV
+- Codes live in `claim_codes.json` on your Volume and are part of every backup. **Keep the printed sheets and the downloaded lists
   private** until you hand the codes out: anyone holding an unused code can claim a card with it.
 - What a code proves: that the card was claimed with a real code from you. A QR on a bottle can be photographed, so a
   copied code is claimed by whoever uses it first; use tamper-evident labels where that matters.

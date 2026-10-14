@@ -247,13 +247,20 @@ __NAV__
         if (res.status === 401) { say('You were logged out. Log in again.', false); return; }
         if (!res.body.success) { say(res.body.error || 'Could not make the codes.', false); return; }
         batches = res.body.batches || batches; cards = res.body.cards || cards;
-        say('Made ' + res.body.made + ' code' + (res.body.made === 1 ? '' : 's') + '. Download the list or print the sheet below.', true);
+        say('Made ' + res.body.made + ' code' + (res.body.made === 1 ? '' : 's') + '. Press Show codes below to see them, or print the sheet.', true);
         document.getElementById('bname').value = '';
         renderBatches(res.body.batch && res.body.batch.id);
       }).catch(function () { btn.disabled = false; say('Could not reach the server.', false); });
   });
 
   var openIds = {};
+  try { var q = new URLSearchParams(location.search).get('open'); if (q) openIds[q] = true; } catch (e) {}
+  function copyText(text, btn, label) {
+    var ok = false;
+    try { navigator.clipboard.writeText(text); ok = true; } catch (e) {}
+    if (!ok) { try { var ta = document.createElement('textarea'); ta.value = text; document.body.appendChild(ta); ta.select(); ok = document.execCommand('copy'); document.body.removeChild(ta); } catch (e2) {} }
+    btn.textContent = ok ? 'Copied' : 'Could not copy'; setTimeout(function () { btn.textContent = label; }, 1800);
+  }
   function renderBatches(openId) {
     var root = document.getElementById('batches'); root.textContent = '';
     if (openId) openIds[openId] = true;
@@ -268,9 +275,20 @@ __NAV__
       fetch('/admin/codes/list?batch=' + encodeURIComponent(b.id), { credentials: 'same-origin' }).then(function (r) { return r.json(); }).then(function (j) {
         listBox.textContent = '';
         if (!j.success) { listBox.appendChild(el('div', { class: 'msg err', text: j.error || 'Could not load.' })); return; }
-        var t = el('table', { class: 'codes' }, [el('tr', {}, [el('th', { text: 'Code' }), el('th', { text: 'No.' }), el('th', { text: 'Status' }), el('th', { text: 'Claimed by' })])]);
+        var link = function (r) { return (S.claim_url || '') + '?code=' + r.code; };
+        var fresh = j.codes.filter(function (r) { return r.state === 'new'; });
+        var bar = el('div', { class: 'acts' }, []);
+        if (fresh.length) {
+          var b1 = el('button', { type: 'button', class: 'small', text: 'Copy all links' }), b2 = el('button', { type: 'button', class: 'small', text: 'Copy all codes' });
+          b1.addEventListener('click', function () { copyText(fresh.map(link).join('\n'), b1, 'Copy all links'); });
+          b2.addEventListener('click', function () { copyText(fresh.map(function (r) { return r.shown; }).join('\n'), b2, 'Copy all codes'); });
+          bar.appendChild(b1); bar.appendChild(b2);
+          listBox.appendChild(el('div', { class: 'hint', text: 'These copy the ' + fresh.length + ' unused code' + (fresh.length === 1 ? '' : 's') + ', one per line. Paste them into an email, a message or a document.' }));
+          listBox.appendChild(bar);
+        }
+        var t = el('table', { class: 'codes' }, [el('tr', {}, [el('th', { text: 'Code' }), el('th', { text: 'Link' }), el('th', { text: 'No.' }), el('th', { text: 'Status' }), el('th', { text: 'Claimed by' })])]);
         j.codes.forEach(function (r) {
-          t.appendChild(el('tr', {}, [el('td', { class: 'mono', text: r.shown }), el('td', { text: r.number ? String(r.number) : '' }),
+          t.appendChild(el('tr', {}, [el('td', { class: 'mono', text: r.shown }), el('td', { class: 'mono', text: link(r) }), el('td', { text: r.number ? String(r.number) : '' }),
             el('td', { text: r.state === 'new' ? 'unused' : r.state === 'used' ? 'claimed' : r.state }), el('td', { text: r.email || '' })]));
         });
         listBox.appendChild(t);
@@ -296,9 +314,10 @@ __NAV__
       return bt;
     }
     var acts = el('div', { class: 'acts' }, [
-      el('a', { class: 'small', href: '/admin/codes/csv?batch=' + encodeURIComponent(b.id), text: 'Download list (CSV)' }),
-      el('a', { class: 'small', href: '/admin/codes/print?batch=' + encodeURIComponent(b.id), target: '_blank', rel: 'noopener', text: 'Printable sheet' }),
       showBtn,
+      el('a', { class: 'small', href: '/admin/codes/print?batch=' + encodeURIComponent(b.id), target: '_blank', rel: 'noopener', text: 'Printable sheet' }),
+      el('a', { class: 'small', href: '/admin/codes/txt?batch=' + encodeURIComponent(b.id), text: 'Download (text file)' }),
+      el('a', { class: 'small', href: '/admin/codes/csv?batch=' + encodeURIComponent(b.id), text: 'Download (spreadsheet file)' }),
       b.unused ? twoStep('Cancel unused codes', 'Really cancel ' + b.unused + '?', 'cancel') : null,
       !b.claimed ? twoStep('Remove batch', 'Really remove?', 'delete') : null
     ]);
