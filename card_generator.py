@@ -103,6 +103,7 @@ def generate_card(
     show_barcode: bool = True,
     logo_data_uri: str = None,
     card_label: str = "",
+    type_label: str = "",
     card_style: str = "distressed",
     background_data_uri: str = None,
     background_dim: str = DEFAULT_DIM,
@@ -192,8 +193,9 @@ def generate_card(
     event        = event if (is_ticket and isinstance(event, dict)) else {}
     drop         = drop if (is_coll and isinstance(drop, dict)) else {}
     detail       = detail if ((is_voucher or is_cert) and isinstance(detail, dict)) else {}
-    label_text   = ("Event Ticket" if is_ticket else "Collectible" if is_coll else "Voucher" if is_voucher
-                    else "Certificate" if is_cert
+    custom       = " ".join(str(type_label or "").split())[:40]     # the card look's own wording for this small line
+    label_text   = ((custom or "Event Ticket") if is_ticket else (custom or "Collectible") if is_coll else (custom or "Voucher") if is_voucher
+                    else (custom or "Certificate") if is_cert
                     else ((card_label or "").strip()[:40] or "Member Keycard"))
 
     sections = sections or []

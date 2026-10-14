@@ -312,6 +312,19 @@ def _post_to_brevo(payload: dict) -> tuple:
     return mail_providers.send(provider, payload, _key(), BREVO_URL)
 
 
+def _file_names(tier, kind, event, drop, detail, credential_id) -> tuple:
+    """(the card's file name, the signed copy's file name) for the attachments: named for what the card is."""
+    import card_names, card_sets
+    try:
+        cfg = _load_config()
+        label, title = card_sets.tier_label(cfg.get("tiers"), tier), cfg.get("card_title") or CARD_TITLE
+    except Exception:
+        label, title = tier, CARD_TITLE
+    k = kind if kind in ("ticket", "collectible", "voucher", "certificate") else "pass"
+    return (card_names.card_file(k, label, title, event, drop, detail, credential_id),
+            card_names.bundle_file(k, label, title, event, drop, detail, credential_id))
+
+
 def send_credential_email(
     to_name:       str,
     to_email:      str,
@@ -353,14 +366,14 @@ def send_credential_email(
             with open(card_path, "rb") as f:
                 attachments.append({
                     "content": base64.b64encode(f.read()).decode("ascii"),
-                    "name": f"member_card_{credential_id[:8]}.html",
+                    "name": _file_names(tier, kind, event, drop, detail, credential_id)[0],
                 })
 
         if bundle_path and Path(bundle_path).exists():
             with open(bundle_path, "rb") as f:
                 attachments.append({
                     "content": base64.b64encode(f.read()).decode("ascii"),
-                    "name": f"credential_{credential_id[:8]}.zip",
+                    "name": _file_names(tier, kind, event, drop, detail, credential_id)[1],
                 })
 
         payload = {

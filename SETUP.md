@@ -1084,6 +1084,15 @@ upload to the server) in two places:
   as you type. Each saved look has **Edit**, **Copy** (a quick way to make a
   variation) and **Delete** (press twice). You can keep up to 12.
 
+  The look's **Small line under the title** is the little word under the big title on the card. It now works on every kind of card: type "Limited print" on a look
+  used by a collectible and the card reads "(LIMITED PRINT)" instead of "(COLLECTIBLE)". Left empty, a ticket says "Event Ticket", a collectible
+  "Collectible", a voucher "Voucher" and a certificate "Certificate" (a membership uses the Default look's line from Branding). Everywhere else in the dashboard the
+  card type keeps its normal name.
+
+**Saved card files** are named for what they are, not with random letters: a collectible downloads as `Midnight-Sessions-No-7.html`, a ticket as
+`Halloween-Live-ticket.html`, a voucher as `One-free-coffee-voucher.html`, a membership as `Acme-Gold-membership.html`. The email attaches the card and a
+signed copy (`...-signed-copy.zip`) with the same name.
+
 Then open **Cards**: every card has a **Card look** menu. Pick
 which look that tier's members get. A tier left on "Default look" uses what's
 in Branding. If you delete a look that a tier uses, that tier goes back to

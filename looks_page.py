@@ -70,8 +70,8 @@ _SECTION = """
           <input id="lk-name" maxlength="__MAXNAME__" placeholder="Monthly">
           <label for="lk-title">Card title</label>
           <input id="lk-title" maxlength="__MAXTITLE__" placeholder="same as the default look">
-          <label for="lk-label">Small line under the title</label>
-          <input id="lk-label" maxlength="__MAXLABEL__" placeholder="same as the default look">
+          <label for="lk-label">Small line under the title (on every kind of card: ticket, collectible, voucher, certificate, membership)</label>
+          <input id="lk-label" maxlength="__MAXLABEL__" placeholder="empty = the standard word (Collectible, Event Ticket... or the default look's line)">
           <label for="lk-style">Card style</label>
           <select id="lk-style"></select>
           <label for="lk-accent">Accent color</label>

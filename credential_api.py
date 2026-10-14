@@ -84,6 +84,7 @@ import timeline
 import whats_on
 import card_sets
 import claim_codes
+import card_names
 import recipes
 import site_reader
 import backup
@@ -503,6 +504,9 @@ def resolve_look(cfg: dict, look: dict = None, legacy_design: dict = None) -> di
         # the look's own logo, else the deployment's logo from Branding, else none
         "logo_data_uri": d.get("logo_data_uri") or cfg.get("logo_data_uri") or None,
         "card_label":    d.get("card_label") or cfg.get("card_subtitle") or "",
+        # the look's own wording for the small line, used on every kind of card (a ticket, collectible, voucher or certificate
+        # reads its standard word when the look has none; the Default look's line is for memberships only)
+        "type_label":    d.get("card_label") or "",
         "card_style":    style,
         "qr_style":      d.get("qr_style") if d.get("qr_style") in card_looks.QR_STYLES else cfg.get("qr_style", "solid"),
         "layout":        d.get("layout") if d.get("layout") in card_looks.LAYOUTS else cfg.get("card_layout", card_looks.DEFAULT_LAYOUT),
@@ -787,6 +791,7 @@ def _issue_and_fulfill(name: str, email: str, tier: str, days: int, sections: li
             show_barcode  = design["show_barcode"],
             logo_data_uri = design["logo_data_uri"],
             card_label    = design["card_label"],
+        type_label    = design.get("type_label", ""),
             card_style    = design["card_style"],
             qr_style      = design["qr_style"],
             layout        = design["layout"],
@@ -3939,6 +3944,7 @@ def _render_preview_card(cfg: dict, design: dict, tier_name: str = "MEMBER", cre
         show_barcode  = design["show_barcode"],
         logo_data_uri = design["logo_data_uri"],
         card_label    = design["card_label"],
+        type_label    = design.get("type_label", ""),
         card_style    = design["card_style"],
         qr_style      = design["qr_style"],
         layout        = design.get("layout", card_looks.DEFAULT_LAYOUT),
@@ -4588,11 +4594,12 @@ def member_card(cid):
     if not path.is_file():
         return denied()
     download = request.args.get("dl") == "1"
-    # the saved file is named for what it is: ticket_<id>.html, collectible_<id>.html, membership_<id>.html
+    # the saved file is named for what it is: Midnight-Sessions-No-7.html, Halloween-Live-ticket.html, Acme-Gold-membership.html
     entry = _member_entry(cid) or {}
-    kind = {"ticket": "ticket", "collectible": "collectible", "voucher": "voucher",
-            "certificate": "certificate"}.get(entry.get("kind"), "membership")
-    fname = "%s_%s.html" % (kind, re.sub(r"[^A-Za-z0-9_-]", "", str(cid))[:64])
+    cfg_now = load_config()
+    kind = entry.get("kind") if entry.get("kind") in ("ticket", "collectible", "voucher", "certificate") else "pass"
+    fname = card_names.card_file(kind, card_sets.tier_label(cfg_now.get("tiers"), entry.get("tier")), cfg_now.get("card_title"),
+                                 entry.get("event"), entry.get("drop"), entry.get("detail"), str(cid))
     resp = send_file(path, mimetype="text/html", as_attachment=download,
                      download_name=fname, conditional=False, max_age=0)
     resp.headers["Cache-Control"] = "private, no-store"
