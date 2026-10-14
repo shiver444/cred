@@ -206,8 +206,8 @@ def build_email(
 <style>{email_look.css(L, True)}
 </style>
 </head>
-<body>
-<div class="wrap">
+{email_look.page_open(L)}
+<div class="wrap" style="{email_look.wrap_style(L)}">
   {logo}
   <div class="header">{e_creator}</div>
   <div class="sub">{e_brand} — Member Access</div>
@@ -273,7 +273,7 @@ def build_email(
   </div>
 
 </div>
-</body>
+{email_look.page_close()}
 </html>"""
 
     # ── Plain text fallback ──
@@ -437,7 +437,7 @@ def _shell(heading: str, intro: str, rows, link: str, link_label: str, extra_htm
 <html><head><meta charset="UTF-8">
 <style>{email_look.css(L)}
 </style></head>
-<body><div class="wrap">
+{email_look.page_open(L)}<div class="wrap" style="{email_look.wrap_style(L)}">
   {_logo_tag(L)}
   <div class="header">{_esc(CREATOR_NAME.upper())}</div>
   <div class="sub">{_esc(CARD_TITLE)} — Member Access</div>
@@ -451,7 +451,7 @@ def _shell(heading: str, intro: str, rows, link: str, link_label: str, extra_htm
   <hr class="line">
   {('<div style="font-size:11px;line-height:1.6;color:#8a8176;margin-top:4px;">' + _esc(footer_note) + '</div>') if footer_note else ""}
   <div class="footer">{_esc(CARD_TITLE)}</div>
-</div></body></html>"""
+</div>{email_look.page_close()}</html>"""
 
 
 def _personal_link(credential_id: str, bundle_hash: str, link_base: str = None) -> str:

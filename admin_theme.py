@@ -322,6 +322,11 @@ _TOC_CSS = """
 
 _APP_CSS = """
 :root { --side-w:248px; }
+/* The sidebar and screens are built by a script once the page has arrived. Until then the raw page (every dashboard screen
+   stacked, no sidebar) would flash by, so the page stays hidden until the script is done. The animation shows it anyway
+   after 1.5 seconds, in case the script ever fails, so a page can never stay blank. */
+body[data-layout=app]:not(.app-ready) { visibility:hidden; animation:cp-reveal 0s linear 1.5s forwards; }
+@keyframes cp-reveal { to { visibility:visible; } }
 body[data-layout=app].app-ready { max-width:none !important; margin:0 !important; padding:0 !important; border:0 !important; border-radius:0 !important;
   box-shadow:none !important; background:var(--page) !important; min-height:100vh; }
 .app-ready .nav { display:none !important; }

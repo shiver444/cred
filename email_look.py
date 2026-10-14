@@ -172,7 +172,7 @@ class Look(dict):
 
 def _preset(name, accent):
     if name == "dark":
-        return dict(bg="#0a0908", text="#e6dfd2", muted="#6b6058", line="#3a1210", row="#1a100e", foot="#3a1210",
+        return dict(bg="#0a0908", text="#e6dfd2", muted="#8f857a", line="#3a1210", row="#241a18", foot="#7d7369",
                     accent=accent, on_accent="#0a0908", font="mono", tech=True, band=False)
     if name == "light":
         bg, text = "#ffffff", "#1f2328"
@@ -249,7 +249,7 @@ def css(look, welcome=False):
     radius = "" if L.tech else "border-radius:6px;"
     rules = f"""
   body {{ background:{L.bg}; color:{L.text}; font-family:{stack}; margin:0; padding:0; }}
-  .wrap {{ max-width:560px; margin:0 auto; padding:48px 32px; }}
+  .wrap {{ max-width:560px; margin:0 auto; padding:48px 32px; text-align:left; }}
   .header {{ font-size:{head_size}px; {sp_head} {band} {tech} margin-bottom:4px; }}
   .sub {{ font-size:9px; {sp_small} color:{L.muted}; text-transform:uppercase; margin-bottom:40px; }}
   .line {{ border:none; border-top:1px solid {L.line}; margin:28px 0; }}
@@ -267,6 +267,25 @@ def css(look, welcome=False):
   .warning {{ font-size:10px; color:{L.ink}; letter-spacing:1px; text-transform:uppercase; border-left:2px solid {L.line};
           padding:10px 14px; margin-top:28px; line-height:1.8; }}"""
     return rules
+
+
+def page_open(look):
+    """The start of every email's body. Gmail (and some other mail apps) ignore the page color set on `body` in the style
+    block, which left a dark email's light lettering on a white page: nearly invisible. So the color is also put on the
+    body itself, on a full-width table and on its cell (old-fashioned `bgcolor`, which every mail app honors), and
+    the text color on the body. The wrap inside gets the same colors inline (see `wrap_style`)."""
+    bg, tx = look.bg, look.text
+    return (f'<body bgcolor="{bg}" style="margin:0;padding:0;background-color:{bg};color:{tx};">'
+            f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" bgcolor="{bg}" style="background-color:{bg};">'
+            f'<tr><td align="center" bgcolor="{bg}" style="background-color:{bg};">')
+
+
+def page_close():
+    return "</td></tr></table></body>"
+
+
+def wrap_style(look):
+    return f"background-color:{look.bg};color:{look.text};text-align:left;"
 
 
 def logo_html(look, base_url, version, creator):

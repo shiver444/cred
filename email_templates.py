@@ -365,6 +365,12 @@ NEW_KEYS = ("ticket", "collectible", "voucher", "certificate", "howtopay", "decl
     "follow%d" % n for n in range(1, FOLLOW_STEPS + 1))
 
 
+def norm_nl(text) -> str:
+    """Line breaks as plain \\n. A browser sends a text box's line breaks as \\r\\n, which made every email whose standard
+    wording has more than one line look "Edited" (and Reset to standard words differ) after a save."""
+    return str(text if text is not None else "").replace("\r\n", "\n").replace("\r", "\n")
+
+
 def values_for(cfg: dict) -> dict:
     """What every field currently holds, for the dashboard: the saved value, or
     the standard wording when nothing was saved."""
@@ -381,7 +387,7 @@ def values_for(cfg: dict) -> dict:
             elif f["name"] in ("reminder_renew_url", "alert_email"):
                 out[f["name"]] = str(raw or "")
             else:
-                s = str(raw if raw is not None else "")
+                s = norm_nl(raw)
                 out[f["name"]] = s if s.strip() else f["default"]
     return out
 
@@ -396,7 +402,7 @@ def is_edited(kind: dict, values: dict) -> bool:
     """True when any of the wording (subject/message/sign-off) differs from the standard words."""
     for f in kind["fields"]:
         if f["type"] in ("text", "area") and f["default"] and f["name"] not in ("alert_email",):
-            if (values.get(f["name"]) or "").strip() not in ("", f["default"].strip()):
+            if norm_nl(values.get(f["name"])).strip() not in ("", norm_nl(f["default"]).strip()):
                 return True
         if f["name"] in ("email_signoff",) and (values.get(f["name"]) or "").strip():
             return True
@@ -466,5 +472,5 @@ def clean_new_from_form(form, saved_cfg: dict) -> dict:
             elif f["clean"]:
                 out[n] = f["clean"](raw)
             else:
-                out[n] = str(raw or "").strip()[:f["maxlen"]]
+                out[n] = norm_nl(raw).strip()[:f["maxlen"]]
     return out
