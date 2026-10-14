@@ -77,6 +77,7 @@ import config_store
 import content_store
 import content_page
 import email_sender
+import mail_providers
 import email_templates
 import email_look
 import timeline
@@ -2712,10 +2713,10 @@ def _setup_checklist_html(cfg: dict, provider: str) -> str:
     ))
 
     items.append((
-        bool(email_sender.is_configured() and (os.environ.get("FROM_EMAIL") or os.environ.get("GMAIL_ADDRESS"))),
+        bool(email_sender.is_configured() and email_sender.sender_ready()),
         "Email (optional)",
         "Not set up, so members won't be emailed. That's fine: copy each member's link from Members and send it yourself. "
-        "To turn emails on, connect Brevo, Mailjet, Resend or any email server (see SETUP.md, \"Emails\").",
+        "To turn emails on, open Settings, then Emails, and connect Brevo, Mailjet, Resend or any email server.",
     ))
 
     done_count = sum(1 for d, _, _ in items if d)
@@ -3132,7 +3133,7 @@ def _dashboard_page() -> str:
     global_dim_options = "".join('<option value="%s"%s>%s</option>' % (d, " selected" if cfg.get("bg_dim") == d else "", esc_html(card_looks.DIM_NAMES[d]))
                                  for d in card_looks.DIMS)
     looks_section = looks_page.section_html(cfg)
-    emails_section = emails_page.section_html(cfg, email_sender.is_configured())
+    emails_section = emails_page.section_html(cfg, email_sender.is_configured(), _email_service_status())
 
     style_cards = ""
     for k in admin_theme.STYLES:
@@ -3845,6 +3846,48 @@ def admin_email_test():
     with email_look.override(_look_from_request(data)):
         ok_, message = email_sender.send_test_email(to, _sample_tier(), email_templates.overrides_from_data(kind, data), kind=kind)
     return jsonify({"success": ok_, "message": message}), (200 if ok_ else 502)
+
+
+# ── Email service (Settings > Emails): which service sends the emails, typed in the dashboard instead of Railway ──
+mail_providers.use_store(DATA_DIR / "email_service.json")
+
+
+def _email_service_status() -> dict:
+    return mail_providers.status(email_sender._key())
+
+
+@app.route("/admin/email-service", methods=["GET"])
+def admin_email_service_get():
+    if not check_admin(request):
+        return err("Unauthorized", 401)
+    resp = jsonify({"success": True, **_email_service_status()})
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
+
+
+@app.route("/admin/email-service", methods=["POST"])
+def admin_email_service_save():
+    if not check_admin(request):
+        return err("Unauthorized", 401)
+    d = request.get_json(silent=True)
+    if not isinstance(d, dict):
+        return err("Send the settings.")
+    good, problem = mail_providers.save_from_dashboard(d.get("provider"), d.get("values"), d.get("from_email"))
+    if not good:
+        return err(problem)
+    return ok({**_email_service_status(), "message": "Saved. Use \"Send test\" to check it."})
+
+
+@app.route("/admin/email-service/clear", methods=["POST"])
+def admin_email_service_clear():
+    if not check_admin(request):
+        return err("Unauthorized", 401)
+    try:
+        mail_providers.clear_saved()
+    except OSError as e:
+        print(f"❌ Email settings could not be removed: {e}")
+        return err("The saved settings could not be removed.", 500)
+    return ok({**_email_service_status(), "message": "Removed. Any Railway settings apply again."})
 
 
 # ── Card previews ──

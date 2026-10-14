@@ -437,7 +437,9 @@ host is usually the better choice.
 
 ### Choosing an email service
 
-Pick **one**. All of them send exactly the same emails; you only set the variables of the one you chose (in Railway: your service → Variables), then redeploy. Free plans are enough to start. Check each company's site for its current limits.
+Pick **one**. All of them send exactly the same emails. Free plans are enough to start. Check each company's site for its current limits.
+
+**The easy way: type it into your dashboard.** Open **Settings → Emails**. At the top is the **Email service** box: pick the service, paste the keys it gave you, type your sender address, press **Save**, then **Send a test email** (put your own address in "Send tests to" first). Nothing has to be set in Railway. The keys are kept in one private file on your server's storage (never in a backup, and never shown again: only the last 4 characters). What you save here wins over Railway variables; **Remove saved settings** deletes it, so Railway's settings apply again. After restoring a backup onto a new server you type the email settings in again. If you would rather use Railway variables, the table below says which ones.
 
 | Service | Free plan (at the time of writing) | What you must do | Variables |
 |---|---|---|---|

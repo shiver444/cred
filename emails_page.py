@@ -13,6 +13,7 @@ from html import escape as _esc
 
 import email_templates as et
 import email_look
+import email_service_box
 
 CHIP_HELP = {
     "name": "The member's name", "tier": "The card's name", "creator": "Your creator name",
@@ -315,7 +316,7 @@ def look_box_html(cfg_values: dict) -> str:
     )
 
 
-def section_html(cfg_values: dict, email_ready: bool) -> str:
+def section_html(cfg_values: dict, email_ready: bool, service: dict = None) -> str:
     """The whole Emails section. `cfg_values` is a dict of the dashboard's
     current settings (email_templates.values_for-style values are filled in here)."""
     values = et.values_for(cfg_values)
@@ -325,7 +326,7 @@ def section_html(cfg_values: dict, email_ready: bool) -> str:
     ready = ('<div class="em-ready ok"><b>Email sending is on.</b> The emails below go out as described.</div>'
              if email_ready else
              '<div class="em-ready no"><b>Email sending isn\'t set up yet.</b> You can still edit and preview everything here; '
-             'nothing is sent until you add your email key (see SETUP.md).</div>')
+             'nothing is sent until you connect an email service below.</div>')
     groups = []
     for gkey, gtitle in et.GROUPS:
         rows = "".join(_row_html(k, values, tier_names) for k in reg if k["group"] == gkey)
@@ -335,7 +336,7 @@ def section_html(cfg_values: dict, email_ready: bool) -> str:
         '<h2>Emails</h2>'
         '<div class="hint">Every email your members get, in one place. Press <b>Edit</b> to change one. '
         'Leave a box as it is to keep the standard words. Preview and Send test use what is typed, even before you save.</div>'
-        + ready + look_box_html(cfg_values) +
+        + ready + (email_service_box.render(service) if service else '') + look_box_html(cfg_values) +
         '<div class="em-test"><label for="em-test-to">Send tests to</label>'
         '<input id="em-test-to" type="email" placeholder="your own address" autocomplete="email"></div>'
         + "".join(groups) +

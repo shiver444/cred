@@ -56,6 +56,20 @@ MEMBERS_PAGE  = os.environ.get("MEMBERS_PAGE", _cfg.get("members_page", ""))   #
 
 BREVO_URL = "https://api.brevo.com/v3/smtp/email"
 
+
+def _key() -> str:
+    """The Brevo key in use: one typed into the dashboard, else the Railway variable (read when the app started)."""
+    return mail_providers.saved().get("BREVO_API_KEY") or BREVO_API_KEY
+
+
+def _from_email() -> str:
+    """The sender address in use: one typed into the dashboard, else the Railway variable."""
+    return mail_providers.saved().get("FROM_EMAIL") or FROM_EMAIL
+
+
+def sender_ready() -> bool:
+    return _from_email() not in ("", "your@gmail.com")
+
 # The wording a creator can change in the dashboard. {name}, {tier},
 # {creator}, {brand} and {expires} are filled in per member.
 DEFAULT_SUBJECT = "Your Access Card — {name}"
@@ -93,7 +107,7 @@ def _fill(text: str, values: dict) -> str:
 
 def is_configured() -> bool:
     """True when this server can actually send email (with Brevo, Mailjet, Resend or any SMTP server: see mail_providers.py)."""
-    return mail_providers.configured(BREVO_API_KEY)
+    return mail_providers.configured(_key())
 
 
 def _refresh_branding():
@@ -292,10 +306,10 @@ Keep your access link somewhere safe.
 def _post_to_brevo(payload: dict) -> tuple:
     """Send one prepared message with whichever email service is set up. Returns (ok, human-readable detail).
     (The name is from when Brevo was the only choice; every message still goes through here.)"""
-    provider = mail_providers.active(BREVO_API_KEY)
-    if not mail_providers.has_keys(provider, BREVO_API_KEY):
-        return False, mail_providers.missing(BREVO_API_KEY)
-    return mail_providers.send(provider, payload, BREVO_API_KEY, BREVO_URL)
+    provider = mail_providers.active(_key())
+    if not mail_providers.has_keys(provider, _key()):
+        return False, mail_providers.missing(_key())
+    return mail_providers.send(provider, payload, _key(), BREVO_URL)
 
 
 def send_credential_email(
@@ -331,7 +345,7 @@ def send_credential_email(
 
     try:
         if not is_configured():
-            raise RuntimeError(mail_providers.missing(BREVO_API_KEY) or "Email is not set up")
+            raise RuntimeError(mail_providers.missing(_key()) or "Email is not set up")
 
         attachments = []
 
@@ -350,7 +364,7 @@ def send_credential_email(
                 })
 
         payload = {
-            "sender": {"name": FROM_NAME, "email": FROM_EMAIL},
+            "sender": {"name": FROM_NAME, "email": _from_email()},
             "to": [{"email": to_email, "name": to_name}],
             "subject": msg["subject"],
             "htmlContent": msg["html"],
@@ -388,10 +402,10 @@ def send_test_email(to_email: str, tier: str, overrides: dict = None, kind: str 
     attachments). Returns (ok, message for the creator)."""
     if not is_configured():
         return False, ("Email isn't set up on this server yet, so nothing can be sent. " +
-                       mail_providers.missing(BREVO_API_KEY) + " Then try again.")
+                       mail_providers.missing(_key()) + " Then try again.")
     msg = preview_kind(kind, tier, overrides)
     ok, detail = _post_to_brevo({
-        "sender": {"name": FROM_NAME, "email": FROM_EMAIL},
+        "sender": {"name": FROM_NAME, "email": _from_email()},
         "to": [{"email": to_email}],
         "subject": "[TEST] " + msg["subject"],
         "htmlContent": msg["html"],
@@ -785,7 +799,7 @@ def send_payment_alert(to_email, who_name, who_email, tier, price_text="", refer
         return False, "Email isn't set up on this server."
     msg = build_alert_email(who_name, who_email, tier, price_text, reference)
     ok, detail = _post_to_brevo({
-        "sender": {"name": FROM_NAME, "email": FROM_EMAIL},
+        "sender": {"name": FROM_NAME, "email": _from_email()},
         "to": [{"email": to_email}],
         "subject": msg["subject"], "htmlContent": msg["html"], "textContent": msg["text"],
     })
@@ -846,7 +860,7 @@ def send_followup_email(step, to_name, to_email, tier, credential_id, bundle_has
         return False
     msg = build_followup_email(step, to_name, tier, credential_id, bundle_hash)
     payload = {
-        "sender": {"name": FROM_NAME, "email": FROM_EMAIL},
+        "sender": {"name": FROM_NAME, "email": _from_email()},
         "to": [{"email": to_email, "name": to_name}],
         "subject": msg["subject"], "htmlContent": msg["html"], "textContent": msg["text"],
     }
@@ -901,7 +915,7 @@ def send_newitem_email(to_name, to_email, tier, credential_id, bundle_hash, titl
         return False
     msg = build_newitem_email(to_name, tier, credential_id, bundle_hash, titles)
     payload = {
-        "sender": {"name": FROM_NAME, "email": FROM_EMAIL},
+        "sender": {"name": FROM_NAME, "email": _from_email()},
         "to": [{"email": to_email, "name": to_name}],
         "subject": msg["subject"], "htmlContent": msg["html"], "textContent": msg["text"],
     }
@@ -1068,10 +1082,10 @@ def send_test_announcement(to_email, title, text, link="", tier="MEMBER") -> tup
     """Send the sample announcement to one address. Returns (ok, message)."""
     if not is_configured():
         return False, ("Email isn't set up on this server yet, so nothing can be sent. " +
-                       mail_providers.missing(BREVO_API_KEY) + " Then try again.")
+                       mail_providers.missing(_key()) + " Then try again.")
     msg = preview_announcement(title, text, link, tier)
     ok, detail = _post_to_brevo({
-        "sender": {"name": FROM_NAME, "email": FROM_EMAIL},
+        "sender": {"name": FROM_NAME, "email": _from_email()},
         "to": [{"email": to_email}],
         "subject": "[TEST] " + msg["subject"],
         "htmlContent": msg["html"],
@@ -1084,7 +1098,7 @@ def send_test_announcement(to_email, title, text, link="", tier="MEMBER") -> tup
 
 def _send_simple(to_name, to_email, msg) -> tuple:
     return _post_to_brevo({
-        "sender": {"name": FROM_NAME, "email": FROM_EMAIL},
+        "sender": {"name": FROM_NAME, "email": _from_email()},
         "to": [{"email": to_email, "name": to_name}],
         "subject": msg["subject"],
         "htmlContent": msg["html"],
@@ -1132,13 +1146,13 @@ def preview_reminder(tier: str, overrides: dict = None) -> dict:
 # ── Quick test (prints without sending if no key set) ──
 if __name__ == "__main__":
     if not is_configured():
-        print(mail_providers.missing(BREVO_API_KEY) or "Email is not set up.")
+        print(mail_providers.missing(_key()) or "Email is not set up.")
         print("Personal link would be:")
         print(f"{MEMBERS_PAGE}?id=test1234abcd5678&h=abc123def456")
     else:
         result = send_credential_email(
             to_name       = "Test Member",
-            to_email      = FROM_EMAIL,
+            to_email      = _from_email(),
             tier          = "DEMO",
             credential_id = "test1234abcd5678",
             bundle_hash   = "abc123def456",
