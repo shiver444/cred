@@ -418,8 +418,12 @@ host is usually the better choice.
 |---|---|---|
 | `ADMIN_SECRET` | **Yes** | The admin login password, and the secret `/revoke` accepts from scripts. With this unset, the login page, `/revoke`, and `/admin/members` all refuse everyone — there is no default/fallback secret on purpose. |
 | `SESSION_SECRET_KEY` | Recommended | Signs the admin login session cookie. If unset, a random key is generated each time the app starts, which means every restart/redeploy logs the admin out. Set a fixed random value (e.g. `python -c "import secrets; print(secrets.token_hex(32))"`) so logins persist. |
-| `BREVO_API_KEY` | Yes (to send email) | Brevo transactional email API key. |
-| `GMAIL_ADDRESS` | Yes (to send email) | Your Brevo-verified sender address. |
+| `FROM_EMAIL` | Yes (to send email) | The sender address your email service has verified (the "from" of every email). `GMAIL_ADDRESS` works too, as the older name. |
+| `BREVO_API_KEY` | One service is needed to send email | Brevo transactional email API key. See "Choosing an email service" below. |
+| `MAILJET_API_KEY`, `MAILJET_SECRET_KEY` | (alternative) | Mailjet's two keys. |
+| `RESEND_API_KEY` | (alternative) | Resend API key (needs a domain you own). |
+| `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `SMTP_SECURITY` | (alternative) | Any email server. `SMTP_PORT` defaults to 587, `SMTP_SECURITY` is `starttls` (default), `ssl` (default for port 465) or `none`. Railway blocks SMTP on its free and hobby plans. |
+| `EMAIL_PROVIDER` | Optional | `brevo`, `mailjet`, `resend` or `smtp`. Only needed when keys for more than one service are set; otherwise the service whose keys are set is used. |
 | `MEMBERS_PAGE` | Optional | Overrides the Members page address from Branding. Leave it out to use the built-in page at `/members`. |
 | `PUBLIC_URL` | Optional | This server's public address (for example `https://club.example.org`), used in the links in emails when the address you browse differs from Railway's. Railway's own domain is used automatically. |
 | `DATA_DIR` | Recommended in production | Path to persistent storage (e.g. a Railway Volume) so issued credentials, your signing key, and your dashboard settings survive redeploys. On Railway it's picked up automatically from an attached Volume if you don't set it; setting it yourself (to the Volume's mount path) always wins. Falls back to the local folder, which is fine for local dev only. |
@@ -431,9 +435,22 @@ host is usually the better choice.
 | `PORT` | No | Defaults to 5001. |
 | `FLASK_DEBUG` | No — leave unset in production | Set to `1` for local testing to get Flask's debugger/auto-reload back. Off by default on purpose — leaving it on in a public deployment can expose that interactive debugger to anyone who triggers an unhandled error. Never set this on Railway. |
 
+### Choosing an email service
+
+Pick **one**. All of them send exactly the same emails; you only set the variables of the one you chose (in Railway: your service → Variables), then redeploy. Free plans are enough to start. Check each company's site for its current limits.
+
+| Service | Free plan (at the time of writing) | What you must do | Variables |
+|---|---|---|---|
+| **Brevo** | about 300 emails a day | Make an account, create an API key, verify one sender address by clicking a link in an email. No domain needed. | `BREVO_API_KEY`, `FROM_EMAIL` |
+| **Mailjet** | 200 a day, 6,000 a month, no card | Make an account, copy the API key and secret key (Account settings → API key management), add your sender address and click the link Mailjet emails to it. No domain needed. | `MAILJET_API_KEY`, `MAILJET_SECRET_KEY`, `FROM_EMAIL` |
+| **Resend** | 3,000 a month, 100 a day | Make an account, add a domain you own and paste the few DNS records it shows (this takes a while to verify), create an API key. Your sender address must use that domain. | `RESEND_API_KEY`, `FROM_EMAIL` |
+| **Any email server (SMTP)** | depends on the service | Use the host, port, user name and password your email service gives you. **Railway blocks this on its free and hobby plans**, so on those use one of the three above. | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASSWORD`, `FROM_EMAIL` |
+
+If you have no domain, choose **Brevo or Mailjet**: one verified address is all they need. If you already own a domain, Resend is a good fit too. When something goes wrong, **Send test** (Settings → Emails) shows the service's own reason in plain words, for example "Is the sender address validated in Mailjet?".
+
 ### Emails (Settings → Emails)
 
-Once `BREVO_API_KEY` and `GMAIL_ADDRESS` are set, your server sends the emails
+Once an email service is set up (see above), your server sends the emails
 below. The **Emails** screen is one short list: each row names an email, says
 when it is sent and whether it is on. Press **Edit** to open just that one:
 subject, message, and clickable chips (`{name}`, `{tier}`...) that drop the right
@@ -516,7 +533,7 @@ Follow-up emails**.
   mail programs). It asks first, and stops all follow-ups for that email address.
   Their card and member area are not affected.
 - The server checks once an hour and sends at most 40 follow-ups per check, so a big
-  batch is spread out. Your email service (Brevo) has its own daily limit on the free
+  batch is spread out. Your email service has its own daily limit on the free
   plan, so for a large list switch them on gradually.
 - This is not a newsletter: it is a few set notes after joining. For a one-off note to
   members, use the **Bulletin board**.
@@ -559,8 +576,8 @@ date kept on your server.
 **Expiry reminder.** Under **Emails → Access ends soon**, this emails a member
 a few days before their access ends, once per end date (extending a member
 starts a fresh reminder for the new date). Set "days before" to 0 to keep it
-off (the default). It needs email set up on the server (`BREVO_API_KEY` and
-`GMAIL_ADDRESS`); without it nothing is sent. The subject and text are
+off (the default). It needs email set up on the server (an email service, see "Choosing an email service");
+without it nothing is sent. The subject and text are
 editable (`{name}`, `{tier}`, `{creator}`, `{brand}`, `{expires}` and `{days}`),
 and an optional "where to renew" address adds a **Renew** button. Preview and
 **Send test** work like the welcome email. The server checks about once an
@@ -580,7 +597,7 @@ Open **Content → Bulletin board** (the **Content** place in the menu has two s
   "GOLD members"), or the **ticket holders** of one event. The list shows how many people
   are in each group. Each person gets one email, even if they hold several cards, with
   their own access link and a line saying why they received it. Needs email set up
-  (`BREVO_API_KEY` and `GMAIL_ADDRESS`, see above); without it you can still pin.
+  (an email service, see above); without it you can still pin.
 
 You can do both at once. **Preview the email** shows what members will get, and **Send test**
 sends it to one address first. Press **Post** and confirm. Emails go out one by one in the
@@ -997,8 +1014,8 @@ for deploying from your own GitHub copy instead.
    credential — it's what makes the registry, issued credentials, and the
    signing key (step 2) all survive a redeploy.
 5. **Set the rest of the env vars** from step 5 in that service's
-   Variables tab (`ADMIN_SECRET` at minimum; `BREVO_API_KEY`/
-   `GMAIL_ADDRESS` to actually send email; Stripe's two keys only if
+   Variables tab (`ADMIN_SECRET` at minimum; an email service (for example `BREVO_API_KEY` and
+   `FROM_EMAIL`) to actually send email; Stripe's two keys only if
    you're using that provider).
 6. Railway gives you a public URL once it finishes building. `/admin/login`
    on that URL is your dashboard from anywhere now, not just localhost.

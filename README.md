@@ -97,8 +97,8 @@ can revoke any of them at any time.
   "Sold out" when full) and allow one card per email address.
 - Built-in protections: admin login lockout, forged-request protection and
   rate limits on public pages.
-- Email delivery (optional): connect Brevo and members get their card and
-  link by email. Without it, copy each member's link from the dashboard and
+- Email delivery (optional): connect Brevo, Mailjet, Resend or any email server and
+  members get their card and link by email. Without it, copy each member's link from the dashboard and
   send it yourself.
 
 ## Good to know

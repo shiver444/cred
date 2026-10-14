@@ -2,7 +2,8 @@
 Credential Protocol — Email Sender
 Sends the credential email to a new member.
 
-Uses the Brevo (formerly Sendinblue) transactional email HTTP API.
+Sends through Brevo, Mailjet, Resend or any SMTP server (see mail_providers.py); Brevo was the first and is the default.
+Brevo uses the transactional email HTTP API.
 Switched from SendGrid because SendGrid gates new accounts behind a
 Twilio phone-verification step that can be unreliable (VOIP/forwarded
 numbers often get rejected outright). Brevo verifies its sender by an
@@ -27,6 +28,7 @@ from html import escape as _esc
 from pathlib import Path
 
 import card_kinds
+import mail_providers
 import email_look
 import config_store
 import email_templates
@@ -45,7 +47,7 @@ _cfg = _load_config()
 
 # ── CONFIG — fill these in (config.json for branding, env vars for secrets) ──
 BREVO_API_KEY = os.environ.get("BREVO_API_KEY", "")
-FROM_EMAIL    = os.environ.get("GMAIL_ADDRESS", "your@gmail.com")   # must match your Brevo verified sender
+FROM_EMAIL    = os.environ.get("FROM_EMAIL") or os.environ.get("GMAIL_ADDRESS", "your@gmail.com")   # must be a sender address your email service has verified
 CREATOR_NAME  = _cfg.get("creator_name", "Your Creator Name")
 CARD_TITLE    = _cfg.get("card_title", "YOUR BRAND HERE")
 ACCENT_COLOR  = _cfg.get("accent_color", "#00e87a")
@@ -90,8 +92,8 @@ def _fill(text: str, values: dict) -> str:
 
 
 def is_configured() -> bool:
-    """True when this server can actually send email."""
-    return bool(BREVO_API_KEY)
+    """True when this server can actually send email (with Brevo, Mailjet, Resend or any SMTP server: see mail_providers.py)."""
+    return mail_providers.configured(BREVO_API_KEY)
 
 
 def _refresh_branding():
@@ -288,25 +290,12 @@ Keep your access link somewhere safe.
 
 
 def _post_to_brevo(payload: dict) -> tuple:
-    """Send one prepared message. Returns (ok, human-readable detail)."""
-    try:
-        if not BREVO_API_KEY:
-            raise RuntimeError("BREVO_API_KEY is not set")
-        resp = requests.post(
-            BREVO_URL,
-            headers={
-                "accept": "application/json",
-                "api-key": BREVO_API_KEY,
-                "content-type": "application/json",
-            },
-            json=payload,
-            timeout=15,
-        )
-        if resp.status_code in (200, 201, 202):
-            return True, "sent"
-        return False, f"Brevo {resp.status_code} — {resp.text}"
-    except Exception as e:
-        return False, str(e)
+    """Send one prepared message with whichever email service is set up. Returns (ok, human-readable detail).
+    (The name is from when Brevo was the only choice; every message still goes through here.)"""
+    provider = mail_providers.active(BREVO_API_KEY)
+    if not mail_providers.has_keys(provider, BREVO_API_KEY):
+        return False, mail_providers.missing(BREVO_API_KEY)
+    return mail_providers.send(provider, payload, BREVO_API_KEY, BREVO_URL)
 
 
 def send_credential_email(
@@ -324,7 +313,7 @@ def send_credential_email(
     detail:        dict = None,
 ) -> bool:
     """
-    Send the credential email via Brevo's HTTP API: the Welcome email for a
+    Send the credential email through the email service that is set up: the Welcome email for a
     membership, the ticket confirmation for a ticket, the collectible one for
     a collectible, the voucher or certificate one for those. Attaches the card HTML and bundle ZIP and includes the
     personal access link. Returns True on success.
@@ -341,8 +330,8 @@ def send_credential_email(
         msg = build_email(to_name, tier, credential_id, bundle_hash, expires_at)
 
     try:
-        if not BREVO_API_KEY:
-            raise RuntimeError("BREVO_API_KEY is not set")
+        if not is_configured():
+            raise RuntimeError(mail_providers.missing(BREVO_API_KEY) or "Email is not set up")
 
         attachments = []
 
@@ -397,9 +386,9 @@ def preview_email(tier: str, overrides: dict = None) -> dict:
 def send_test_email(to_email: str, tier: str, overrides: dict = None, kind: str = "welcome") -> tuple:
     """Send the sample email ("welcome", "reminder" or "extended") to one address (no
     attachments). Returns (ok, message for the creator)."""
-    if not BREVO_API_KEY:
-        return False, ("Email isn't set up on this server yet, so nothing can be sent. "
-                       "Set BREVO_API_KEY and GMAIL_ADDRESS (see SETUP.md), then try again.")
+    if not is_configured():
+        return False, ("Email isn't set up on this server yet, so nothing can be sent. " +
+                       mail_providers.missing(BREVO_API_KEY) + " Then try again.")
     msg = preview_kind(kind, tier, overrides)
     ok, detail = _post_to_brevo({
         "sender": {"name": FROM_NAME, "email": FROM_EMAIL},
@@ -765,7 +754,7 @@ def build_alert_email(who_name, who_email, tier, price_text="", reference="") ->
 
 
 def send_howtopay_email(to_name, to_email, tier, price_text, reference, instructions, pay_url="", pay_label="") -> tuple:
-    if not BREVO_API_KEY:
+    if not is_configured():
         return False, "Email isn't set up on this server."
     msg = build_howtopay_email(to_name, tier, price_text, reference, instructions, pay_url, pay_label)
     ok, detail = _send_simple(to_name, to_email, msg)
@@ -774,7 +763,7 @@ def send_howtopay_email(to_name, to_email, tier, price_text, reference, instruct
 
 
 def send_declined_email(to_name, to_email, tier, price_text="", reference="") -> tuple:
-    if not BREVO_API_KEY:
+    if not is_configured():
         return False, "Email isn't set up on this server."
     msg = build_declined_email(to_name, tier, price_text, reference)
     ok, detail = _send_simple(to_name, to_email, msg)
@@ -783,7 +772,7 @@ def send_declined_email(to_name, to_email, tier, price_text="", reference="") ->
 
 
 def send_event_reminder_email(to_name, to_email, tier, credential_id, bundle_hash, event) -> bool:
-    if not BREVO_API_KEY:
+    if not is_configured():
         return False
     msg = build_event_reminder_email(to_name, tier, credential_id, bundle_hash, event)
     ok, detail = _send_simple(to_name, to_email, msg)
@@ -792,7 +781,7 @@ def send_event_reminder_email(to_name, to_email, tier, credential_id, bundle_has
 
 
 def send_payment_alert(to_email, who_name, who_email, tier, price_text="", reference="") -> tuple:
-    if not BREVO_API_KEY:
+    if not is_configured():
         return False, "Email isn't set up on this server."
     msg = build_alert_email(who_name, who_email, tier, price_text, reference)
     ok, detail = _post_to_brevo({
@@ -853,7 +842,7 @@ def build_followup_email(step, to_name, tier, credential_id, bundle_hash, overri
 
 
 def send_followup_email(step, to_name, to_email, tier, credential_id, bundle_hash) -> bool:
-    if not BREVO_API_KEY:
+    if not is_configured():
         return False
     msg = build_followup_email(step, to_name, tier, credential_id, bundle_hash)
     payload = {
@@ -908,7 +897,7 @@ def build_newitem_email(to_name, tier, credential_id, bundle_hash, titles, overr
 
 
 def send_newitem_email(to_name, to_email, tier, credential_id, bundle_hash, titles) -> bool:
-    if not BREVO_API_KEY:
+    if not is_configured():
         return False
     msg = build_newitem_email(to_name, tier, credential_id, bundle_hash, titles)
     payload = {
@@ -942,7 +931,7 @@ def build_setdone_email(to_name, reward_tier, set_name, pieces, credential_id, b
 
 
 def send_setdone_email(to_name, to_email, reward_tier, set_name, pieces, credential_id, bundle_hash, count=None) -> bool:
-    if not BREVO_API_KEY:
+    if not is_configured():
         return False
     msg = build_setdone_email(to_name, reward_tier, set_name, pieces, credential_id, bundle_hash, count=count)
     ok, detail = _send_simple(to_name, to_email, msg)
@@ -963,7 +952,7 @@ def build_ended_email(to_name, tier, overrides: dict = None) -> dict:
 
 
 def send_lostlink_email(to_name, to_email, cards) -> tuple:
-    if not BREVO_API_KEY:
+    if not is_configured():
         return False, "Email isn't set up on this server."
     msg = build_lostlink_email(to_name, cards)
     ok, detail = _send_simple(to_name, to_email, msg)
@@ -972,7 +961,7 @@ def send_lostlink_email(to_name, to_email, cards) -> tuple:
 
 
 def send_ended_email(to_name, to_email, tier) -> tuple:
-    if not BREVO_API_KEY:
+    if not is_configured():
         return False, "Email isn't set up on this server."
     msg = build_ended_email(to_name, tier)
     ok, detail = _send_simple(to_name, to_email, msg)
@@ -1061,7 +1050,7 @@ def build_announcement_email(to_name, tier, credential_id, bundle_hash, title, t
 
 def send_announcement_email(to_name, to_email, tier, credential_id, bundle_hash, title, text, link="") -> tuple:
     """Returns (ok, detail)."""
-    if not BREVO_API_KEY:
+    if not is_configured():
         return False, "Email isn't set up on this server."
     msg = build_announcement_email(to_name, tier, credential_id, bundle_hash, title, text, link)
     return _send_simple(to_name, to_email, msg)
@@ -1077,9 +1066,9 @@ def preview_announcement(title, text, link="", tier="MEMBER") -> dict:
 
 def send_test_announcement(to_email, title, text, link="", tier="MEMBER") -> tuple:
     """Send the sample announcement to one address. Returns (ok, message)."""
-    if not BREVO_API_KEY:
-        return False, ("Email isn't set up on this server yet, so nothing can be sent. "
-                       "Set BREVO_API_KEY and GMAIL_ADDRESS (see SETUP.md), then try again.")
+    if not is_configured():
+        return False, ("Email isn't set up on this server yet, so nothing can be sent. " +
+                       mail_providers.missing(BREVO_API_KEY) + " Then try again.")
     msg = preview_announcement(title, text, link, tier)
     ok, detail = _post_to_brevo({
         "sender": {"name": FROM_NAME, "email": FROM_EMAIL},
@@ -1105,7 +1094,7 @@ def _send_simple(to_name, to_email, msg) -> tuple:
 
 def send_extended_email(to_name, to_email, tier, credential_id, bundle_hash, expires_at, days_added=None) -> tuple:
     """Returns (ok, detail)."""
-    if not BREVO_API_KEY:
+    if not is_configured():
         return False, "Email isn't set up on this server."
     msg = build_extended_email(to_name, tier, credential_id, bundle_hash, expires_at, days_added)
     ok, detail = _send_simple(to_name, to_email, msg)
@@ -1114,7 +1103,7 @@ def send_extended_email(to_name, to_email, tier, credential_id, bundle_hash, exp
 
 
 def send_reminder_email(to_name, to_email, tier, credential_id, bundle_hash, expires_at, days_left) -> bool:
-    if not BREVO_API_KEY:
+    if not is_configured():
         return False
     msg = build_reminder_email(to_name, tier, credential_id, bundle_hash, expires_at, days_left)
     ok, detail = _send_simple(to_name, to_email, msg)
@@ -1142,8 +1131,8 @@ def preview_reminder(tier: str, overrides: dict = None) -> dict:
 
 # ── Quick test (prints without sending if no key set) ──
 if __name__ == "__main__":
-    if not BREVO_API_KEY:
-        print("Set BREVO_API_KEY (and GMAIL_ADDRESS as your verified sender) to test email sending.")
+    if not is_configured():
+        print(mail_providers.missing(BREVO_API_KEY) or "Email is not set up.")
         print("Personal link would be:")
         print(f"{MEMBERS_PAGE}?id=test1234abcd5678&h=abc123def456")
     else:

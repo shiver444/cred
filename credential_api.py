@@ -2712,10 +2712,10 @@ def _setup_checklist_html(cfg: dict, provider: str) -> str:
     ))
 
     items.append((
-        bool(os.environ.get("BREVO_API_KEY") and os.environ.get("GMAIL_ADDRESS")),
+        bool(email_sender.is_configured() and (os.environ.get("FROM_EMAIL") or os.environ.get("GMAIL_ADDRESS"))),
         "Email (optional)",
         "Not set up, so members won't be emailed. That's fine: copy each member's link from Members and send it yourself. "
-        "To turn emails on, set BREVO_API_KEY and GMAIL_ADDRESS (see SETUP.md).",
+        "To turn emails on, connect Brevo, Mailjet, Resend or any email server (see SETUP.md, \"Emails\").",
     ))
 
     done_count = sum(1 for d, _, _ in items if d)
@@ -5561,8 +5561,8 @@ if __name__ == "__main__":
     print("GET  /admin/content   — manage the members-only content (and upload files for it)")
     print()
     print("Set these env vars before running (see SETUP.md):")
-    print("  GMAIL_ADDRESS      — your verified Brevo sender address")
-    print("  BREVO_API_KEY      — your Brevo transactional API key")
+    print("  FROM_EMAIL         — the sender address your email service has verified (GMAIL_ADDRESS also works)")
+    print("  BREVO_API_KEY      — or MAILJET_API_KEY + MAILJET_SECRET_KEY, or RESEND_API_KEY, or SMTP_HOST (+ SMTP_USER, SMTP_PASSWORD)")
     print("  MEMBERS_PAGE       — https://your-domain.com/members.html")
     print("  ADMIN_SECRET       — admin login password / API secret")
     print("  SESSION_SECRET_KEY — signs the admin session cookie (set for persistent logins)")
