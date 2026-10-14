@@ -254,6 +254,27 @@ def _csrf_protect():
                         "error": "Security check failed. Reload the page and try again."}), 403
     return None
 
+SLOW_REQUEST_SECONDS = 0.75
+
+
+@app.before_request
+def _start_timer():
+    request.environ["cp.t0"] = time.monotonic()
+
+
+@app.after_request
+def _log_slow_requests(resp):
+    """A line in the server log for any page that took long to build ("slow request GET /admin/recipes 2.1s"), so a slow
+    screen can be found from the Railway logs. Only the path is logged, never the address's query part."""
+    try:
+        t0 = request.environ.get("cp.t0")
+        if t0 is not None and time.monotonic() - t0 >= SLOW_REQUEST_SECONDS:
+            print(f"⏱ slow request {request.method} {request.path} {time.monotonic() - t0:.1f}s ({resp.status_code})")
+    except Exception:
+        pass
+    return resp
+
+
 @app.after_request
 def _security_headers(resp):
     resp.headers.setdefault("X-Content-Type-Options", "nosniff")

@@ -104,6 +104,12 @@ JS = """
     return fetch(url, { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify(body) }).then(function (r) { return r.json().then(function (j) { return { status: r.status, body: j }; }); });
   }
+  // The preview frames are made the first time a preview is shown: 21 ready-made frames slowed every dashboard page load.
+  function frameIn(root) {
+    var f = root.querySelector('iframe.em-frame');
+    if (!f) { f = document.createElement('iframe'); f.className = 'em-frame'; f.setAttribute('sandbox', ''); f.title = 'Email preview'; root.querySelector('.em-hold').appendChild(f); }
+    return f;
+  }
   function closeRow(r) {
     r.querySelector('.em-panel').hidden = true; r.classList.remove('open');
     r.querySelector('.em-edit').textContent = 'Edit';
@@ -117,14 +123,14 @@ JS = """
       match.hidden = v !== 'match';
     }
     look.addEventListener('change', syncLook); syncLook();
-    var lst = look.querySelector('.el-status'), pvBtn = look.querySelector('.el-preview'), pvFrame = look.querySelector('.em-frame');
+    var lst = look.querySelector('.el-status'), pvBtn = look.querySelector('.el-preview');
     function lsay(t, good) { lst.textContent = t; lst.style.color = good ? 'var(--ok)' : 'var(--bad)'; }
     pvBtn.addEventListener('click', function () {
       pvBtn.disabled = true; lsay('Loading preview…', true);
       post('/admin/email/preview', Object.assign({ kind: 'welcome' }, lookValues())).then(function (res) {
         pvBtn.disabled = false;
         if (!res.body.success) { lsay(res.body.error || 'Preview failed.', false); return; }
-        pvFrame.srcdoc = res.body.html; pvFrame.style.display = 'block'; lsay('This is the Welcome email in that look. Press “Save changes” to keep it.', true);
+        var pvFrame = frameIn(look); pvFrame.srcdoc = res.body.html; pvFrame.style.display = 'block'; lsay('This is the Welcome email in that look. Press “Save changes” to keep it.', true);
       }).catch(function () { pvBtn.disabled = false; lsay('Could not reach the server.', false); });
     });
     var readBtn = look.querySelector('.el-read');
@@ -148,7 +154,7 @@ JS = """
   }
   rows.forEach(function (row) {
     var panel = row.querySelector('.em-panel'), editBtn = row.querySelector('.em-edit');
-    var status = row.querySelector('.em-status'), frame = row.querySelector('.em-frame');
+    var status = row.querySelector('.em-status');
     var last = null;
     function say(t, good) { status.textContent = t; status.style.color = good ? 'var(--ok)' : 'var(--bad)'; }
     function values() {
@@ -195,7 +201,7 @@ JS = """
       post('/admin/email/preview', values()).then(function (res) {
         pv.disabled = false;
         if (!res.body.success) { say(res.body.error || 'Preview failed.', false); return; }
-        frame.srcdoc = res.body.html; frame.style.display = 'block';
+        var frame = frameIn(row); frame.srcdoc = res.body.html; frame.style.display = 'block';
         say('Subject: ' + res.body.subject, true);
       }).catch(function () { pv.disabled = false; say('Could not reach the server.', false); });
     });
@@ -265,7 +271,7 @@ def _row_html(kind: dict, values: dict, tier_names=()) -> str:
         '<div class="em-panel" hidden>%s%s%s'
         '<div class="em-actions"><button type="button" class="add-tier em-preview" style="margin-top:0;">Preview →</button>'
         '<button type="button" class="add-tier em-testbtn" style="margin-top:0;">Send test</button>%s</div>'
-        '<div class="em-status"></div><iframe class="em-frame" sandbox="" title="Email preview"></iframe></div></div>'
+        '<div class="em-status"></div><div class="em-hold"></div></div></div>'
     ) % (kind["key"], _esc(kind["title"]), ' <span class="em-tag">Edited</span>' if edited else "",
          _esc(kind["when"]), " on" if on else "", _esc(label), fields, chips, note, reset)
 
@@ -312,7 +318,7 @@ def look_box_html(cfg_values: dict) -> str:
         logo +
         '<div class="em-actions"><button type="button" class="add-tier el-preview" style="margin-top:0;">Preview this look →</button></div>'
         '<div class="el-status em-status" role="status" aria-live="polite"></div>'
-        '<iframe class="em-frame" sandbox="" title="Email preview"></iframe></div>'
+        '<div class="em-hold"></div></div>'
     )
 
 
