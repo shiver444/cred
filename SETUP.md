@@ -358,10 +358,12 @@ start a set with those choices filled in. A reward is given once per person per 
   it opens that card. A missing piece is a "?" tile. The reward is a big panel at the bottom: locked
   ("Collect 2 more pieces to unlock it"), then "Unlocking your reward" for the moment before it arrives, then a
   glowing "Reward unlocked" panel with the reward card's picture and an "Open your ..." button. Only sets they
-  have started show up. Links are given only for **free** cards, and never for **tickets or vouchers** (a link opens
-  a card on its own, so handing out the links of paid or one-use cards just because they share an email address
-  would let one leaked link open them all); such a piece still shows as collected, and members reach it through its
-  own email or link. Someone who finished a set before it existed (and wasn't included) is told "You have every
+  have started show up. Links are given only for **free** cards, and never for **tickets or vouchers**
+  (a link opens a card on its own, and free cards can be signed up for with anyone's email address, so handing out the
+  links of paid or one-use cards just because they share an email address would let one leaked link open them all);
+  such a piece or reward still shows as collected, and members reach it through its own email or link. This applies
+  to a voucher reward too: the panel says "Open it from the email we sent you". **Without email set up**, copy the
+  voucher's link from People and send it to the person yourself. Someone who finished a set before it existed (and wasn't included) is told "You have every
   piece of this set" rather than promised a reward.
 - Rewards are given right after someone's last piece is issued and checked again once an hour. To keep a big new
   set from tying the server up, one hourly check gives out at most 40 rewards and one press of **Save sets** at most

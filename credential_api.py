@@ -4481,7 +4481,7 @@ def _decorate_sets(mine: list, cfg: dict, registry: list, email: str):
     pretty: the card's picture, and a link to open that card. A link is only given for FREE cards
     that are still good, and never for tickets or vouchers (those can be used up): a link opens a card by
     itself, so handing out the links of paid or one-use cards because they share an email address would let
-    one leaked link open them all."""
+    one leaked link open them all (free cards can be signed up for with anyone's email address)."""
     held_all = card_sets.held_by(registry, email)
     prices = {str(t.get("name") or "").strip().upper(): t.get("price") for t in (cfg.get("tiers") or []) if isinstance(t, dict)}
     arts = {}

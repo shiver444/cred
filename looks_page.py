@@ -392,7 +392,9 @@ _JS = r"""
     fSame.checked = !l || !l.accent_color; fAccent.value = (l && l.accent_color) || D.default.accent;
     esay(''); states();
     listView.style.display = 'none'; editor.style.display = '';
-    frame.srcdoc = '';
+    // a dark "drawing" note instead of a blank white frame while the first preview is on its way
+    lastSig = '';
+    frame.srcdoc = '<body style="margin:0;height:100vh;display:flex;align-items:center;justify-content:center;background:#0a0908;color:#9a948a;font:13px sans-serif">Drawing the preview\u2026</body>';
     if (editor.scrollIntoView) editor.scrollIntoView({ block: 'start' });
     preview();
   }

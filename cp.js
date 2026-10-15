@@ -1695,6 +1695,7 @@
               ${img ? (rHref ? `<a class="ca-boss-art-link" href="${esc(rHref)}">${img}</a>` : `<div class="ca-boss-art-link">${img}</div>`) : ''}
               <div class="ca-boss-name">${esc(rw.name)}</div>
               <div class="ca-boss-sub">Yours for completing ${esc(st.name)}</div>
+              ${rHref ? '' : '<div class="ca-boss-sub">Open it from the email we sent you (check your spam folder).</div>'}
               ${rHref ? `<a class="ca-boss-btn" href="${esc(rHref)}">Open your ${esc(rw.name)} \u2192</a>` : ''}
             </div>`
         } else if (st.complete) {
