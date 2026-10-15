@@ -77,6 +77,10 @@ def render(theme_css: str, theme_js: str, body_attrs: str, title: str, state: di
     <div class="sub"><select id="an-group" aria-label="Who gets the email"></select></div>
     <div class="hint sub" id="an-email-note"></div>
 
+    <label class="opt"><input type="checkbox" id="an-later"> <span>Send it later instead of now</span></label>
+    <div class="sub" id="an-later-box" style="display:none"><input type="datetime-local" id="an-when" aria-label="When to send" style="width:auto;max-width:100%;">
+      <div class="hint" style="margin:4px 0 0;">Uses the time on your own device. Checked every minute while this site is running. Whoever holds a card at that moment gets it.</div></div>
+
     <div class="an-row">
       <button type="button" class="an-btn" id="an-post">Post</button>
       <button type="button" class="an-btn ghost" id="an-preview">Preview the email</button>
@@ -89,6 +93,9 @@ def render(theme_css: str, theme_js: str, body_attrs: str, title: str, state: di
       <button type="button" class="an-btn ghost" id="an-test">Send test</button>
     </div>
     <iframe id="an-frame" sandbox="" title="Email preview"></iframe>
+
+    <h2>Waiting to be sent</h2>
+    <div id="an-waiting"></div>
 
     <h2>Sent before</h2>
     <div id="an-history"></div>
@@ -128,6 +135,21 @@ def render(theme_css: str, theme_js: str, body_attrs: str, title: str, state: di
       b.onclick = function () {{ b.disabled = true; post('/admin/announce/unpin').then(function (r) {{ if (r.body.success) {{ S.current = null; drawCurrent(); say('Unpinned.', true); }} else {{ b.disabled = false; say(r.body.error || 'Failed.', false); }} }}); }};
       card.appendChild(b); box.appendChild(card);
     }}
+    function drawWaiting() {{
+      var box = $('an-waiting'); box.textContent = '';
+      if (!(S.scheduled || []).length) {{ box.appendChild(el('div', 'hint', 'Nothing is waiting.')); return; }}
+      S.scheduled.forEach(function (h) {{
+        var row = el('div', 'an-hist');
+        row.appendChild(el('div', '', h.title || (h.text || '').slice(0, 70) || '(no text)'));
+        var bits = ['goes out ' + new Date(h.at).toLocaleString()];
+        if (h.pin) bits.push('will be pinned');
+        if (h.mail) bits.push('will be emailed (' + (h.group || 'a group') + ')');
+        row.appendChild(el('div', 'm', bits.join(' · ')));
+        var b = el('button', '', 'Cancel'); b.type = 'button';
+        b.onclick = function () {{ b.disabled = true; post('/admin/announce/cancel', {{ id: h.id }}).then(function (r) {{ if (r.body.success) {{ S.scheduled = r.body.scheduled; drawWaiting(); say('Cancelled.', true); }} else {{ b.disabled = false; say(r.body.error || 'Failed.', false); }} }}); }};
+        row.appendChild(b); box.appendChild(row);
+      }});
+    }}
     function drawHistory() {{
       var box = $('an-history'); box.textContent = '';
       if (!(S.history || []).length) {{ box.appendChild(el('div', 'hint', 'Nothing yet.')); return; }}
@@ -157,12 +179,16 @@ def render(theme_css: str, theme_js: str, body_attrs: str, title: str, state: di
     function refresh() {{
       return fetch('/admin/announce/status', {{ credentials: 'same-origin' }}).then(function (r) {{ return r.json(); }}).then(function (j) {{
         if (!j.success) return;
-        S.current = j.current; S.history = j.history; S.groups = j.groups; S.email_ready = j.email_ready;
-        drawCurrent(); drawHistory(); drawGroups();
+        S.current = j.current; S.history = j.history; S.groups = j.groups; S.email_ready = j.email_ready; S.scheduled = j.scheduled || [];
+        drawCurrent(); drawHistory(); drawGroups(); drawWaiting();
         if (progress()) {{ clearTimeout(timer); timer = setTimeout(refresh, 1500); }} else if (S._wasRunning) {{ S._wasRunning = false; say('The emails have all been sent.', true); }}
         S._wasRunning = S._wasRunning || false;
       }}).catch(function () {{}});
     }}
+    $('an-later').addEventListener('change', function () {{
+      $('an-later-box').style.display = $('an-later').checked ? '' : 'none';
+      $('an-post').textContent = $('an-later').checked ? 'Schedule' : 'Post';
+    }});
     $('an-email').addEventListener('change', function () {{ $('an-group').disabled = !$('an-email').checked || !S.email_ready; }});
 
     function fields() {{ return {{ title: $('an-title').value, text: $('an-text').value, link: $('an-link').value }}; }}
@@ -172,14 +198,22 @@ def render(theme_css: str, theme_js: str, body_attrs: str, title: str, state: di
       if (!pin && !mail) {{ say('Tick "Pin it" and/or "Also email it".', false); return; }}
       var g = (S.groups || []).filter(function (x) {{ return x.key === $('an-group').value; }})[0];
       if (mail && (!g || !g.count)) {{ say('Nobody is in that group right now.', false); return; }}
-      var q = 'Post this' + (pin ? ' and pin it' : '') + (mail ? (pin ? ', and' : '') + ' email it to ' + g.count + ' ' + (g.count === 1 ? 'person' : 'people') + ' (' + g.label + ')' : '') + '?';
+      var later = $('an-later').checked, sendAt = '';
+      if (later) {{
+        var d = new Date($('an-when').value);
+        if (!$('an-when').value || isNaN(d.getTime())) {{ say('Pick the date and time to send it.', false); return; }}
+        if (d.getTime() < Date.now() + 120000) {{ say('Pick a time in the future.', false); return; }}
+        sendAt = d.toISOString();
+      }}
+      var q = (later ? 'Schedule this for ' + new Date(sendAt).toLocaleString() : 'Post this') + (pin ? (later ? ' and pin it' : ' and pin it') : '') + (mail ? (pin ? ', and' : '') + ' email it to the ' + (later ? 'group (' + g.label + ') as it is then' : g.count + ' ' + (g.count === 1 ? 'person' : 'people') + ' (' + g.label + ')') : '') + '?';
       if (!window.confirm(q)) return;
-      $('an-post').disabled = true; say('Posting…', true);
-      post('/admin/announce/post', Object.assign({{ pin: pin, email: mail, group: $('an-group').value }}, f)).then(function (r) {{
+      $('an-post').disabled = true; say(later ? 'Scheduling…' : 'Posting…', true);
+      post('/admin/announce/post', Object.assign({{ pin: pin, email: mail, group: $('an-group').value }}, f, later ? {{ send_at: sendAt }} : {{}})).then(function (r) {{
         $('an-post').disabled = false;
         if (!r.body.success) {{ say(r.body.error || 'Failed.', false); return; }}
-        say(mail ? 'Posted. Sending ' + r.body.total + ' emails now. You can leave this page; it keeps going.' : 'Posted and pinned.', true);
         $('an-title').value = ''; $('an-text').value = ''; $('an-link').value = '';
+        if (r.body.scheduled) {{ say('Scheduled. It goes out at ' + new Date(r.body.at).toLocaleString() + '.', true); $('an-later').checked = false; $('an-later').dispatchEvent(new Event('change')); refresh(); return; }}
+        say(mail ? 'Posted. Sending ' + r.body.total + ' emails now. You can leave this page; it keeps going.' : 'Posted and pinned.', true);
         S._wasRunning = !!mail; refresh();
       }}).catch(function () {{ $('an-post').disabled = false; say('Could not reach the server.', false); }});
     }});
@@ -200,7 +234,7 @@ def render(theme_css: str, theme_js: str, body_attrs: str, title: str, state: di
         .catch(function () {{ $('an-test').disabled = false; say('Could not reach the server.', false); }});
     }});
 
-    drawCurrent(); drawHistory(); drawGroups(); if (progress()) {{ S._wasRunning = true; timer = setTimeout(refresh, 1500); }}
+    drawCurrent(); drawHistory(); drawGroups(); drawWaiting(); if (progress()) {{ S._wasRunning = true; timer = setTimeout(refresh, 1500); }}
   }})();
   </script>
   {theme_js}

@@ -528,6 +528,7 @@ __THEME__</style></head>
       if (!t.sections.length) {
         line.appendChild(document.createTextNode('no members-only sections'));
       } else {
+        if (t.sections.indexOf('*') > -1) { line.appendChild(el('span', { class: 'ok-k', text: 'everything, including sections you add later ✓' })); box.appendChild(line); return; }
         t.sections.forEach(function (k, idx) {
           var good = !!keys[String(k).toLowerCase()];
           line.appendChild(el('span', { class: good ? 'ok-k' : 'no-k', text: (idx ? ', ' : '') + k + (good ? ' ✓' : ' ✗ no section has this key') }));

@@ -273,15 +273,26 @@ def teaser(content: dict, tiers: list) -> list:
         if not titles:
             continue
         who = [str(t.get("label") or t.get("name") or "") for t in (tiers or [])
-               if s["key"] in {str(x).strip().lower() for x in (t.get("sections") or [])}]
+               if allows_all(t.get("sections")) or s["key"] in {str(x).strip().lower() for x in (t.get("sections") or [])}]
         out.append({"title": s["title"], "items": titles[:MAX_TEASER_ITEMS],
                     "more": max(0, len(titles) - MAX_TEASER_ITEMS), "tiers": [w for w in who if w]})
     return out
 
 
+ALL = "*"      # in a card's sections: "everything, including sections I add later"
+
+
+def allows_all(sections) -> bool:
+    """True when this list of section keys (a card's, or a member's) means "every section"."""
+    return any(str(s).strip() == ALL for s in (sections or []))
+
+
 def sections_for_member(content: dict, member_sections) -> list:
     """The sections a member may see: only those whose key is in their
-    credential's sections. Order follows the content manager's order."""
+    credential's sections (or all of them, for a card that unlocks everything).
+    Order follows the content manager's order."""
+    if allows_all(member_sections):
+        return list(content.get("sections", []))
     allowed = {str(s).strip().lower() for s in (member_sections or [])}
     return [s for s in content.get("sections", []) if s["key"] in allowed]
 
@@ -385,9 +396,9 @@ def find_preview_item(content: dict, preview_id: str, allowed_keys, issued_at=No
     """The item whose preview picture is `preview_id` — but only if it sits in
     a section whose key is in `allowed_keys` (the member's tier) and is open
     for this person right now (see timeline.py)."""
-    allowed = {str(k).strip().lower() for k in (allowed_keys or [])}
+    allowed, every = {str(k).strip().lower() for k in (allowed_keys or [])}, allows_all(allowed_keys)
     for s in content.get("sections", []):
-        if s.get("type") == "links" and s["key"] in allowed:
+        if s.get("type") == "links" and (every or s["key"] in allowed):
             for it in s.get("items", []):
                 if it.get("preview") and it["preview"]["id"] == preview_id and _is_open(it, issued_at, now):
                     return it
@@ -491,9 +502,9 @@ def find_file_item(content: dict, file_id: str, allowed_keys, issued_at=None, no
     in a section whose key is in `allowed_keys` (the member's tier) and is open
     for this person right now (a file whose date has not come cannot be
     downloaded, even with its address)."""
-    allowed = {str(k).strip().lower() for k in (allowed_keys or [])}
+    allowed, every = {str(k).strip().lower() for k in (allowed_keys or [])}, allows_all(allowed_keys)
     for s in content.get("sections", []):
-        if s.get("type") == "links" and s["key"] in allowed:
+        if s.get("type") == "links" and (every or s["key"] in allowed):
             for it in s.get("items", []):
                 if it.get("file") and it["file"]["id"] == file_id and _is_open(it, issued_at, now):
                     return it

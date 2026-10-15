@@ -102,6 +102,8 @@ import security
 import widget_look
 import custom_payment
 import admin_theme
+import door
+import payment_hook
 
 app = Flask(__name__)
 CORS(app)  # allow requests from your own domain
@@ -205,6 +207,9 @@ _PUBLIC_RULES = [
     ("/issue",          "signup", 10,  600),
     ("/checkout",       "signup", 10,  600),
     ("/resend-link",    "link",   5,   3600),
+    ("/member-cards-email", "link", 5,  3600),
+    ("/door/",          "door",   900, 600),
+    ("/webhook/payment", "payhook", 120, 60),
     ("/unsubscribe",    "unsub",  30,  3600),
     ("/verify",         "check",  120, 60),
     ("/member-content", "check",  120, 60),
@@ -291,6 +296,10 @@ def _security_headers(resp):
         if (request.method == "GET" and resp.status_code == 200 and resp.mimetype == "text/html"
                 and is_admin_session() and not resp.direct_passthrough):
             resp.set_data(security.inject_csrf(resp.get_data(as_text=True), security.csrf_token(session)))
+    elif path.startswith("/door/"):                      # the staff door link: never framed, never cached
+        resp.headers["X-Frame-Options"] = "DENY"
+        resp.headers["Content-Security-Policy"] = "frame-ancestors 'none'"
+        resp.headers.setdefault("Cache-Control", "no-store")
     return resp
 
 # Stripe — payments are entirely opt-in. With these unset, /checkout still
@@ -679,6 +688,7 @@ def _issue_and_fulfill(name: str, email: str, tier: str, days: int, sections: li
     design = resolve_tier_design(cfg, tier)
     extra = dict(extra or {})
     fixed_number = extra.pop("edition", None)      # a claim code that carries its own number (bottle 112 -> #112)
+    bundled = bool(extra.pop("bundled", False))    # given along with another card: it doesn't give more cards in turn
 
     # An event ticket works until its event ends, whatever number of days the
     # caller passed; its event details are signed into the card and shown on it.
@@ -720,6 +730,12 @@ def _issue_and_fulfill(name: str, email: str, tier: str, days: int, sections: li
         kind, event = "ticket", card_kinds.card_event(tier_cfg_t, _price_text)
         days = max(1, -(-int((ends_at - datetime.now(timezone.utc)).total_seconds()) // 86400))
 
+    # Cards given together share a random id (so the member's page can show them to each other, and nobody else).
+    also_tiers = [] if bundled else [get_tier(cfg, n) for n in ((tier_cfg_t or {}).get("also") or [])[:5]]
+    also_tiers = [t for t in also_tiers if t and str(t.get("name", "")).upper() != str(tier).upper()]
+    if also_tiers or bundled:
+        extra.setdefault("bundle_id", secrets.token_hex(8))
+
     # Steps 1–4 run under the signup lock so a limit check (`check`, when the
     # caller gives one) and the registry write can't be interleaved with
     # another signup. The email (slow, network) goes out after the lock.
@@ -759,6 +775,10 @@ def _issue_and_fulfill(name: str, email: str, tier: str, days: int, sections: li
                 if size is not None and number > size:
                     raise SignupBlocked("sold_out", "Sorry, this edition is sold out.")
             drop = card_kinds.card_drop(tier_cfg_t, number, limits.tier_max(tier_cfg_t))
+
+        # A founding number ("Member #37"): the next one for this card, never reused.
+        if (tier_cfg_t or {}).get("member_numbers") is True and "member_no" not in extra:
+            extra["member_no"] = member_registry.next_member_no(tier)
 
         # 1 — Issue
         result = issue_credential(
@@ -804,6 +824,7 @@ def _issue_and_fulfill(name: str, email: str, tier: str, days: int, sections: li
             event               = event,
             drop                = drop,
             detail              = detail,
+            member_no           = extra.get("member_no", 0),
         )
 
         # 4 — Registry (payment_meta, if given, is recorded on the entry —
@@ -846,12 +867,29 @@ def _issue_and_fulfill(name: str, email: str, tier: str, days: int, sections: li
     except Exception as e:
         print(f"❌ Set check failed: {e}")
 
+    # 7 — "Also gives": the other cards that come with this one, issued to the same person right now.
+    # Each one follows its own limits; one that can't be given is skipped, never an error for the buyer.
+    given_along = []
+    for at in also_tiers:
+        try:
+            r2 = _issue_and_fulfill(
+                name, email, at["name"], _reward_days(at), at.get("sections", []), cfg=cfg,
+                payment_meta={"comped": True, "with": result["credential_id"]},
+                check=lambda at=at: _signup_check(cfg, at, at["name"], email, public=False),
+                send_email=send_email, extra={"bundle_id": extra["bundle_id"], "bundled": True})
+            given_along.append(r2["credential_id"])
+        except SignupBlocked as b:
+            print(f"\u2139 Card \u201c{tier}\u201d: \u201c{at['name']}\u201d was not given along with it for {email}: {b.message}")
+        except Exception as e:
+            print(f"\u274c Card \u201c{tier}\u201d: giving \u201c{at['name']}\u201d along with it failed for {email}: {e}")
+
     return {
         "credential_id":    result["credential_id"],
         "bundle_hash":      bundle["bundle_hash"],
         "fingerprint_hash": result["fingerprint_hash"],
         "email_sent":       email_ok,
         "expires_at":       result["entry"]["expires_at"],
+        "given_along":      given_along,
     }
 
 
@@ -1114,48 +1152,110 @@ def stripe_webhook():
 # webhook does. mark_decided() only acts once per request (pending →
 # approved/rejected), so a double-click or a retried request can't
 # double-issue, same idempotency stance as the Stripe webhook.
+_approve_lock = threading.Lock()      # one approval at a time: the Approve button and the payment hook can't both issue
+
+def _approve_pending(request_id: str, source: str = "admin", paid=None):
+    """Issue the card for a pending payment request. Returns (result, None, 200) or (None, message, status).
+    `paid` = what the payment hook says was paid (kept on the card's payment record)."""
+    from payment_requests import get_request, mark_decided
+    with _approve_lock:
+        req = get_request(request_id)
+        if not req:
+            return None, "Request not found", 404
+        if req["status"] != "pending":
+            return None, f"Request already {req['status']}", 400
+        cfg = load_config()
+        tier_cfg = get_tier(cfg, req["tier"])
+        if not tier_cfg:
+            return None, f"Tier '{req['tier']}' no longer exists in config.", 400
+        sections = tier_cfg.get("sections", [])
+        days     = tier_cfg.get("expiry_days", 31)
+        meta = {
+            "provider":    "custom" if (cfg.get("payment_provider") or "") == "custom" else "manual",
+            "amount_paid": req.get("price"),
+            "currency":    req.get("currency"),
+            "approved_at": datetime.now(timezone.utc).isoformat(),
+        }
+        if source == "hook":
+            meta["confirmed_by"] = "payment hook"
+            if paid:
+                meta["hook_amount"], meta["hook_currency"] = paid
+        try:
+            result = _issue_and_fulfill(req["holder_name"], req["holder_email"], req["tier"], days, sections, cfg=cfg, payment_meta=meta)
+        except Exception as e:
+            import traceback
+            print(traceback.format_exc())
+            return None, f"Fulfillment failed: {str(e)}", 500
+        if not mark_decided(request_id, "approved"):
+            return {**result, "note": "Request was already resolved, but the credential was issued."}, None, 200
+        return result, None, 200
+
+
 @app.route("/admin/payment-requests/<request_id>/approve", methods=["POST"])
 def admin_approve_payment_request(request_id):
     if not is_admin_session():
         return err("Unauthorized", 401)
-
-    from payment_requests import get_request, mark_decided
-    req = get_request(request_id)
-    if not req:
-        return err("Request not found", 404)
-    if req["status"] != "pending":
-        return err(f"Request already {req['status']}", 400)
-
-    cfg = load_config()
-    tier_cfg = get_tier(cfg, req["tier"])
-    if not tier_cfg:
-        return err(f"Tier '{req['tier']}' no longer exists in config.", 400)
-
-    sections = tier_cfg.get("sections", [])
-    days     = tier_cfg.get("expiry_days", 31)
-
-    try:
-        result = _issue_and_fulfill(
-            req["holder_name"], req["holder_email"], req["tier"], days, sections,
-            cfg=cfg,
-            payment_meta={
-                "provider":    "custom" if (cfg.get("payment_provider") or "") == "custom" else "manual",
-                "amount_paid": req.get("price"),
-                "currency":    req.get("currency"),
-                "approved_at": datetime.now(timezone.utc).isoformat(),
-            },
-        )
-    except Exception as e:
-        import traceback
-        print(traceback.format_exc())
-        return err(f"Fulfillment failed: {str(e)}", 500)
-
-    if not mark_decided(request_id, "approved"):
-        # Fulfillment above succeeded but something else (a concurrent
-        # approve/reject) already resolved this request — the credential
-        # is issued either way; this just stops the UI from double-acting.
-        return ok({**result, "note": "Request was already resolved, but the credential was issued."})
+    result, message, status = _approve_pending(request_id)
+    if message:
+        return err(message, status)
     return ok(result)
+
+
+# ── POST /webhook/payment ── (payment_hook.py)
+# A payment service (or Zapier / Make / n8n) says "request <reference> was paid". Accepted only when the message is
+# signed with the secret, is fresh, and says the full price was paid in the right currency.
+@app.route("/webhook/payment", methods=["POST"])
+def webhook_payment():
+    key = payment_hook.secret()
+    if not key:
+        return err("Not set up.", 404)
+    raw = request.get_data(cache=False)
+    if not payment_hook.signature_ok(raw, request.headers.get("X-Signature"), key):
+        return err("Bad signature.", 401)
+    parsed, why = payment_hook.parse(raw, time.time())
+    if parsed is None:
+        return err(why, 400)
+    ref, amount, cur = parsed
+    from payment_requests import get_request
+    req = get_request(ref)
+    if not req:
+        return err("No such payment request.", 404)
+    if req["status"] == "approved":
+        return ok({"already": True})                 # a service that retries is answered the same way
+    cfg = load_config()
+    if (cfg.get("payment_provider") or "manual") not in ("manual", "custom"):
+        return err("This site takes payments another way.", 400)
+    try:
+        price = float(req.get("price") or 0)
+    except (TypeError, ValueError):
+        price = 0
+    if cur != str(req.get("currency") or "").strip().lower():
+        return err("Wrong currency.", 400)
+    if amount + 0.005 < price:
+        return err("The amount is less than the price.", 400)
+    result, message, status = _approve_pending(ref, source="hook", paid=(amount, cur))
+    if message:
+        again = get_request(ref)
+        if again and again["status"] == "approved":     # someone pressed Approve a moment earlier: same answer as a retry
+            return ok({"already": True})
+        return err(message, status)
+    return ok({"credential_id": result.get("credential_id")})
+
+
+@app.route("/admin/payment-hook", methods=["POST"])
+def admin_payment_hook():
+    """Shows the secret (action "show") or makes a new one (action "new"); admin only."""
+    if not check_admin(request):
+        return err("Unauthorized", 401)
+    act = str((request.get_json(silent=True) or {}).get("action") or "show")
+    if act == "new":
+        if payment_hook.from_env():
+            return err("The secret is set by the PAYMENT_HOOK_SECRET variable on your host; change it there.", 400)
+        key = payment_hook.make_secret()
+    else:
+        key = payment_hook.secret() or ("" if payment_hook.from_env() else payment_hook.make_secret())
+    base = (public_url.base_url() or request.host_url or "").rstrip("/")
+    return jsonify({"success": True, "secret": key, "url": base + "/webhook/payment", "from_env": payment_hook.from_env()})
 
 
 @app.route("/admin/payment-requests/<request_id>/reject", methods=["POST"])
@@ -1267,12 +1367,19 @@ def unsubscribe_followups():
         resp = _unsub_page("This link isn't valid", "It may be incomplete. If you keep getting emails you don't want, reply to one of them.")
         resp.status_code = 400
         return resp
+    news = request.values.get("k") == "news"       # from a bulletin-board note, not from the automatic emails
     if request.method == "POST":
+        if news:
+            member_registry.set_announce_off(m["credential_id"], True)
+            return _unsub_page("Done", "You won't get these notes by email any more. Your card and member area are not affected, and the pinned note still shows on your page.")
         member_registry.set_followups_off(m["credential_id"], True)
         return _unsub_page("Done", "You won't get these automatic emails (follow-ups and \u201csomething new opened\u201d) any more. Your card and member area are not affected.")
-    form = ('<form method="post"><input type="hidden" name="id" value="%s"><input type="hidden" name="h" value="%s">'
-            '<button type="submit">Stop these emails</button></form>'
-            % (esc_html(m["credential_id"]), esc_html(request.values.get("h", "")[:64])))
+    form = ('<form method="post"><input type="hidden" name="id" value="%s"><input type="hidden" name="h" value="%s">%s'
+            '<button type="submit">%s</button></form>'
+            % (esc_html(m["credential_id"]), esc_html(request.values.get("h", "")[:64]),
+               '<input type="hidden" name="k" value="news">' if news else "", "Unsubscribe" if news else "Stop these emails"))
+    if news:
+        return _unsub_page("Unsubscribe from these notes?", "You will no longer get the creator's notes by email. Your card and member area are not affected.", form)
     return _unsub_page("Stop these emails?", "You will no longer get the automatic emails (follow-ups and \u201csomething new opened\u201d). Your card and member area are not affected.", form)
 
 
@@ -1570,9 +1677,14 @@ def _ticket_info(entry: dict) -> dict:
     if entry.get("kind") == "voucher":
         d = entry.get("detail") if isinstance(entry.get("detail"), dict) else {}
         until = str(entry.get("expires_at") or "")[:10]
+        when = ("valid until " + until) if until and not until.startswith("2100") else ""
+        uses = card_kinds.uses_of(entry)
+        if uses > 1:                                   # a counter card (class pack): say how many are left
+            left = max(0, uses - int(entry.get("uses_done") or 0))
+            when = (f"{left} of {uses} uses left" + (" · " + when if when else ""))
         return {"credential_id": entry.get("credential_id"), "name": entry.get("holder_name"), "tier": entry.get("tier"),
                 "kind": "voucher", "event": d.get("name") or entry.get("tier") or "",
-                "when": ("valid until " + until) if until and not until.startswith("2100") else "", "note": d.get("terms") or ""}
+                "when": when, "note": d.get("terms") or ""}
     ev = entry.get("event") if isinstance(entry.get("event"), dict) else {}
     return {"credential_id": entry.get("credential_id"), "name": entry.get("holder_name"), "kind": "ticket",
             "tier": entry.get("tier"), "event": ev.get("name") or "", "when": ev.get("when") or "",
@@ -1595,18 +1707,86 @@ def admin_checkin():
         admin_theme.shell_js(cfg["admin_style"]),
         admin_theme.body_attrs(cfg["admin_style"], "checkin", cfg["card_title"], tickets=True),
         cfg["card_title"], _checkin_stats(),
-        card_kinds.any_redeemable(cfg.get("tiers")))
+        card_kinds.any_redeemable(cfg.get("tiers")), door=_door_state())
     resp = app.response_class(html, mimetype="text/html")
     resp.headers["Cache-Control"] = "no-store"
     return resp
 
-@app.route("/admin/checkin/scan", methods=["POST"])
-def admin_checkin_scan():
+
+# ── The door link: a private address for door staff (door.py) ──
+def _door_url(token: str) -> str:
+    base = (public_url.base_url() or request.host_url or "").rstrip("/")
+    return f"{base}/door/{token}"
+
+def _door_state() -> dict:
+    cur = door.current()
+    return {"link": _door_url(cur["token"]) if cur else "", "expires_at": cur["expires_at"] if cur else ""}
+
+@app.route("/admin/door/make", methods=["POST"])
+def admin_door_make():
     if not check_admin(request):
         return err("Unauthorized", 401)
+    data = request.get_json(silent=True) or {}
+    door.make(data.get("hours"))
+    return jsonify({"success": True, "door": _door_state()})
+
+@app.route("/admin/door/off", methods=["POST"])
+def admin_door_off():
+    if not check_admin(request):
+        return err("Unauthorized", 401)
+    door.off()
+    return jsonify({"success": True, "door": _door_state()})
+
+def _door_gate(token: str):
+    """None when the door link is good; otherwise the same plain answer for every kind of wrong link."""
+    if door.valid(token):
+        return None
+    resp = make_response("This door link is not valid (it may have run out). Ask the organiser for a new one.", 404)
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
+
+@app.route("/door/<token>", methods=["GET"])
+def door_page(token):
+    bad = _door_gate(token)
+    if bad:
+        return bad
+    import checkin_page
+    cfg = load_config()
+    html = checkin_page.render(admin_theme.css("spaceship", cfg["accent_color"], "wide"), "", "", cfg["card_title"],
+                               _checkin_stats(), True, door_base=f"/door/{token}")
+    resp = app.response_class(html, mimetype="text/html")
+    resp.headers["Cache-Control"] = "no-store"
+    resp.headers["Referrer-Policy"] = "no-referrer"
+    resp.headers["X-Robots-Tag"] = "noindex"
+    return resp
+
+@app.route("/door/<token>/scan", methods=["POST"])
+def door_scan(token):
+    bad = _door_gate(token)
+    if bad:
+        return bad
+    return _checkin_scan_body(request.get_json(silent=True) or {})
+
+@app.route("/door/<token>/undo", methods=["POST"])
+def door_undo(token):
+    bad = _door_gate(token)
+    if bad:
+        return bad
+    from member_registry import get_by_id, unmark_used
+    cid = str((request.get_json(silent=True) or {}).get("credential_id") or "").strip()
+    entry = get_by_id(cid) if cid else None
+    if not entry or not card_kinds.is_redeemable(entry):
+        return err("No such ticket or voucher.", 404)
+    if not door.can_undo(entry):
+        return err(f"It was used more than {door.UNDO_WINDOW_MINUTES} minutes ago. Ask the organiser to undo it.", 400)
+    unmark_used(cid)
+    return jsonify({"success": True, "stats": _checkin_stats()})
+
+def _checkin_scan_body(data: dict):
+    """Look a ticket or voucher up and (unless told only to look) check it off. Shared by the admin Check-in
+    page and the staff door link."""
     import checkin_page
     from member_registry import get_by_id, mark_used
-    data = request.get_json(silent=True) or {}
     mark = data.get("mark") is not False
     cid, h = checkin_page.parse_code(data.get("code"))
     def reply(state, title="", error="", entry=None, marked=False):
@@ -1628,13 +1808,19 @@ def admin_checkin_scan():
     if entry.get("revoked"):
         return reply("bad", "Cancelled", "This voucher was revoked." if is_v else "This ticket was revoked.", entry)
     if entry.get("used_at"):
-        return reply("bad", "Already used", ("Redeemed at " if is_v else "Checked in at ") + str(entry["used_at"])[:16].replace("T", " ") + " UTC.", entry)
+        return reply("bad", "Already used" if card_kinds.uses_of(entry) <= 1 else "All uses taken", ("Redeemed at " if is_v else "Checked in at ") + str(entry["used_at"])[:16].replace("T", " ") + " UTC.", entry)
     if not limits.is_active(entry):
         return reply("bad", "Expired", "This voucher has expired." if is_v else "The event is over, so this ticket no longer works.", entry)
     if not mark:
         return reply("valid", entry=entry)
     mark_used(cid)
-    return reply("ok", entry=entry, marked=True)
+    return reply("ok", entry=get_by_id(cid) or entry, marked=True)
+
+@app.route("/admin/checkin/scan", methods=["POST"])
+def admin_checkin_scan():
+    if not check_admin(request):
+        return err("Unauthorized", 401)
+    return _checkin_scan_body(request.get_json(silent=True) or {})
 
 def _checkin_toggle(undo: bool):
     if not check_admin(request):
@@ -1684,7 +1870,7 @@ def _announce_state() -> dict:
             h["email"] = {**e, "interrupted": True}      # the server restarted part-way
         hist.append(h)
     cfg = load_config()
-    return {"success": True, "current": d["current"], "history": hist,
+    return {"success": True, "current": d["current"], "history": hist, "scheduled": d.get("scheduled", []),
             "groups": announcements.groups(list_all(), cfg.get("tiers") or []),
             "email_ready": email_sender.is_configured(), "running": bool(running)}
 
@@ -1737,31 +1923,19 @@ def admin_announce_status():
     resp.headers["Cache-Control"] = "no-store"
     return resp
 
-@app.route("/admin/announce/post", methods=["POST"])
-def admin_announce_post():
-    if not check_admin(request):
-        return err("Unauthorized", 401)
+def _start_announcement(title: str, text: str, link: str, pin: bool, mail: bool, group: str):
+    """Post a note now (pin it and/or start emailing it in the background). Returns (entry, recipients, None)
+    or (None, [], (message, status)) when it can't be done right now."""
     from member_registry import list_all
-    data = request.get_json(silent=True) or {}
-    title, text = announcements.clean_title(data.get("title")), announcements.clean_text(data.get("text"))
-    link = announcements.clean_link(data.get("link"))
-    if str(data.get("link") or "").strip() and not link:
-        return err("The link has to start with http:// or https://")
-    if not title and not text:
-        return err("Write a title or a message first.")
-    pin, mail = bool(data.get("pin")), bool(data.get("email"))
-    if not pin and not mail:
-        return err("Choose at least one: pin it, or email it.")
     recips = []
     if mail:
         if not email_sender.is_configured():
-            return err("Email isn't set up on this server yet, so it can only be pinned.")
-        recips = announcements.recipients(list_all(), str(data.get("group") or ""))
+            return None, [], ("Email isn't set up on this server yet, so it can only be pinned.", 400)
+        recips = announcements.recipients(list_all(), group)
         if not recips:
-            return err("Nobody is in that group right now.")
+            return None, [], ("Nobody is in that group right now.", 400)
         if not _announce_lock.acquire(blocking=False):
-            return err("An email send is still running. Wait for it to finish.", 409)
-    group = str(data.get("group") or "")
+            return None, [], ("An email send is still running. Wait for it to finish.", 409)
     label = next((g["label"] for g in announcements.groups(list_all(), load_config().get("tiers") or []) if g["key"] == group), group)
     try:
         entry = announcements.post(title, text, link, pin)
@@ -1781,7 +1955,86 @@ def admin_announce_post():
             _announce_run["id"] = None
             _announce_lock.release()
             raise
+    return entry, recips, None
+
+
+@app.route("/admin/announce/post", methods=["POST"])
+def admin_announce_post():
+    if not check_admin(request):
+        return err("Unauthorized", 401)
+    data = request.get_json(silent=True) or {}
+    title, text = announcements.clean_title(data.get("title")), announcements.clean_text(data.get("text"))
+    link = announcements.clean_link(data.get("link"))
+    if str(data.get("link") or "").strip() and not link:
+        return err("The link has to start with http:// or https://")
+    if not title and not text:
+        return err("Write a title or a message first.")
+    pin, mail = bool(data.get("pin")), bool(data.get("email"))
+    if not pin and not mail:
+        return err("Choose at least one: pin it, or email it.")
+    group = str(data.get("group") or "")
+    if str(data.get("send_at") or "").strip():
+        # "Send later": kept until its time, then posted by the background check (every minute).
+        at = announcements.parse_when(data.get("send_at"))
+        now = datetime.now(timezone.utc)
+        if at is None:
+            return err("That date and time doesn't look right.")
+        if at <= now + timedelta(minutes=1):
+            return err("Pick a time in the future (or leave the time empty to send it now).")
+        if at > now + timedelta(days=announcements.MAX_AHEAD_DAYS):
+            return err("That is more than a year away. Pick a closer date.")
+        if mail and not email_sender.is_configured():
+            return err("Email isn't set up on this server yet, so it can only be pinned.")
+        if mail and not any(g["key"] == group for g in announcements.groups(member_registry.list_all(), load_config().get("tiers") or [])):
+            return err("Choose who should get the email.")
+        try:
+            item = announcements.schedule(title, text, link, pin, mail, group, at)
+        except ValueError:
+            return err(f"You already have {announcements.MAX_SCHEDULED} notes waiting. Cancel one first.")
+        return jsonify({"success": True, "scheduled": True, "id": item["id"], "at": item["at"]})
+    entry, recips, problem = _start_announcement(title, text, link, pin, mail, group)
+    if problem:
+        return err(problem[0], problem[1])
     return jsonify({"success": True, "id": entry["id"], "pinned": pin, "total": len(recips)})
+
+
+@app.route("/admin/announce/cancel", methods=["POST"])
+def admin_announce_cancel():
+    if not check_admin(request):
+        return err("Unauthorized", 401)
+    data = request.get_json(silent=True) or {}
+    return jsonify({"success": True, "cancelled": announcements.cancel(str(data.get("id") or "")), "scheduled": announcements.load()["scheduled"]})
+
+
+def run_due_announcements(now=None) -> int:
+    """Post the notes whose time has come. A note whose email can't start right now (another send is still
+    running) waits for the next minute; one that can never be sent (no email service, nobody in the group any more)
+    is still pinned if it was meant to be, and then dropped."""
+    done = 0
+    for item in announcements.due(now):
+        title, text, link = item.get("title", ""), item.get("text", ""), item.get("link", "")
+        pin, mail, group = bool(item.get("pin")), bool(item.get("mail")), str(item.get("group") or "")
+        entry, _recips, problem = _start_announcement(title, text, link, pin, mail, group)
+        if problem and problem[1] == 409:
+            continue                                       # busy: try again next minute
+        if problem and pin:
+            _start_announcement(title, text, link, True, False, group)
+            print(f"\u2139 Scheduled note \u201c{title or text[:30]}\u201d was pinned but not emailed: {problem[0]}")
+        elif problem:
+            print(f"\u2139 Scheduled note \u201c{title or text[:30]}\u201d was dropped: {problem[0]}")
+        announcements.cancel(item["id"])
+        done += 1
+    return done
+
+
+def _announce_sched_loop(interval: float = 60.0):
+    while True:
+        time.sleep(interval)
+        try:
+            run_due_announcements()
+        except Exception as e:
+            print(f"\u274c Scheduled notes check failed: {e}")
+
 
 @app.route("/admin/announce/unpin", methods=["POST"])
 def admin_announce_unpin():
@@ -1896,6 +2149,8 @@ def admin_members():
         used_at = m.get("used_at") if is_rd else None
         if used_at and not revoked:
             status_label = f'USED<br><span class="small">{esc_html(str(used_at)[:16].replace("T", " "))} UTC</span>'
+        elif is_vc and not revoked and card_kinds.uses_of(m) > 1 and int(m.get("uses_done") or 0) > 0:
+            status_label += f'<br><span class="small">{int(m["uses_done"])} of {card_kinds.uses_of(m)} used</span>'
         if m.get("reminded_at") and m.get("reminded_for") == m.get("expires_at"):
             status_label += f'<br><span class="small">reminded {esc_html(m["reminded_at"][:10])}</span>'
         if m.get("extended_at"):
@@ -1918,7 +2173,7 @@ def admin_members():
         name_esc = esc_html(m.get('holder_name', ''))
         email_esc = esc_html(m.get('holder_email', ''))
         tier_esc  = esc_html(m.get('tier', ''))
-        sections_esc = esc_html(', '.join(m.get('sections', [])) or '—')
+        sections_esc = esc_html('Everything' if content_store.allows_all(m.get('sections')) else (', '.join(m.get('sections', [])) or '—'))
 
         tier_cfg_m = get_tier(cfg, m.get("tier")) or {}
         try:
@@ -2479,6 +2734,10 @@ def admin_dashboard_save():
     have_kinds       = "tier_kind" in request.form
     tier_show_spots  = request.form.getlist("tier_show_spots")
     tier_per_email   = request.form.getlist("tier_per_email")
+    vc_uses          = request.form.getlist("tier_voucher_uses")
+    tier_alsos       = request.form.getlist("tier_also")
+    tier_member_nos  = request.form.getlist("tier_member_no")
+    have_extras      = "tier_also" in request.form          # a save without these fields keeps what was saved
 
     # Each tier picks one of the saved card looks (or none = the Default look).
     # Tiers are matched by name to what was saved before, so a tier keeps its
@@ -2505,6 +2764,8 @@ def admin_dashboard_save():
         except (ValueError, IndexError):
             expiry_days = 31
         sections = [s.strip() for s in (tier_sections[i] if i < len(tier_sections) else "").split(",") if s.strip()]
+        if content_store.allows_all(sections):
+            sections = [content_store.ALL]          # "everything" says it all
 
         old_t = old_by_name.get(name.upper()) or {}
         if have_picker:
@@ -2549,7 +2810,7 @@ def admin_dashboard_save():
             voucher = card_kinds.clean_voucher(
                 vc_names[i] if i < len(vc_names) else "", vc_terms[i] if i < len(vc_terms) else "",
                 vc_untils[i] if i < len(vc_untils) else "", vc_tzs[i] if i < len(vc_tzs) else 0,
-                vc_bottoms[i] if i < len(vc_bottoms) else "")
+                vc_bottoms[i] if i < len(vc_bottoms) else "", (vc_uses[i] if i < len(vc_uses) else 1) if "tier_voucher_uses" in request.form else card_kinds.voucher_of(old_t).get("uses", 1))
             cert = card_kinds.clean_cert(
                 ct_titles[i] if i < len(ct_titles) else "", ct_notes[i] if i < len(ct_notes) else "",
                 ct_bottoms[i] if i < len(ct_bottoms) else "")
@@ -2562,6 +2823,11 @@ def admin_dashboard_save():
             sale = card_kinds.sale_of(old_t)
         if kind == "collectible":
             sale = None       # a drop uses its own opening time
+        if have_extras:
+            also = [x.strip().upper() for x in (tier_alsos[i] if i < len(tier_alsos) else "").split(",") if x.strip()]
+            member_no = (tier_member_nos[i] if i < len(tier_member_nos) else "0") == "1"
+        else:
+            also, member_no = list(old_t.get("also") or []), bool(old_t.get("member_numbers"))
         if kind == "voucher" and not voucher["name"]:
             logo_notes.append(f"Voucher \u201c{name.upper()}\u201d needs an offer (like \u201cOne free coffee\u201d) so people know what it is for.")
         if kind == "certificate" and not cert["title"]:
@@ -2584,9 +2850,29 @@ def admin_dashboard_save():
             **({"max_members": max_members} if max_members else {}),
             **({"show_spots_left": False} if not show_spots else {}),
             **({"per_email": per_email} if (per_email != limits.DEFAULT_PER_EMAIL or kind in ("collectible", "voucher", "certificate")) else {}),
+            **({"also": also} if also else {}),
+            **({"member_numbers": True} if member_no else {}),
             **({"look": look_id} if look_id else {}),
             **({"design": legacy_design} if legacy_design else {}),
         })
+
+    # "Also gives" must name other cards that exist (kept in the order typed, at most 5, never itself).
+    _names = {t["name"] for t in tiers}
+    for t in tiers:
+        if t.get("also"):
+            keep = []
+            for n in t["also"]:
+                if n == t["name"]:
+                    logo_notes.append(f"Card \u201c{t['name']}\u201d: it can't also give itself.")
+                elif n not in _names:
+                    logo_notes.append(f"Card \u201c{t['name']}\u201d: there is no card called \u201c{n[:40]}\u201d to give along with it, so it was left out.")
+                elif n not in keep:
+                    keep.append(n)
+            keep = keep[:5]
+            if keep:
+                t["also"] = keep
+            else:
+                t.pop("also", None)
 
     # Deployment-wide card logo: a new upload wins; otherwise "Remove" clears
     # it; otherwise whatever was saved stays.
@@ -2837,7 +3123,7 @@ def _dashboard_page() -> str:
     # What "Sections" on a tier can refer to: the keys of the sections made on
     # the Content page. Warn about any tier section nobody has created yet.
     content_keys = [sec["key"] for sec in content_store.load()["sections"]]
-    missing = sorted({str(k).lower() for t in (cfg.get("tiers") or []) for k in (t.get("sections") or [])} - set(content_keys))
+    missing = sorted({str(k).lower() for t in (cfg.get("tiers") or []) for k in (t.get("sections") or [])} - set(content_keys) - {content_store.ALL})
     tier_sections_hint = (
         '<div class="hint" style="margin-bottom:8px;">"Sections" are the names of the members-only content you set up on the '
         '<a href="/admin/content" style="color:' + accent + ';">Content</a> page. Right now you have: <b>'
@@ -2941,6 +3227,19 @@ def _dashboard_page() -> str:
                   <option value="unlimited" {sel(mode == "unlimited")}>No limit</option>
                 </select>
               </div>
+              <div class="design-field wide">
+                <label>Also give these cards (optional)</label>
+                <input name="tier_also" maxlength="200" value="{esc_html(', '.join(t.get('also') or []))}" placeholder="MEMBER, FREE BEER">
+                <div class="hint">Names of other cards, separated by commas. Whoever gets this card also gets those, free, at the same moment (a ticket that comes with a membership). Each is checked against its own limits and skipped if it can't be given. At most 5.</div>
+              </div>
+              <div class="design-field">
+                <label>Number the holders?</label>
+                <select name="tier_member_no">
+                  <option value="0" {sel(not t.get("member_numbers"))}>No</option>
+                  <option value="1" {sel(bool(t.get("member_numbers")))}>Yes: "Member #1", "#2"... in order</option>
+                </select>
+                <div class="hint">Only people who get the card from now on are numbered. The number never changes, even if a card is deleted later.</div>
+              </div>
             </div>
           </details>"""
 
@@ -3037,8 +3336,13 @@ def _dashboard_page() -> str:
               <label>Line at the bottom of the voucher (optional)</label>
               <input name="tier_voucher_bottom" maxlength="{card_kinds.MAX_BOTTOM}" value="{esc_html(v['bottom'])}" placeholder="{card_kinds.DEFAULT_VOUCHER_BOTTOM}">
             </div>
+            <div class="design-field">
+              <label>How many times can it be used?</label>
+              <input name="tier_voucher_uses" type="number" min="1" max="{card_kinds.MAX_USES}" step="1" value="{esc_html(str(v.get('uses', 1)))}">
+              <div class="hint">1 = once (a free coffee). 10 = a class pack: staff punch it once per visit on Check-in, and it stops after the last one.</div>
+            </div>
             <input type="hidden" name="tier_voucher_tz" value="{esc_html(str(v['tz']))}">
-            <div class="hint event-hint">A voucher works once. Your staff redeem it on the <b>Check-in</b> page (scan or paste), and then it stops working. It is valid for the number of days above after someone gets it, or until the date you set here (which wins when both are set). Open <b>Advanced</b> and choose <b>Only me</b> if you want to hand vouchers out yourself instead of offering them in the sign-up list.</div>
+            <div class="hint event-hint">A voucher works once (or as many times as you set above). Your staff redeem it on the <b>Check-in</b> page (scan or paste), and then it stops working. It is valid for the number of days above after someone gets it, or until the date you set here (which wins when both are set). Open <b>Advanced</b> and choose <b>Only me</b> if you want to hand vouchers out yourself instead of offering them in the sign-up list.</div>
           </div>"""
 
     def _cert_panel(t: dict) -> str:
@@ -3077,7 +3381,7 @@ def _dashboard_page() -> str:
             <div class="of c-days"><label>Days of access</label><input name="tier_expiry_days" type="number" value="{esc_html(str(t.get('expiry_days',31)))}"><span class="days-note">Until the event ends</span></div>
             {_cap_field(t)}
             <div class="of"><label>Kind of card</label>{_kind_select(k)}</div>
-            <div class="of wide"><label>What it unlocks (names of your Content sections, separated by commas)</label><input name="tier_sections" value="{esc_html(', '.join(t.get('sections',[])))}" placeholder="downloads, merch"></div>
+            <div class="of wide"><label>What it unlocks (names of your Content sections, separated by commas)</label><input name="tier_sections" value="{esc_html(', '.join(t.get('sections',[])))}" placeholder="downloads, merch"><div class="hint" style="margin-top:4px;">Want it to unlock <b>everything</b>, including sections you add later? <button type="button" class="all-sections" style="background:none;border:none;padding:0;color:var(--accent-text);text-decoration:underline;cursor:pointer;font:inherit;">Unlock everything</button> (it writes a <b>*</b> in the box).</div></div>
             <div class="of"><label>Card look</label><select name="tier_look">{looks_page.picker_options(cfg, look_sel)}</select></div>
           </div>
           {_event_panel(t)}
@@ -3519,6 +3823,17 @@ def _dashboard_page() -> str:
     <label style="margin-top:20px;">Payments waiting for your OK</label>
     {pending_requests_html}
 
+    <details class="adv-box" id="hook-box" style="margin-top:14px;">
+      <summary>Confirm payments automatically (advanced)</summary>
+      <div class="hint" style="margin-top:6px;">For a payment service you already use (or a tool like Zapier, Make or n8n): when it tells this site "that request was paid", the card is issued and nobody has to press Approve. The message has to be <b>signed</b> with a secret only you and the service know, has to say the full price was paid in the right currency, and is refused if it is more than 5 minutes old. Skip this if you are happy pressing Approve.</div>
+      <div style="margin-top:8px;">
+        <button type="button" class="mini" id="hook-show">Show my address and secret</button>
+        <button type="button" class="mini" id="hook-new">Make a new secret</button>
+      </div>
+      <div id="hook-out" class="hint" style="display:none;margin-top:8px;word-break:break-all;"></div>
+      <div class="hint" style="margin-top:8px;">The service sends a POST with a small JSON message <code>{{"reference": "...", "amount": 9.99, "currency": "eur", "timestamp": 1700000000}}</code> (the reference is the code in the list above) and the header <code>X-Signature: sha256=&lt;the HMAC-SHA256 of the exact message, using the secret, as hex&gt;</code>. Making a new secret stops the old one working at once.</div>
+    </details>
+
     </section>
 
     {emails_section}
@@ -3626,6 +3941,7 @@ def _dashboard_page() -> str:
         if (e.target.name === 'tier_event_start' || e.target.name === 'tier_drop_opens' || e.target.name === 'tier_drop_closes' || e.target.name === 'tier_voucher_until' || e.target.name === 'tier_sale_at') setTz(box);
       }});
       body.addEventListener('click', (e) => {{
+        if (e.target.classList.contains('all-sections')) {{ const inp = e.target.closest('.of').querySelector('[name="tier_sections"]'); if (inp) {{ inp.value = '*'; inp.dispatchEvent(new Event('input', {{ bubbles: true }})); }} return; }}
         if (e.target.classList.contains('remove-tier')) {{ const f = e.target.closest('form'); boxOf(e.target).remove(); refresh(); if (f) f.dispatchEvent(new Event('input', {{ bubbles: true }})); }}   // a removed card must raise the Save bar
       }});
       document.getElementById('add-tier').addEventListener('click', () => {{ chooser.classList.toggle('open'); }});
@@ -3810,6 +4126,27 @@ def _dashboard_page() -> str:
         document.querySelectorAll('.pv-hint').forEach(h => {{ h.style.display = h.dataset.for === sel.value ? '' : 'none'; }});
       }};
       sel.addEventListener('change', show);
+    }})();
+
+    (function() {{
+      const out = document.getElementById('hook-out');
+      if (!out) return;
+      const ask = (action) => {{
+        if (action === 'new' && !confirm('Make a new secret? The old one stops working immediately.')) return;
+        fetch('/admin/payment-hook', {{ method: 'POST', headers: {{'Content-Type': 'application/json'}}, body: JSON.stringify({{action: action}}) }})
+          .then(r => r.json())
+          .then(d => {{
+            out.style.display = '';
+            out.textContent = '';
+            if (!d.success) {{ out.textContent = d.error || 'Could not do that.'; return; }}
+            const a = document.createElement('div'); a.textContent = 'Address: ' + d.url;
+            const b = document.createElement('div'); b.textContent = 'Secret: ' + d.secret + (d.from_env ? '  (set on your host by PAYMENT_HOOK_SECRET)' : '');
+            out.appendChild(a); out.appendChild(b);
+          }})
+          .catch(e => {{ out.style.display = ''; out.textContent = 'Could not do that: ' + e.message; }});
+      }};
+      document.getElementById('hook-show').addEventListener('click', () => ask('show'));
+      document.getElementById('hook-new').addEventListener('click', () => ask('new'));
     }})();
 
     document.querySelectorAll('.approve-req-btn').forEach(btn => {{
@@ -4489,6 +4826,12 @@ def _decorate_sets(mine: list, cfg: dict, registry: list, email: str):
         rw = st.get("reward") or {}
         for sl, big in [(x, False) for x in st.get("slots", [])] + [(rw, True)]:
             tier = sl.pop("tier", "")
+            try:                                     # the card's own colour: the Sets tab draws a little card from it
+                col = str(resolve_tier_design(cfg, tier).get("accent_color") or "")
+                if re.match(r"^#[0-9a-fA-F]{6}$", col):
+                    sl["accent"] = col
+            except Exception:
+                pass
             if not sl.get("got"):
                 continue
             try:
@@ -4597,6 +4940,10 @@ def member_content():
         note = announcements.public_current()
         if note:
             out["announcement"] = note
+        try:
+            out.update(_member_extras(entry))
+        except Exception as e:
+            print(f"❌ Extras for member page failed: {e}")
         if _card_path(cid).is_file():
             t = _file_token(cid, "card")
             out["card"] = {"view": f"/member-card/{cid}?t={t}", "download": f"/member-card/{cid}?t={t}&dl=1"}
@@ -4605,6 +4952,57 @@ def member_content():
         return resp
     except Exception:
         return denied()
+
+
+def _member_extras(entry: dict) -> dict:
+    """Small things for the top of a member's page: their founding number, uses left on a counter card, the cards
+    that were given together with this one (same random id: never matched by email, so a stranger who used
+    someone's address can't see their other cards), and whether "email me all my cards" is on."""
+    out = {}
+    if isinstance(entry.get("member_no"), int) and entry["member_no"] > 0:
+        out["member_no"] = entry["member_no"]
+    uses = card_kinds.uses_of(entry)
+    if uses > 1:
+        out["uses"] = {"total": uses, "done": min(uses, int(entry.get("uses_done") or 0))}
+    bid = str(entry.get("bundle_id") or "")
+    if bid:
+        cfg = load_config()
+        now = datetime.now(timezone.utc)
+        together = []
+        for e in member_registry.list_all():
+            if e.get("bundle_id") != bid or e.get("credential_id") == entry.get("credential_id") or e.get("revoked"):
+                continue
+            if not limits.is_active(e, now):
+                continue
+            t = get_tier(cfg, e.get("tier")) or {}
+            together.append({"label": str(t.get("label") or e.get("tier") or "")[:60], "kind": card_kinds.clean_kind(e.get("kind")),
+                             "id": e["credential_id"], "h": str(e.get("bundle_hash") or "")[:32]})
+        if together:
+            out["together"] = together[:10]
+    if email_sender.is_configured() and email_templates.clean_on(load_config().get("lostlink_on"), True) == "1":
+        out["cards_email"] = True
+    return out
+
+
+@app.route("/member-cards-email", methods=["POST"])
+def member_cards_email():
+    """"Email me all my cards" on a member's page: the same email as "Lost your link", sent to the address
+    on the card (never to one typed in), so it can only ever reach the real holder."""
+    data = request.get_json(silent=True) or {}
+    cid = str(data.get("credential_id") or "").strip()
+    h = str(data.get("bundle_hash") or "").strip().lower()
+    entry = _member_entry(cid, h) if cid and len(h) >= 16 else None
+    if not entry or not entry.get("holder_email"):
+        return jsonify({"success": False, "error": "Access denied."}), 403
+    allowed, wait = _rate.hit(("cards-email-all",), 300, 3600)
+    if not allowed:
+        return _too_many(wait, "We're getting a lot of requests right now. Please try again in a little while.")
+    cfg = load_config()
+    on = email_sender.is_configured() and email_templates.clean_on(cfg.get("lostlink_on"), True) == "1"
+    one_ok, _w = _rate.hit(("cards-email", entry["credential_id"]), 3, 3600)
+    if on and one_ok:
+        _bg(_resend_link_job, cfg, entry["holder_email"])
+    return ok({"message": "We've emailed you all your cards. Check your inbox (and spam)."})
 
 
 def _card_path(cid: str):
@@ -5680,6 +6078,7 @@ def start_reminder_thread(first_delay: float = 120, interval: float = reminders.
 
 if os.environ.get("REMINDERS_DISABLED", "").strip().lower() not in ("1", "true", "yes"):
     start_reminder_thread()
+    threading.Thread(target=_announce_sched_loop, name="scheduled-notes", daemon=True).start()
 
 # Startup warnings, printed at import time rather than under __main__ so
 # they show up in the logs however the app is started: `python

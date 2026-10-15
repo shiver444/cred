@@ -200,10 +200,13 @@ decide what a member sees once they're verified:
   **Links** (a list of items, each with a title, a link and a short note —
   downloads, videos, posts, anything you can link to), **Merch discount**
   (a label, a shop link and a code). There is no chat on purpose: use the
-  Bulletin board and emails to talk to your members, and if you really want a
-  chat, add your own chat service on your own page.
+  Bulletin board and emails to talk to your members. If you want a chat, make
+  the group in Discord, WhatsApp or Telegram and add its invite link as an item
+  in a **Links** section that only your members can see.
 - Which members get which sections: on the **Dashboard**, each tier has a
   "Sections" field. List the keys that tier unlocks, e.g. `downloads, merch`.
+  To unlock **everything**, including sections you add later, press **Unlock
+  everything** under that field (it writes a `*`). Nobody has to be re-issued a card.
   The Content page shows who sees what, and flags a tier that names a
   section which doesn't exist.
 - **Thumbnails**: an item with a YouTube link gets that video's picture automatically.
@@ -360,7 +363,7 @@ start a set with those choices filled in. Unless you tick **Keep going** (one-ca
   to the reward card. Switch it off and they get the reward card's normal email instead. Without email set up
   the reward is still issued automatically and appears on their member page.
 - Members see a **Your sets** tab on their member page: each set with "3 of 5" and a tile for every piece.
-  A collected piece shows its own card picture (the background picture of its Card look) and is **clickable**:
+  A collected piece shows its own card picture (the background picture of its Card look; a card without a picture is drawn as a small card in its own accent colour, with a tick once collected) and is **clickable**:
   it opens that card. A missing piece is a "?" tile. The reward is a big panel at the bottom: locked
   ("Collect 2 more pieces to unlock it"), then "Unlocking your reward" for the moment before it arrives, then a
   glowing "Reward unlocked" panel with the reward card's picture and an "Open your ..." button. Only sets they
@@ -440,6 +443,7 @@ host is usually the better choice.
 | `DATA_DIR` | Recommended in production | Path to persistent storage (e.g. a Railway Volume) so issued credentials, your signing key, and your dashboard settings survive redeploys. On Railway it's picked up automatically from an attached Volume if you don't set it; setting it yourself (to the Volume's mount path) always wins. Falls back to the local folder, which is fine for local dev only. |
 | `STRIPE_SECRET_KEY` | Only if `payment_provider` is `"stripe"` | Your Stripe secret key (`sk_test_...` or `sk_live_...`). Not needed at all with the default `"manual"` provider — see step 6. |
 | `STRIPE_WEBHOOK_SECRET` | Only if `payment_provider` is `"stripe"` | The signing secret for your Stripe webhook endpoint (`whsec_...`). Without it, `/webhook/stripe` refuses everything — there is no default/fallback secret, same philosophy as `ADMIN_SECRET`. |
+| `PAYMENT_HOOK_SECRET` | No | Optional. The secret that signs "payment received" messages (16+ characters). If set it wins over the one saved from the Payment screen. See 6a-3. |
 | `MAX_UPLOAD_MB` | No | Largest single file you can upload on the Content page, in megabytes. Defaults to 100. Keep it well below your Volume's size. |
 | `SIGNUP_LIMIT_PER_HOUR` | No | Most sign-ups (all visitors together) the server will accept per hour. Defaults to 300. Raise it for a big launch. |
 | `MAX_RESTORE_MB` | No | Largest backup file the dashboard's "Restore from a backup" will accept, in megabytes. Defaults to 1024 (1 GB). |
@@ -599,6 +603,33 @@ their reminder at the next check. A pass that lasts no longer than the reminder
 window isn't reminded. Members who are about to end show "ends in Nd" on the
 Members page, with a note once a reminder went out.
 
+**Class packs and punch cards (a voucher you can use several times).** On a voucher card, **How many times can it be
+used?** (1 to 100). 1 is the normal "once" voucher. 10 makes a class pack: the card says "10 in total", and each time
+staff scan it on the Check-in page one use is taken ("7 of 10 uses left"). After the last one it shows **All uses taken**.
+**Undo** gives the last use back. The member's page shows how many are left. It is still one card with one number; to sell
+a new pack, give them a new card.
+
+**Founding numbers ("Member #37").** On any card, under **Advanced**, set **Number the holders?** to Yes. Each new holder
+gets the next number, 1, 2, 3..., shown on their card (a **MEMBER #** row) and on their page. Only people who get the card
+after you switch it on are numbered. A number is never given twice, not even after a member is deleted.
+
+**Cards that come together ("also gives").** On a card, under **Advanced**, **Also give these cards** takes the names of
+other cards, separated by commas (a ticket that comes with a membership, a membership that comes with a free drink voucher).
+Whoever gets this card also gets those, free, in the same moment, each checked against its own limits and skipped if it can't
+be given (at most five). They are linked as one bundle, so each card's page shows a **Your cards** tab with the others from the
+same purchase. That tab also has **Email me all my cards**: it sends the links to the address printed on that card, never to
+an address typed on the page, so nobody can use it to pry into someone else's cards. Cards are linked only by the bundle,
+never by sharing an email address (free cards can be signed up with anyone's email, so that would be unsafe).
+
+### The door link: let your staff check tickets in without giving them your password
+
+On **Check-in** (the admin page), the **Door link for your staff** box makes a private web address for people at the door.
+Choose how long it works (6 hours up to 7 days) and press **Make a door link**. Send the address to your staff. It opens a page
+that can only scan or paste tickets and vouchers and take back a mistake made in the last 10 minutes: no member list, no
+settings, no way into your admin area, and no menu. It stops by itself when the time is up. **Switch it off** (or making a new
+one) ends the old link at once. Only one link exists at a time. Treat it like a key to the door: anyone who has the address can
+check tickets in until it ends. Wrong or expired addresses all show the same plain "not valid" page.
+
 ### The bulletin board: tell your members about something new
 
 Open **Content → Bulletin board** (the **Content** place in the menu has two small tabs: Content and Bulletin board). Write a **title** (optional), a **message** and an optional **link**, then choose:
@@ -606,6 +637,10 @@ Open **Content → Bulletin board** (the **Content** place in the menu has two s
 - **Pin it at the top of every member's page.** Members who open their link see it in a
   "Latest from you" box above their card, with the link as a button. It stays until you
   pin something else or press **Unpin it**. Only people with a working card ever see it.
+  A note the member has not tapped yet shows a small **NEW** mark; tapping it clears the mark.
+  In the same way a tab shows a small dot when it has something new since they last looked.
+  This is remembered in that member's own browser only (nothing is sent to you), and the first
+  visit only shows NEW on the note. If their browser will not keep it, no marks appear.
 - **Also email it to…** one of: **Everyone with a working card**, one tier (for example
   "GOLD members"), or the **ticket holders** of one event. The list shows how many people
   are in each group. Each person gets one email, even if they hold several cards, with
@@ -618,6 +653,15 @@ background, so you can leave the page; the **Sent before** list shows how many w
 many failed and the first problem. Only one email send runs at a time, and the last 25
 announcements are kept in that list. Your email service has its own sending limits, so very
 large lists may need to be sent in parts.
+
+**Send it later.** Tick **Send it later instead of now**, choose a date and time (your own time zone) and press
+**Schedule**. It appears in **Waiting to be sent**, where you can **Cancel** it. At the time, the server posts and emails it
+by itself (it checks every minute; if the server was off at the time, it goes out as soon as it is back). If it can no longer be emailed at that moment (no email service set up, or nobody left in the group), a note you asked to pin is still pinned and the rest is dropped; the server log says so. The list of who
+gets it is worked out at that moment, so people who joined in between are included and people whose card ended are not.
+
+**Unsubscribe.** Every announcement email ends with a "Stop these emails" link (and mail programs show their own
+unsubscribe button). Pressing it stops announcement emails to that address only: they still get card emails, reminders and
+receipts, and the note still shows at the top of their member page. It can't be used on anyone else's address.
 
 ### Giving someone a card (no payment)
 
@@ -782,6 +826,33 @@ can write inside any link: `{amount}`, `{currency}`, `{tier}`, `{email}`,
 that also appears in the waiting list, so you can match a payment to a
 request. Only `https` links are accepted, and a visitor's name can never decide
 where they are sent.
+
+### 6a-3. Confirm payments automatically (advanced, optional)
+
+If you use **I arrange it myself** or **Send them to a payment link** you press **Approve** yourself. If the service you use
+(or a tool like Zapier, Make or n8n connected to it) can send a message when a payment arrives, it can press Approve for you.
+
+In the Payment screen open **Confirm payments automatically (advanced)** and press **Show my address and secret**. You get an
+address (`https://your-site/webhook/payment`) and a secret. Make the service send, when a payment is received, a **POST** to
+that address with this small JSON message:
+
+    {"reference": "AB12CD", "amount": 9.99, "currency": "eur", "timestamp": 1700000000}
+
+(`reference` is the code shown for that request in the waiting list, so put `{reference}` in your payment link to carry it
+through; `timestamp` is the current time in seconds.) and the header
+
+    X-Signature: sha256=<HMAC-SHA256 of the exact message body, using your secret as the key, written as hex>
+
+Why this is safe: without a correct signature nothing happens (the secret never travels over the net and is not on any page);
+a message older or newer than 5 minutes is refused, so a copy of an old one can't be replayed; the card is issued only if the
+amount paid is at least the price and the currency matches; a request is approved once (a service that retries gets "OK" and
+nothing is issued twice, and the Approve button and the hook can't both issue a card); a request you rejected stays rejected.
+**Make a new secret** stops the old one at once. If you would rather keep the secret in Railway, set the variable
+`PAYMENT_HOOK_SECRET` (16 or more characters); it then wins over the saved one. This works when the payment choice is "I arrange
+it myself" or "Send them to a payment link"; with Stripe the Stripe webhook already does this. If you are not sure you need it,
+skip it: pressing Approve works exactly as before. A small example for a script that signs a message:
+
+    python3 -c "import hmac,hashlib,sys;print(hmac.new(b'YOUR_SECRET',sys.argv[1].encode(),hashlib.sha256).hexdigest())" '{"reference":"AB12CD","amount":9.99,"currency":"eur","timestamp":1700000000}'
 
 ### 6b. Stripe — automatic card checkout
 

@@ -58,15 +58,36 @@ def stats(registry: list, now=None) -> list:
     return sorted(out.values(), key=lambda r: (r["when"], r["name"]))
 
 
-def render(theme_css: str, theme_js: str, body_attrs: str, title: str, stat_rows: list, has_tickets: bool) -> str:
-    data = json.dumps({"stats": stat_rows}).replace("<", "\\u003c")
+DOOR_BOX = """
+    <h2 style="margin-top:28px;font-size:14px;letter-spacing:1px;text-transform:uppercase;color:var(--accent-text);">Door link for your staff</h2>
+    <div class="hint">A private link for people at the door. It opens a page that can only check tickets and vouchers in: no member list, no settings. It stops working by itself after the time you choose, and you can switch it off any time.</div>
+    <div id="dr-now"></div>
+    <div class="ci-row">
+      <select id="dr-hours" aria-label="How long should the link work?" style="background:var(--field);border:1px solid var(--line);color:var(--fg);font-family:var(--font);font-size:14px;padding:10px;">
+        <option value="6">Works for 6 hours</option><option value="12">12 hours</option><option value="24" selected>24 hours</option><option value="72">3 days</option><option value="168">7 days</option>
+      </select>
+      <button type="button" class="ci-btn ghost" id="dr-make">Make a door link</button>
+    </div>
+    <div class="hint" id="dr-msg" role="status"></div>
+"""
+
+
+def render(theme_css: str, theme_js: str, body_attrs: str, title: str, stat_rows: list, has_tickets: bool,
+           door_base: str = "", door: dict = None) -> str:
+    """The Check-in page. With `door_base` (the private door link) it is the stripped-down page for door staff:
+    no menu, and it talks to the door link's own scan / undo addresses. `door` (admin page only) = what the
+    "Door link for your staff" box shows: {"link", "expires_at", "hours"}."""
+    staff = bool(door_base)
+    data = json.dumps({"stats": stat_rows, "scan": (door_base + "/scan") if staff else "/admin/checkin/scan",
+                       "undo": (door_base + "/undo") if staff else "/admin/checkin/undo", "door": door if (door and not staff) else None}).replace("<", "\\u003c")
     note = ("" if has_tickets else
             '<div class="warn">You have no event ticket or voucher cards yet. Open <b>Cards</b>, press <b>+ New card</b> and '
             'choose <b>Event ticket</b> or <b>Voucher</b>.</div>')
     return f"""<!DOCTYPE html>
 <html><head><meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Check-in — Admin</title>
+<title>{"Door check-in" if staff else "Check-in — Admin"}</title>
+{'<meta name="robots" content="noindex"><meta name="referrer" content="no-referrer">' if staff else ""}
 <style>
   body {{ background:var(--bg); color:var(--fg); font-family:var(--font); padding:32px; }}
   h1 {{ color:var(--accent-text); font-size:16px; letter-spacing:2px; text-transform:uppercase; }}
@@ -98,8 +119,8 @@ def render(theme_css: str, theme_js: str, body_attrs: str, title: str, stat_rows
   .warn {{ background:var(--warn-bg); color:var(--warn); font-size:12px; line-height:1.6; padding:10px 14px; margin:14px 0 0; }}
 {theme_css}</style></head>
 <body {body_attrs}>
-  {admin_theme.nav_html("checkin", True)}
-  <h1>{escape(title)} — Check-in</h1>
+  {"" if staff else admin_theme.nav_html("checkin", True)}
+  <h1>{escape(title)} — {"Door check-in" if staff else "Check-in"}</h1>
   <div class="ci">
     <div class="hint">Scan a ticket's or voucher's QR code, or paste its link or code. A good one is checked off right away and can't be used again.</div>
     {note}
@@ -114,6 +135,7 @@ def render(theme_css: str, theme_js: str, body_attrs: str, title: str, stat_rows
     <label class="ci-opt"><input type="checkbox" id="ci-peek"> Only look, don't mark it as used</label>
     <div class="ci-res" id="ci-res" role="status" aria-live="polite"></div>
     <div class="ci-stats" id="ci-stats"></div>
+    {"" if staff else DOOR_BOX}
   </div>
   <script type="application/json" id="ci-data">{data}</script>
   <script>
@@ -131,6 +153,31 @@ def render(theme_css: str, theme_js: str, body_attrs: str, title: str, stat_rows
     }}
     drawStats();
 
+    // Door link box (admin page only).
+    if ($('dr-make')) {{
+      var drNow = $('dr-now'), drMsg = $('dr-msg');
+      function drDraw(d) {{
+        drNow.textContent = '';
+        if (!d || !d.link) {{ var n = document.createElement('div'); n.className = 'hint'; n.textContent = 'No door link right now.'; drNow.appendChild(n); return; }}
+        var box = document.createElement('div'); box.className = 'ci-res peek'; box.style.display = 'block';
+        var a = document.createElement('div'); a.className = 'ci-line'; a.textContent = d.link; a.style.userSelect = 'all';
+        var m = document.createElement('div'); m.className = 'hint'; m.textContent = 'Works until ' + new Date(d.expires_at).toLocaleString() + '. Anyone with this link can check tickets in, so only send it to your staff.';
+        var c = document.createElement('button'); c.type = 'button'; c.className = 'ci-undo'; c.textContent = 'Copy the link';
+        c.onclick = function () {{ try {{ navigator.clipboard.writeText(d.link); drMsg.textContent = 'Copied.'; }} catch (e) {{ drMsg.textContent = 'Select the link above and copy it.'; }} }};
+        var o = document.createElement('button'); o.type = 'button'; o.className = 'ci-undo'; o.style.marginLeft = '8px'; o.textContent = 'Switch it off';
+        o.onclick = function () {{ post('/admin/door/off', {{}}).then(function (r) {{ drDraw(r.door); drMsg.textContent = 'The door link is off.'; }}); }};
+        box.appendChild(a); box.appendChild(m); box.appendChild(c); box.appendChild(o); drNow.appendChild(box);
+      }}
+      drDraw(state.door);
+      $('dr-make').addEventListener('click', function () {{
+        $('dr-make').disabled = true;
+        post('/admin/door/make', {{ hours: parseInt($('dr-hours').value, 10) }}).then(function (r) {{
+          $('dr-make').disabled = false;
+          if (r.success) {{ drDraw(r.door); drMsg.textContent = 'Made. A new link cancels the old one.'; }} else drMsg.textContent = r.error || 'That did not work.';
+        }}).catch(function () {{ $('dr-make').disabled = false; drMsg.textContent = 'Could not reach the server.'; }});
+      }});
+    }}
+
     var busy = false, lastCode = '', lastAt = 0;
     function show(cls, big, lines, undoId) {{
       var el = $('ci-res'); el.className = 'ci-res ' + cls; el.textContent = '';
@@ -140,7 +187,7 @@ def render(theme_css: str, theme_js: str, body_attrs: str, title: str, stat_rows
         var u = document.createElement('button'); u.type = 'button'; u.className = 'ci-undo'; u.textContent = 'Undo (used by mistake)';
         u.onclick = function () {{
           u.disabled = true;
-          post('/admin/checkin/undo', {{ credential_id: undoId }}).then(function (d) {{
+          post(state.undo, {{ credential_id: undoId }}).then(function (d) {{
             if (d.stats) {{ state.stats = d.stats; drawStats(); }}
             show('peek', 'Undone', ['It works again.']);
           }});
@@ -157,7 +204,7 @@ def render(theme_css: str, theme_js: str, body_attrs: str, title: str, stat_rows
       code = String(code || '').trim();
       if (!code || busy) return;
       busy = true; $('ci-go').disabled = true;
-      post('/admin/checkin/scan', {{ code: code, mark: !$('ci-peek').checked }}).then(function (d) {{
+      post(state.scan, {{ code: code, mark: !$('ci-peek').checked }}).then(function (d) {{
         busy = false; $('ci-go').disabled = false;
         if (d.stats) {{ state.stats = d.stats; drawStats(); }}
         var t = d.ticket || {{}};

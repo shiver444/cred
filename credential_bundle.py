@@ -67,7 +67,7 @@ def bundle_credential(issue_result: dict) -> dict:
         f"Credential ID:  {credential_id}",
         f"Holder:         {manifest['holder_name']} <{manifest['holder_email']}>",
         f"Tier:           {manifest['tier']}",
-        f"Sections:       {', '.join(manifest.get('sections', []))}",
+        f"Sections:       {'Everything' if '*' in manifest.get('sections', []) else ', '.join(manifest.get('sections', []))}",
         f"Issued:         {manifest['issued_at']}",
         f"Expires:        {manifest['expires_at']}",
         f"Public key:     {manifest['public_key'][:32]}...",

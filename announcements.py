@@ -34,6 +34,8 @@ MAX_TITLE = 80
 MAX_TEXT = 1500
 MAX_LINK = 500
 MAX_HISTORY = 25
+MAX_SCHEDULED = 20
+MAX_AHEAD_DAYS = 366
 MAX_RECIPIENTS = 2000          # one send; a safety net, not a plan limit
 
 _lock = threading.RLock()
@@ -64,10 +66,11 @@ def _read() -> dict:
             d = json.load(f)
         if isinstance(d, dict):
             return {"current": d.get("current") if isinstance(d.get("current"), dict) else None,
-                    "history": [h for h in (d.get("history") or []) if isinstance(h, dict)][:MAX_HISTORY]}
+                    "history": [h for h in (d.get("history") or []) if isinstance(h, dict)][:MAX_HISTORY],
+                    "scheduled": [h for h in (d.get("scheduled") or []) if isinstance(h, dict)][:MAX_SCHEDULED]}
     except (OSError, ValueError):
         pass
-    return {"current": None, "history": []}
+    return {"current": None, "history": [], "scheduled": []}
 
 
 def _write(d: dict):
@@ -100,7 +103,7 @@ def public_current():
     c = current()
     if not c or not (c.get("text") or c.get("title")):
         return None
-    return {"title": c.get("title", ""), "text": c.get("text", ""), "link": c.get("link", ""),
+    return {"id": str(c.get("id") or ""), "title": c.get("title", ""), "text": c.get("text", ""), "link": c.get("link", ""),
             "posted_at": (c.get("posted_at") or "")[:10]}
 
 
@@ -116,6 +119,52 @@ def post(title, text, link, pin: bool) -> dict:
         d["history"] = ([entry] + d["history"])[:MAX_HISTORY]
         _write(d)
     return entry
+
+
+# ── send later ──
+def parse_when(v):
+    """A UTC datetime from an ISO text (the browser sends one, ending in Z), or None."""
+    try:
+        t = datetime.fromisoformat(str(v or "").strip().replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if t.tzinfo is None:
+        t = t.replace(tzinfo=timezone.utc)
+    return t.astimezone(timezone.utc)
+
+
+def schedule(title, text, link, pin, mail, group, at) -> dict:
+    """Keep a note to be posted (and/or emailed) at time `at` (a UTC datetime). Returns the scheduled item."""
+    item = {"id": secrets.token_hex(6), "title": title, "text": text, "link": link, "pin": bool(pin), "mail": bool(mail),
+            "group": str(group or "")[:200], "at": at.isoformat(), "created_at": _now()}
+    with _lock:
+        d = _read()
+        if len(d["scheduled"]) >= MAX_SCHEDULED:
+            raise ValueError("full")
+        d["scheduled"].append(item)
+        d["scheduled"].sort(key=lambda x: x.get("at") or "")
+        _write(d)
+    return item
+
+
+def cancel(item_id: str) -> bool:
+    with _lock:
+        d = _read()
+        before = len(d["scheduled"])
+        d["scheduled"] = [x for x in d["scheduled"] if x.get("id") != item_id]
+        _write(d)
+        return len(d["scheduled"]) < before
+
+
+def due(now=None) -> list:
+    """The scheduled notes whose time has come (oldest first)."""
+    now = now or datetime.now(timezone.utc)
+    out = []
+    for x in load()["scheduled"]:
+        t = parse_when(x.get("at"))
+        if t is not None and t <= now:
+            out.append(x)
+    return out
 
 
 def unpin() -> bool:
@@ -147,7 +196,8 @@ def groups(registry: list, tiers: list, now=None) -> list:
     """The groups an announcement can be emailed to, each with how many
     different people are in it: [{"key", "label", "count"}]. Only working cards
     (not revoked, not expired) with an email address count."""
-    live = [e for e in registry or [] if e.get("holder_email") and limits.is_active(e, now)]
+    off = {_norm(e) for e in registry or [] if e.get("announce_off")}
+    live = [e for e in registry or [] if e.get("holder_email") and limits.is_active(e, now) and _norm(e) not in off]
     out = [{"key": "all", "label": "Everyone with a working card", "count": len({_norm(e) for e in live})}]
     for t in tiers or []:
         name = str(t.get("name") or "")
@@ -177,8 +227,9 @@ def recipients(registry: list, key: str, now=None) -> list:
     if key != "all" and not key.startswith(("tier:", "event:")):
         return []
     chosen = {}
+    off = {_norm(e) for e in registry or [] if e.get("announce_off")}       # pressed "unsubscribe" in an earlier note
     for e in sorted(registry or [], key=lambda x: str(x.get("issued_at") or "")):
-        if not e.get("holder_email") or not limits.is_active(e, now):
+        if not e.get("holder_email") or not limits.is_active(e, now) or _norm(e) in off:
             continue
         if key.startswith("tier:") and str(e.get("tier") or "").upper() != key[5:].upper():
             continue

@@ -113,6 +113,7 @@ def generate_card(
     event: dict = None,
     drop: dict = None,
     detail: dict = None,
+    member_no: int = 0,
     save: bool = True,
 ) -> str:
     """
@@ -295,6 +296,8 @@ def generate_card(
         if detail.get("terms"):  rows.append(_vrow("TERMS", detail["terms"]))
         if expires_at and not str(expires_at).startswith("2100"):
             rows.append(_vrow("VALID UNTIL", str(expires_at)[:10]))
+        if int(detail.get("uses") or 1) > 1:
+            rows.append(_vrow("USES", f"{int(detail['uses'])} in total"))
         rows.append(_vrow("VOUCHER", tier))
         if holder_name:          rows.append(_vrow("FOR", holder_name))
         rows.append(f'      <div><b>ID</b> // <span>{formatted_id}</span></div>')
@@ -312,6 +315,11 @@ def generate_card(
     else:
         meta_rows = (f'      <div><b>ACCESS CLASS</b> // <span>{e_tier}</span></div>\n'
                      f'      <div><b>ID</b> // <span>{formatted_id}</span></div>')
+
+    if isinstance(member_no, int) and member_no > 0:
+        # "Member #37": a founding number, shown just above the ID on every kind of card.
+        id_row = f'      <div><b>ID</b> // <span>{formatted_id}</span></div>'
+        meta_rows = meta_rows.replace(id_row, f'      <div><b>MEMBER</b> // <span>#{member_no}</span></div>\n' + id_row, 1)
 
     if layout == "art":
         if is_ticket:

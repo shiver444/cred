@@ -503,7 +503,7 @@ def generate_pdf_report(manifest_path, proof_path, video_path, output_path,
             info_row('Holder name', manifest.get('holder_name', '—')),
             info_row('Holder email', manifest.get('holder_email', '—')),
             info_row('Tier', manifest.get('tier', '—')),
-            info_row('Sections granted', ', '.join(sections_granted) if sections_granted else '—'),
+            info_row('Sections granted', 'Everything' if '*' in sections_granted else (', '.join(sections_granted) if sections_granted else '—')),
             info_row('Issued', manifest.get('issued_at', '—')),
             info_row('Expires', manifest.get('expires_at', '—')),
         ]

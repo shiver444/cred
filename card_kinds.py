@@ -285,16 +285,39 @@ def sample_drop() -> dict:
 # for the tier's number of days after it is given out, or until `until` (a typed
 # local date and time plus `tz`, as for events) when one is set.
 
-def clean_voucher(name="", terms="", until="", tz=0, bottom="") -> dict:
-    return {"name": _text(name, MAX_NAME), "terms": _text(terms, MAX_NOTE), "until": _local(until),
-            "tz": _tz(tz), "bottom": _text(bottom, MAX_BOTTOM)}
+MAX_USES = 100
+
+
+def clean_uses(value) -> int:
+    """How many times a voucher can be used (a class pack: 10). 1 = the ordinary once-only voucher."""
+    try:
+        n = int(str(value).strip())
+    except (TypeError, ValueError):
+        return 1
+    return min(MAX_USES, max(1, n))
+
+
+def clean_voucher(name="", terms="", until="", tz=0, bottom="", uses=1) -> dict:
+    out = {"name": _text(name, MAX_NAME), "terms": _text(terms, MAX_NOTE), "until": _local(until),
+           "tz": _tz(tz), "bottom": _text(bottom, MAX_BOTTOM)}
+    if clean_uses(uses) > 1:
+        out["uses"] = clean_uses(uses)           # only stored for a counter card, so ordinary vouchers look as they always did
+    return out
+
+
+def uses_of(card) -> int:
+    """How many times this voucher can be used: a voucher tier, or an issued voucher's registry entry. 1 for anything else."""
+    if not isinstance(card, dict) or card.get("kind") != "voucher":
+        return 1
+    v = card.get("voucher") if isinstance(card.get("voucher"), dict) else card.get("detail")
+    return clean_uses(v.get("uses", 1)) if isinstance(v, dict) else 1
 
 
 def voucher_of(tier) -> dict:
     """A tier's voucher details, always a complete dict."""
     v = tier.get("voucher") if isinstance(tier, dict) else None
     v = v if isinstance(v, dict) else {}
-    return clean_voucher(v.get("name"), v.get("terms"), v.get("until"), v.get("tz"), v.get("bottom"))
+    return clean_voucher(v.get("name"), v.get("terms"), v.get("until"), v.get("tz"), v.get("bottom"), v.get("uses", 1))
 
 
 def voucher_until_utc(voucher):
@@ -317,7 +340,8 @@ def public_voucher(tier) -> dict:
 def card_voucher(tier) -> dict:
     """The voucher details as stored on an issued voucher and shown on its card."""
     v = voucher_of(tier)
-    return {"name": v["name"], "terms": v["terms"], "bottom": v["bottom"] or DEFAULT_VOUCHER_BOTTOM}
+    return {"name": v["name"], "terms": v["terms"], "bottom": v["bottom"] or DEFAULT_VOUCHER_BOTTOM,
+            **({"uses": v["uses"]} if v.get("uses", 1) > 1 else {})}
 
 
 def sample_voucher() -> dict:

@@ -5,6 +5,7 @@ Simple, no database needed.
 """
 
 import json
+import card_kinds
 import os
 import tempfile
 import threading
@@ -54,6 +55,28 @@ def _save(registry: list):
         raise
 
 
+NUMBERS_FILE = DATA_DIR / "member_numbers.json"     # {CARD NAME: the last "Member #N" given}: numbers are never reused
+
+
+def next_member_no(tier: str) -> int:
+    """The next founding number for this card ("Member #N"): one more than the highest ever given, even if
+    that card was deleted later. Call with the signup lock held (so two sign-ups can't get the same number)."""
+    key = str(tier or "").strip().upper()
+    with _lock:
+        try:
+            d = json.loads(NUMBERS_FILE.read_text(encoding="utf-8"))
+            d = d if isinstance(d, dict) else {}
+        except Exception:
+            d = {}
+        top = max([int(d.get(key) or 0)] + [int(e.get("member_no") or 0) for e in _load() if str(e.get("tier") or "").strip().upper() == key])
+        n = top + 1
+        d[key] = n
+        tmp = NUMBERS_FILE.with_suffix(".tmp")
+        tmp.write_text(json.dumps(d), encoding="utf-8")
+        os.replace(tmp, NUMBERS_FILE)
+        return n
+
+
 def add_credential(entry: dict):
     """Add a newly issued credential to the registry."""
     with _lock:
@@ -87,6 +110,10 @@ def _add_credential_locked(entry: dict):
         **({"kind": entry["kind"], "detail": entry.get("detail") or {}} if entry.get("kind") in ("voucher", "certificate") else {}),
         # A reward card given automatically for completing a set (card_sets.py): {id, name}.
         **({"from_set": entry["from_set"]} if isinstance(entry.get("from_set"), dict) else {}),
+        # Cards given together ("also gives" on a card): the same random id on each, so they can show each other.
+        **({"bundle_id": str(entry["bundle_id"])[:32]} if entry.get("bundle_id") else {}),
+        # "Member #N" (a founding number): the running number among this card's holders.
+        **({"member_no": int(entry["member_no"])} if isinstance(entry.get("member_no"), int) and entry["member_no"] > 0 else {}),
         # Claimed with a claim code (claim_codes.py): {batch, name}.
         **({"claim": entry["claim"]} if isinstance(entry.get("claim"), dict) else {}),
         "revoked":          False,
@@ -172,26 +199,39 @@ def _revoke_locked(credential_id: str) -> bool:
 
 
 def mark_used(credential_id: str, now=None) -> str | None:
-    """Mark an event ticket as used (let in at the door). Returns the time it
+    """Mark an event ticket / voucher as used (let in at the door). Returns the time it
     was used, or None if there is no such credential. A ticket already used
-    keeps its first time."""
+    keeps its first time. A counter card (a voucher with several uses) is punched once per
+    call; it is only switched off (`used_at`) when the last use is taken."""
     with _lock:
         registry = _load()
         for entry in registry:
             if entry["credential_id"] == credential_id:
-                if not entry.get("used_at"):
-                    entry["used_at"] = (now or datetime.now(timezone.utc)).isoformat()
-                    _save(registry)
-                return entry["used_at"]
+                if entry.get("used_at"):
+                    return entry["used_at"]
+                when = (now or datetime.now(timezone.utc)).isoformat()
+                uses = card_kinds.uses_of(entry)
+                if uses > 1:
+                    entry["uses_done"] = int(entry.get("uses_done") or 0) + 1
+                    entry["use_log"] = (list(entry.get("use_log") or []) + [when])[-card_kinds.MAX_USES:]
+                    if entry["uses_done"] >= uses:
+                        entry["used_at"] = when
+                else:
+                    entry["used_at"] = when
+                _save(registry)
+                return when
     return None
 
 
 def unmark_used(credential_id: str) -> bool:
-    """Undo a mistaken check-in."""
+    """Undo a mistaken check-in (for a counter card: the last punch)."""
     with _lock:
         registry = _load()
         for entry in registry:
             if entry["credential_id"] == credential_id:
+                if card_kinds.uses_of(entry) > 1 and int(entry.get("uses_done") or 0) > 0:
+                    entry["uses_done"] = int(entry["uses_done"]) - 1
+                    entry["use_log"] = list(entry.get("use_log") or [])[:-1]
                 entry.pop("used_at", None)
                 _save(registry)
                 return True
@@ -435,9 +475,7 @@ def mark_set_notified(credential_id: str) -> bool:
     return False
 
 
-def set_followups_off(credential_id: str, off: bool = True) -> bool:
-    """The member pressed "stop these emails" (or turned them back on). It
-    covers every card held with the same email address."""
+def _set_flag_for_address(credential_id: str, field: str, off: bool) -> bool:
     with _lock:
         registry = _load()
         me = next((e for e in registry if e["credential_id"] == credential_id), None)
@@ -447,11 +485,23 @@ def set_followups_off(credential_id: str, off: bool = True) -> bool:
         for entry in registry:
             if entry is me or (addr and str(entry.get("holder_email") or "").strip().lower() == addr):
                 if off:
-                    entry["followups_off"] = True
+                    entry[field] = True
                 else:
-                    entry.pop("followups_off", None)
+                    entry.pop(field, None)
         _save(registry)
         return True
+
+
+def set_followups_off(credential_id: str, off: bool = True) -> bool:
+    """The member pressed "stop these emails" (or turned them back on). It
+    covers every card held with the same email address."""
+    return _set_flag_for_address(credential_id, "followups_off", off)
+
+
+def set_announce_off(credential_id: str, off: bool = True) -> bool:
+    """The member pressed "unsubscribe" in a bulletin-board email: no more of those emails to this
+    address (the pinned note on their page is not affected)."""
+    return _set_flag_for_address(credential_id, "announce_off", off)
 
 
 def is_revoked(credential_id: str) -> bool:

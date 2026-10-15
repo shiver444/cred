@@ -1066,13 +1066,16 @@ def build_announcement_email(to_name, tier, credential_id, bundle_hash, title, t
              f'border:1px solid {_look().ink};color:{_look().ink};">'
              f'Open the link</a>') if extra_link else ""
     why = f"You get this because you hold a {tier} card from {CREATOR_NAME}."
+    stop = unsubscribe_link(credential_id, bundle_hash) + "&k=news"
+    stop_html = (f'<div style="font-size:11px;line-height:1.6;color:#8a8176;margin-top:12px;">'
+                 f'<a href="{_esc(stop, quote=True)}" style="color:#8a8176;">Unsubscribe from these notes</a></div>')
     html_body = _shell(title or "A note", text, [], personal, "◈ Open member area",
-                       extra_html=extra, footer_note=why)
+                       extra_html=extra + stop_html, footer_note=why)
     extra_text = f"\nLink: {extra_link}\n" if extra_link else ""
     plain = (f"{CREATOR_NAME.upper()} — {CARD_TITLE.upper()}\n\n"
              f"{title + chr(10) + chr(10) if title else ''}{text}\n{extra_text}\n"
-             f"Your access link:\n{personal}\n\n{why}\n{CARD_TITLE}\n")
-    return {"subject": subject, "html": html_body, "text": plain, "link": personal}
+             f"Your access link:\n{personal}\n\n{why}\nUnsubscribe from these notes: {stop}\n{CARD_TITLE}\n")
+    return {"subject": subject, "html": html_body, "text": plain, "link": personal, "unsubscribe": stop}
 
 
 def send_announcement_email(to_name, to_email, tier, credential_id, bundle_hash, title, text, link="") -> tuple:
@@ -1110,13 +1113,17 @@ def send_test_announcement(to_email, title, text, link="", tier="MEMBER") -> tup
 
 
 def _send_simple(to_name, to_email, msg) -> tuple:
-    return _post_to_brevo({
+    payload = {
         "sender": {"name": FROM_NAME, "email": _from_email()},
         "to": [{"email": to_email, "name": to_name}],
         "subject": msg["subject"],
         "htmlContent": msg["html"],
         "textContent": msg["text"],
-    })
+    }
+    stop = msg.get("unsubscribe") or ""
+    if stop.startswith("http"):                    # a mail program's own "unsubscribe" button
+        payload["headers"] = {"List-Unsubscribe": f"<{stop}>", "List-Unsubscribe-Post": "List-Unsubscribe=One-Click"}
+    return _post_to_brevo(payload)
 
 
 def send_extended_email(to_name, to_email, tier, credential_id, bundle_hash, expires_at, days_added=None) -> tuple:

@@ -475,6 +475,10 @@
     .ca-boss { margin-top: 14px; padding: 18px 16px; text-align: center; border: 1px dashed var(--ca-line); display: flex; flex-direction: column; align-items: center; gap: 8px; }
     .ca-boss-badge { font-size: 10px; letter-spacing: 3px; text-transform: uppercase; color: var(--ca-ash); }
     .ca-boss-name { font-size: 20px; line-height: 1.2; color: var(--ca-fg); overflow-wrap: anywhere; }
+    .ca-mini { position: relative; overflow: hidden; border: 1px solid var(--mini); background: linear-gradient(135deg, color-mix(in srgb, var(--mini) 22%, transparent), transparent 70%); }
+    .ca-mini i { position: absolute; left: 0; top: 0; bottom: 0; width: 22%; background: var(--mini); opacity: .85; }
+    .ca-mini span { position: relative; margin-left: 22%; }
+    .ca-mini-off { opacity: .45; border-style: dashed; }
     .ca-boss-sub { font-size: 12px; color: var(--ca-ash); }
     .ca-boss.ca-locked .ca-boss-name { color: var(--ca-ash); }
     .ca-boss.ca-wait { border: 1px solid ${accent}; }
@@ -519,6 +523,16 @@
     }
     .ca-dl-btn:hover { background: ${accent}; color: var(--ca-on-accent); }
     .ca-news { margin-top: 16px; padding: 12px 14px; border: 1px solid var(--ca-line); border-left: 3px solid ${accent}; position: relative; }
+    .ca-new { display: inline-block; margin-left: 8px; padding: 1px 6px; background: ${accent}; color: var(--ca-on-accent); font-size: 8px; letter-spacing: 1.5px; vertical-align: 1px; }
+    .ca-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: ${accent}; margin-left: 7px; vertical-align: 2px; }
+    .ca-tab.active .ca-dot { background: var(--ca-on-accent); }
+    .ca-news.ca-unread { cursor: pointer; }
+    .ca-extras { margin-top: 12px; display: flex; flex-wrap: wrap; gap: 8px; }
+    .ca-chip { display: inline-block; padding: 4px 10px; border: 1px solid ${accent}; color: var(--ca-fg); font-size: 11px; letter-spacing: 1.5px; text-transform: uppercase; }
+    .ca-cardlist { display: flex; flex-direction: column; gap: 8px; margin-top: 12px; }
+    .ca-cardlink { display: flex; justify-content: space-between; gap: 10px; padding: 12px 14px; border: 1px solid var(--ca-line); color: var(--ca-fg); text-decoration: none; overflow-wrap: anywhere; }
+    .ca-cardlink:hover, .ca-cardlink:focus-visible { border-color: ${accent}; outline: none; }
+    .ca-cardlink small { color: var(--ca-ash); text-transform: uppercase; letter-spacing: 1.5px; font-size: 10px; white-space: nowrap; }
     .ca-news-label { font-size: 8px; letter-spacing: 2px; text-transform: uppercase; color: var(--ca-ash); margin-bottom: 6px; }
     .ca-news-title { font-weight: bold; margin-bottom: 4px; overflow-wrap: anywhere; }
     .ca-news-text { line-height: 1.6; overflow-wrap: anywhere; }
@@ -1339,23 +1353,71 @@
     if (res.status === 403) return null
     const body = await res.json()
     if (!body || !body.success) return null
-    return { sections: body.sections || [], card: body.card || null, announcement: body.announcement || null, sets: Array.isArray(body.sets) ? body.sets : [] }
+    return { sections: body.sections || [], card: body.card || null, announcement: body.announcement || null, sets: Array.isArray(body.sets) ? body.sets : [],
+      extras: { member_no: Number.isInteger(body.member_no) && body.member_no > 0 ? body.member_no : 0,
+                uses: body.uses && +body.uses.total > 1 ? { total: Math.floor(+body.uses.total), done: Math.max(0, Math.floor(+body.uses.done || 0)) } : null,
+                together: Array.isArray(body.together) ? body.together : [], cards_email: body.cards_email === true } }
   }
+
+  // "What have I already seen" is remembered in this browser only (never sent anywhere). If the browser
+  // will not keep it (private window, blocked storage) nothing is marked as new, so a marker can never get stuck.
+  const seenKey = cid => 'ca-seen:' + String(cid || '')
+  function seenLoad(cid) {
+    try {
+      const raw = window.localStorage.getItem(seenKey(cid))
+      const d = raw ? JSON.parse(raw) : null
+      return { ok: true, news: d && typeof d.news === 'string' ? d.news : '', sec: d && d.sec && typeof d.sec === 'object' ? d.sec : null }
+    } catch (e) { return { ok: false, news: '', sec: null } }
+  }
+  function seenSave(cid, st) {
+    try { window.localStorage.setItem(seenKey(cid), JSON.stringify({ news: st.news || '', sec: st.sec || {} })); return true } catch (e) { return false }
+  }
+  let seenNow = { ok: false, news: '', sec: null }
+  let seenCid = ''
+  // One short text per item, so a changed or added item can be told apart from the ones seen before.
+  const itemSig = it => String((it && it.title) || '') + '|' + String((it && it.file && (it.file.name + ':' + it.file.size)) || (it && it.url) || '') + '|' + String((it && it.state) || '')
 
   // The creator's pinned note, at the top of the member's area. Plain text only
   // (escaped, line breaks kept); the link is used only if it is a web address.
-  function renderNews(n) {
+  function renderNews(n, cid) {
     const holder = document.getElementById('ca-member-header')
     if (!holder || !n || !(n.title || n.text)) return
+    seenCid = cid || ''
+    seenNow = seenCid ? seenLoad(seenCid) : { ok: false, news: '', sec: null }
+    const nid = String(n.id || (String(n.posted_at || '') + '|' + String(n.title || '')))
+    const unread = seenNow.ok && seenNow.news !== nid
     const link = typeof n.link === 'string' && /^https?:\/\/[^\s<>"']+$/i.test(n.link) ? n.link : ''
     const box = document.createElement('div')
-    box.className = 'ca-news'
+    box.className = 'ca-news' + (unread ? ' ca-unread' : '')
     box.innerHTML = `
-      <div class="ca-news-label">Bulletin board${n.posted_at ? ' \u00b7 ' + esc(String(n.posted_at).slice(0, 10)) : ''}</div>
+      <div class="ca-news-label">Bulletin board${n.posted_at ? ' \u00b7 ' + esc(String(n.posted_at).slice(0, 10)) : ''}${unread ? '<span class="ca-new">NEW</span>' : ''}</div>
       ${n.title ? `<div class="ca-news-title">${esc(n.title)}</div>` : ''}
       ${n.text ? `<div class="ca-news-text">${esc(n.text).replace(/\n/g, '<br>')}</div>` : ''}
       ${link ? '<a class="ca-dl-btn ca-news-link" target="_blank" rel="noopener noreferrer">Open the link</a>' : ''}`
     if (link) box.querySelector('a').href = link
+    if (unread) {
+      // Tapping the note (or its link) marks it as read.
+      box.addEventListener('click', () => {
+        seenNow.news = nid; seenSave(seenCid, seenNow)
+        box.classList.remove('ca-unread')
+        const b = box.querySelector('.ca-new'); if (b) b.remove()
+      })
+    }
+    holder.appendChild(box)
+  }
+
+  // A founding number and the uses left on a counter card, as small chips under the header.
+  let memberCreds = null
+  function renderExtras(x, data) {
+    memberCreds = data ? { id: data.credential_id, h: data._h } : null
+    const holder = document.getElementById('ca-member-header')
+    if (!holder || !x) return
+    const chips = []
+    if (x.member_no) chips.push('Member #' + x.member_no)
+    if (x.uses) chips.push('Uses left: ' + Math.max(0, x.uses.total - x.uses.done) + ' of ' + x.uses.total)
+    if (!chips.length) return
+    const box = document.createElement('div'); box.className = 'ca-extras'
+    chips.forEach(t => { const c = document.createElement('span'); c.className = 'ca-chip'; c.textContent = t; box.appendChild(c) })
     holder.appendChild(box)
   }
 
@@ -1447,10 +1509,11 @@
     let myCard = null
     let news = null
     let mySets = []
+    let extras = null
     let unreachable = false
     try {
       const got = await loadMemberContent(data)
-      if (got) { sections = got.sections; myCard = got.card; news = got.announcement; mySets = got.sets }
+      if (got) { sections = got.sections; myCard = got.card; news = got.announcement; mySets = got.sets; extras = got.extras }
     } catch(e) {
       unreachable = true
     }
@@ -1467,9 +1530,10 @@
       showResult('invalid', '✗ This access is no longer valid. Contact ' + name + ' if you think that\'s a mistake.')
       return
     } else {
-      renderNews(news)
+      renderNews(news, data.credential_id)
+      renderExtras(extras, data)
       renderMyCard(myCard)
-      buildMemberArea(sections, mySets)
+      buildMemberArea(sections, mySets, data.credential_id, extras)
     }
 
     area.scrollIntoView && area.scrollIntoView({ behavior: 'smooth' })
@@ -1479,7 +1543,7 @@
   // ── BUILD MEMBER AREA ──
   // `sections` is exactly what the server returned for this member:
   // [{ key, title, type: 'links' | 'merch', … }]
-  function buildMemberArea(sections, sets) {
+  function buildMemberArea(sections, sets, cid, extras) {
     const tabsEl   = document.getElementById('ca-tabs')
     const panelsEl = document.getElementById('ca-panels')
     tabsEl.innerHTML   = ''
@@ -1493,17 +1557,43 @@
     })
     // The member's card sets (collect these cards, get a reward): one more tab at the end.
     if (Array.isArray(sets) && sets.length) shown.push({ key: '__sets', title: 'Your sets', type: 'sets', sets })
+    // Cards given together with this one, and "email me all my cards": one more tab at the very end.
+    const together = extras && Array.isArray(extras.together) ? extras.together.filter(c => c && /^[A-Za-z0-9_-]{1,80}$/.test(String(c.id)) && /^[a-f0-9]{32}$/.test(String(c.h))) : []
+    if (together.length || (extras && extras.cards_email)) shown.push({ key: '__cards', title: 'Your cards', type: 'cards', together, email: !!(extras && extras.cards_email) })
 
     if (!shown.length) {
       panelsEl.innerHTML = '<div class="ca-panel active"><p style="color:#6b6058;font-size:10px;position:relative;">No content available yet.</p></div>'
       return
     }
 
+    // New things since the member last looked: a dot on a tab whose items are new or changed. The first visit
+    // only takes a note of what is there (no dots), and the tab you are looking at counts as seen.
+    if (cid && cid !== seenCid) { seenCid = cid; seenNow = seenLoad(cid) }
+    const sigs = {}
+    shown.forEach(sec => { if (sec.type === 'links') sigs[sec.key] = (sec.items || []).map(itemSig) })
+    const firstVisit = seenNow.ok && !seenNow.sec
+    const prior = (seenNow.sec && typeof seenNow.sec === 'object') ? seenNow.sec : {}
+    const isNew = key => seenNow.ok && !firstVisit && Array.isArray(sigs[key]) &&
+      (!Array.isArray(prior[key]) ? sigs[key].length > 0 : sigs[key].some(x => prior[key].indexOf(x) === -1))
+    const markSeen = key => {
+      if (!seenNow.ok || !Array.isArray(sigs[key])) return
+      seenNow.sec = Object.assign({}, seenNow.sec || {}, { [key]: sigs[key] }); seenSave(cid, seenNow)
+    }
+    if (seenNow.ok) {
+      const base = Object.assign({}, seenNow.sec || {})
+      if (firstVisit) Object.keys(sigs).forEach(k => { base[k] = sigs[k] })
+      else if (shown.length && Array.isArray(sigs[shown[0].key])) base[shown[0].key] = sigs[shown[0].key]
+      seenNow.sec = base; seenSave(cid, seenNow)
+    }
     shown.forEach((sec, i) => {
       const btn = document.createElement('button')
       btn.className = 'ca-tab' + (i === 0 ? ' active' : '')
       btn.textContent = '// ' + String(sec.title || sec.key).toUpperCase()
-      btn.onclick = () => switchTab(sec.key, btn)
+      if (i > 0 && isNew(sec.key)) {
+        const dot = document.createElement('span'); dot.className = 'ca-dot'; dot.setAttribute('role', 'img'); dot.setAttribute('aria-label', 'New')
+        btn.appendChild(dot)
+      }
+      btn.onclick = () => { switchTab(sec.key, btn); const d = btn.querySelector('.ca-dot'); if (d) d.remove(); markSeen(sec.key) }
       tabsEl.appendChild(btn)
 
       const panel = document.createElement('div')
@@ -1513,6 +1603,19 @@
       panelsEl.appendChild(panel)
     })
 
+    // "Email me all my cards": the server sends it to the address on the card, never to one typed here.
+    const mailBtn = panelsEl.querySelector('[data-ca-mailcards]')
+    if (mailBtn) mailBtn.addEventListener('click', async () => {
+      const note = panelsEl.querySelector('[data-ca-mailnote]')
+      mailBtn.disabled = true
+      try {
+        const r = await fetch(`${API_BASE}/member-cards-email`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ credential_id: memberCreds && memberCreds.id, bundle_hash: memberCreds && memberCreds.h }) })
+        const j = await r.json().catch(() => ({}))
+        if (note) note.textContent = r.ok && j.success ? String(j.message || 'Sent.') : String(j.error || 'That did not work. Try again in a little while.')
+      } catch (e) { if (note) note.textContent = 'That did not work. Try again in a little while.' }
+      setTimeout(() => { mailBtn.disabled = false }, 4000)
+    })
   }
 
   function switchTab(key, btn) {
@@ -1667,6 +1770,13 @@
       return title + (grid ? `<div class="ca-grid">${items}</div>` : items)
     }
 
+    if (sec.type === 'cards') {
+      const kinds = { ticket: 'Ticket', voucher: 'Voucher', collectible: 'Collectible', certificate: 'Certificate', pass: 'Membership' }
+      const list = (sec.together || []).map(c => `<a class="ca-cardlink" href="${esc(`${location.pathname}?id=${c.id}&h=${c.h}`)}"><span>${esc(c.label || 'Card')}</span><small>${esc(kinds[c.kind] || 'Card')} \u2192</small></a>`).join('')
+      return title + (list ? `<div class="ca-set-name">Came with this card</div><div class="ca-cardlist">${list}</div>` : '')
+        + (sec.email ? `<div style="margin-top:16px"><button class="ca-dl-btn" data-ca-mailcards="1">Email me all my cards</button><div class="ca-boss-sub" data-ca-mailnote="1" role="status"></div></div>` : '')
+    }
+
     if (sec.type === 'sets') {
       // Pictures and links come from the server, but are checked again here: a picture must be a small
       // JPEG data address, a link must be a card id and a 32-character access code, and it only ever
@@ -1676,7 +1786,11 @@
         ? `${location.pathname}?id=${l.id}&h=${l.h}` : ''
       const slotHtml = sl => {
         const href = sl.got ? linkOf(sl.link) : '', art = sl.got ? artOk(sl.art) : ''
-        const pic = art ? `<img class="ca-slot-art" src="${art}" alt="">` : `<div class="ca-slot-blank">${sl.got ? '\u2713' : '?'}</div>`
+        // No picture on the card's look: draw a little card in the card's own colour instead of a bare tick.
+        const col = typeof sl.accent === 'string' && /^#[0-9a-fA-F]{6}$/.test(sl.accent) ? sl.accent : ''
+        const pic = art ? `<img class="ca-slot-art" src="${art}" alt="">`
+          : col ? `<div class="ca-slot-blank ca-mini${sl.got ? '' : ' ca-mini-off'}" style="--mini:${col}"><i></i><span>${sl.got ? '\u2713' : '?'}</span></div>`
+          : `<div class="ca-slot-blank">${sl.got ? '\u2713' : '?'}</div>`
         const inner = `${pic}
             <div class="ca-day-title">${esc(sl.name)}</div>
             <div class="ca-day-state">${sl.got ? (href ? 'Open \u2192' : 'Collected') : 'Not yet'}</div>`
