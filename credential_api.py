@@ -3540,7 +3540,7 @@ def _dashboard_page() -> str:
   .bk-status.warn {{ color:var(--warn); background:var(--warn-bg); border-color:transparent; }}
   .backup-box .warn {{ background:var(--warn-bg); color:var(--warn); font-size:11px; line-height:1.6; padding:10px 14px; margin:12px 0; border-radius:var(--radius, 0); }}
   .bk-restore summary {{ cursor:pointer; color:var(--soft); font-size:11px; letter-spacing:1px; text-transform:uppercase; margin:6px 0; }}
-  .adv-box summary {{ cursor:pointer; color:var(--accent-text); font-size:12px; margin:4px 0; }}
+  .adv-box summary, .pay-more summary {{ cursor:pointer; color:var(--accent-text); font-size:12px; margin:4px 0; }}
   .placeholder {{ color:var(--muted); font-size:11px; line-height:1.7; border-left:2px solid var(--line); padding:10px 14px; }}
   .banner {{ background:var(--ok-bg); color:var(--ok); font-size:11px; padding:10px 14px; margin-bottom:16px; letter-spacing:1px; text-transform:uppercase; }}
   .design-panel {{ background:var(--panel); border:1px solid var(--line); padding:16px; margin:6px 0; display:flex; flex-wrap:wrap; gap:16px; align-items:flex-start; }}
@@ -3823,7 +3823,7 @@ def _dashboard_page() -> str:
     <label style="margin-top:20px;">Payments waiting for your OK</label>
     {pending_requests_html}
 
-    <details class="adv-box" id="hook-box" style="margin-top:14px;">
+    <details class="pay-more" id="hook-box" style="margin-top:14px;">
       <summary>Confirm payments automatically (advanced)</summary>
       <div class="hint" style="margin-top:6px;">For a payment service you already use (or a tool like Zapier, Make or n8n): when it tells this site "that request was paid", the card is issued and nobody has to press Approve. The message has to be <b>signed</b> with a secret only you and the service know, has to say the full price was paid in the right currency, and is refused if it is more than 5 minutes old. Skip this if you are happy pressing Approve.</div>
       <div style="margin-top:8px;">
