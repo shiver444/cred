@@ -19,6 +19,10 @@ Three ways to use it (the "need" number):
   * one card, N times (one card, need 1 to 20): "collect the stamp 5 times", or need 1 for "get this card, get
     that reward". Every copy counts, so the person must hold several copies (claim codes always work for that).
 
+Repeating ("repeat": true, only for the one-card kind): a stamp card that never ends. Every time the person
+holds another N copies the reward is given again ("collect 3 stamps, get a coffee, collect 3 more, get another").
+Off by default, so every existing set behaves exactly as before.
+
 Rules, kept simple on purpose:
   * A piece counts when the card was issued to that email and has not been
     revoked. A ticket that was used or a card that has run out still counts: it
@@ -134,6 +138,7 @@ def clean(raw, tiers, old=None) -> tuple:
                                   or (prev.get("pieces") and target({"pieces": prev["pieces"], "need": prev.get("need")}) != target({"pieces": pieces, "need": need})))
         out.append({"id": sid, "name": name, "pieces": pieces, "need": need, "reward": names[rk],
                     "include_existing": r.get("include_existing") is True,
+                    "repeat": r.get("repeat") is True and len(pieces) == 1,
                     "active_from": now if (changed and r.get("include_existing") is not True) else (prev.get("active_from") or now)})
     return out, warnings
 
@@ -148,6 +153,7 @@ def of_config(cfg) -> list:
             pcs = [str(p) for p in s["pieces"]][:MAX_PIECES]
             out.append({"id": s["id"], "name": _name(s["name"]), "pieces": pcs, "need": _need(s.get("need"), len(pcs)),
                         "reward": str(s["reward"]), "include_existing": s.get("include_existing") is True,
+                        "repeat": s.get("repeat") is True and len(pcs) == 1,
                         "active_from": str(s.get("active_from") or "")})
     return out
 
@@ -207,6 +213,70 @@ def rewarded(registry, s, key, given=None) -> bool:
     return bool(key) and key in rewarded_keys(registry, s, given)
 
 
+REPEAT_PREFIX = "repeat:"      # in the "given" record: {"repeat:<set id>": {email key: [when each reward was given]}}
+
+
+def is_repeat(s) -> bool:
+    """True for a one-card set that gives its reward again every N copies."""
+    return bool(s.get("repeat")) and len(s.get("pieces") or []) == 1
+
+
+def _given_index(registry, s, given=None) -> dict:
+    """{email key: how many rewards this repeating set has given them since it was made (or last changed)}.
+    Counted from the permanent record and from the member list (whichever is higher, so deleting a reward card
+    never makes a reward come back); a reward given before the set was repeating counts once."""
+    since = _parse(s.get("active_from"))
+    fresh = lambda t: since is None or (t is not None and t > since)
+    led = {}
+    for key, times in (((given or {}).get(REPEAT_PREFIX + s["id"])) or {}).items():
+        if isinstance(times, list):
+            led[key] = sum(1 for t in times if fresh(_parse(t)))
+    reg = {}
+    for e in registry:
+        if (e.get("from_set") or {}).get("id") == s["id"]:
+            k = limits.normalize_email(e.get("holder_email"))
+            if k and fresh(_parse(e.get("issued_at"))):
+                reg[k] = reg.get(k, 0) + 1
+    out = {}
+    for k in set(led) | set(reg):
+        out[k] = max(led.get(k, 0), reg.get(k, 0))
+    for k in ((given or {}).get(s["id"]) or []):       # the old once-only record
+        if k not in out and k not in (((given or {}).get(REPEAT_PREFIX + s["id"])) or {}):
+            out[k] = 1
+    return out
+
+
+def _cycles(s, person) -> list:
+    """When each full round of N copies was completed (the moment its Nth copy was obtained), oldest first."""
+    times, need = _times(s, person), target(s)
+    return [times[k * need - 1] for k in range(1, len(times) // need + 1)]
+
+
+def _eligible_cycles(s, person) -> list:
+    """The rounds that earn a reward: those completed after the set was made. With "also people who already
+    qualify" ticked, everything before that counts as ONE catch-up reward (never a pile of them)."""
+    cyc, since = _cycles(s, person), _parse(s.get("active_from"))
+    fresh = [t for t in cyc if since is None or t > since]
+    old = [t for t in cyc if not (since is None or t > since)]
+    if s.get("include_existing") and old:
+        fresh = old[-1:] + fresh
+    return fresh
+
+
+def owed_list(s, person, n_given) -> list:
+    """For a repeating set: when each reward this person has earned but not yet been given was earned."""
+    elig = _eligible_cycles(s, person)
+    return elig[n_given:] if len(elig) > n_given else []
+
+
+def owed_now(registry, s, key, given=None) -> int:
+    """How many rewards of this repeating set this person is owed right now (looked up fresh, one person)."""
+    person = people(registry).get(key)
+    if not person:
+        return 0
+    return len(owed_list(s, person, _given_index(registry, s, given).get(key, 0)))
+
+
 def _times(s, person) -> list:
     """When each card that counts toward this set was obtained, oldest first (one card: every copy; several: each card once)."""
     if len(s["pieces"]) == 1:
@@ -233,6 +303,14 @@ def due(sets, tiers, registry, given=None, only=None) -> list:
         if problems(s, tiers):
             continue
         since = _parse(s.get("active_from"))
+        if is_repeat(s):
+            idx = _given_index(registry, s, given)
+            for key, person in ppl.items():
+                if only and key != only:
+                    continue
+                for done in owed_list(s, person, idx.get(key, 0)):
+                    out.append((s, person, done))
+            continue
         got = rewarded_keys(registry, s, given)
         for key, person in ppl.items():
             if only and key != only:
@@ -254,6 +332,11 @@ def waiting_now(s, tiers, registry, given=None, ppl=None) -> int:
         return 0
     got = rewarded_keys(registry, s, given)
     since, n = _parse(s.get("active_from")), 0
+    if is_repeat(s):
+        for key, person in (ppl if ppl is not None else people(registry)).items():
+            if key not in got and any(since is not None and t <= since for t in _cycles(s, person)):
+                n += 1
+        return n
     for key, person in (ppl if ppl is not None else people(registry)).items():
         done = completed_at(s, person)
         if done is not None and key not in got and (since is None or done <= since):
@@ -265,6 +348,11 @@ def counts(s, registry, given=None, ppl=None) -> dict:
     """{"rewarded": n, "collecting": n}: people who got the reward, and people who hold some but not all pieces."""
     ppl = ppl if ppl is not None else people(registry)
     got = rewarded_keys(registry, s, given)
+    if is_repeat(s):
+        idx = _given_index(registry, s, given)
+        need = target(s)
+        return {"rewarded": sum(1 for key in ppl if key in got), "collecting": sum(1 for p in ppl.values() if count_of(s, p) % need > 0),
+                "given": sum(idx.values())}
     part = sum(1 for key, p in ppl.items() if key not in got and completed_at(s, p) is None and count_of(s, p) > 0)
     return {"rewarded": sum(1 for key in ppl if key in got), "collecting": part}
 
@@ -305,6 +393,18 @@ def member_view(sets, tiers, registry, email, this_tier=None, given=None) -> lis
             slots = [{"name": tier_label(tiers, s["pieces"][0]), "tier": str(s["pieces"][0]), "got": i < have} for i in range(need)]
         else:
             slots = [{"name": tier_label(tiers, p), "tier": str(p), "got": str(p).upper() in person["pieces"]} for p in s["pieces"]]
+        if is_repeat(s):
+            n_given = _given_index(registry, s, given).get(key, 0)
+            owed = len(owed_list(s, person, n_given))
+            have = need if owed else count_of(s, person) % need
+            slots = [{"name": tier_label(tiers, s["pieces"][0]), "tier": str(s["pieces"][0]), "got": i < have} for i in range(need)]
+            has_reward = n_given > 0 or rewarded(registry, s, key, given)
+            if not (have or has_reward or (this_tier and str(this_tier).upper() in [str(p).upper() for p in s["pieces"] + [s["reward"]]])):
+                continue
+            out.append({"name": s["name"], "got": have, "total": need, "slots": slots,
+                        "reward": {"name": tier_label(tiers, s["reward"]), "tier": str(s["reward"]), "got": has_reward},
+                        "complete": bool(owed), "pending": bool(owed), "repeat": True, "earned": n_given})
+            continue
         has_reward = rewarded(registry, s, key, given)
         involved = any(sl["got"] for sl in slots) or has_reward or (
             this_tier and str(this_tier).upper() in [str(p).upper() for p in s["pieces"] + [s["reward"]]])

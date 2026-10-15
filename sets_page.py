@@ -177,11 +177,18 @@ __THEME__</style></head>
     }
     var inc = el('input', { type: 'checkbox', 'data-role': 'existing' }); inc.checked = !!s.include_existing;
     inc.addEventListener('change', function () { s.include_existing = inc.checked; touch(); });
+    var rep = null;
+    if (picked === 1) {
+      var rc = el('input', { type: 'checkbox', 'data-role': 'repeat' }); rc.checked = !!s.repeat;
+      rc.addEventListener('change', function () { s.repeat = rc.checked; touch(); render(); });
+      rep = el('label', { class: 'opt' }, [rc, el('span', { text: 'Keep going: give the reward again every time they collect ' + (s.need ? s.need : 'this many') + ' more (a stamp card that never ends).' + (s.repeat ? ' Anyone who already filled up once since this set began gets a reward for each round they finished and were not yet rewarded' + (s.include_existing ? '; rounds from before the set began count as just one reward.' : '.') : '') })]);
+    } else if (s.repeat) { s.repeat = false; }
     var box = el('div', { class: 'set' }, [head, nr,
-      el('label', { class: 'l', text: 'Card(s) to collect' }), grid, need,
+      el('label', { class: 'l', text: 'Card(s) to collect' }), grid, need, rep,
       el('label', { class: 'opt' }, [inc, el('span', { text: 'Also give the reward to people who already hold every piece' + (s.waiting ? ' (' + s.waiting + ' right now)' : '') + '. Left unticked, only people who finish the set from now on get it.' })])]);
     if (s.id) {
       var bits = [(s.collecting || 0) + ' collecting', (s.rewarded || 0) + ' rewarded'];
+      if (s.repeat && s.given) bits.push(s.given + ' reward' + (s.given === 1 ? '' : 's') + ' given in total');
       if (s.waiting && !s.include_existing) bits.push(s.waiting + ' already complete (not rewarded)');
       box.appendChild(el('div', { class: 'stat', text: bits.join(' · ') }));
     }
@@ -195,7 +202,7 @@ __THEME__</style></head>
     renderNeed();
   }
   document.getElementById('add').addEventListener('click', function () {
-    sets.push({ name: '', pieces: [], need: '', reward: '', include_existing: false }); touch(); render();
+    sets.push({ name: '', pieces: [], need: '', reward: '', repeat: false, include_existing: false }); touch(); render();
   });
   [['tpl-all', 'Every card in a list', ''], ['tpl-same', 'The same card, 5 times', 5], ['tpl-one', 'Get one card, get a reward', 1]].forEach(function (t) {
     document.getElementById(t[0]).addEventListener('click', function () {
@@ -213,7 +220,7 @@ __THEME__</style></head>
     saveBtn.disabled = true; say('Saving…', true);
     fetch('/admin/sets', { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ sets: sets.map(function (s) { return { id: s.id, name: s.name, pieces: s.pieces, need: parseInt(s.need, 10) || 0, reward: s.reward,
-        new_reward: (!s.reward && s.new_reward) ? s.new_reward : undefined, include_existing: !!s.include_existing }; }) }) })
+        new_reward: (!s.reward && s.new_reward) ? s.new_reward : undefined, include_existing: !!s.include_existing, repeat: !!s.repeat && (s.pieces || []).length === 1 }; }) }) })
       .then(function (r) { return r.json().then(function (j) { return { status: r.status, body: j }; }); })
       .then(function (res) {
         saveBtn.disabled = false;

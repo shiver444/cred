@@ -328,11 +328,17 @@ cards to collect (up to twelve) and press **Save sets**.
   or from you under People. To let people sign up for it again on their own, set that card's one-per-email rule
   to unlimited under Cards, Advanced. Typing 1 means "get this card, get that reward".
 
+**A stamp card that never ends:** on a one-card set, tick **Keep going: give the reward again every time they collect N more**.
+Every full round of N copies earns another reward (stamp 5 times, free coffee; stamp 5 more, another free coffee).
+It works even when the reward card is set to one per email. It stays off unless you tick it, so existing sets behave as before.
+Turning it on later rewards the rounds people finished since the set began and were not rewarded yet; rounds from before the set
+began count as just one reward, and only if you tick the "already hold" box. The member's Sets tab shows "Earned 2×, 3 more for the next one".
+
 **A discount as the reward:** in the reward list choose **+ Create a new voucher as the reward**, type what it is
 ("15% off your next order"), the small print and how many days it stays valid. Saving makes a voucher card (only you
 can give it out) and uses it as the reward. People show it and you press **Use** at the check-in page, as with any voucher.
 The three buttons under the list ("Every card in a list", "The same card, 5 times", "Get one card, get a reward")
-start a set with those choices filled in. A reward is given once per person per set; it does not repeat every 5th time.
+start a set with those choices filled in. Unless you tick **Keep going** (one-card sets), a reward is given once per person per set.
 
 - The reward is usually a card set to **Only me** (on the card press **Advanced**, then **Who can get this card?**), so nobody can simply sign up for it.
   Any card can be the reward, but it can't also be one of the pieces.

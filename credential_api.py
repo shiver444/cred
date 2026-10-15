@@ -4783,15 +4783,28 @@ def _given_load() -> dict:
         return {}
 
 
-def _given_add(set_id: str, key: str):
+def _given_add(set_id: str, key: str, repeat: bool = False):
+    """Remember that `key` was given this set's reward. A repeating set also keeps the time of every
+    reward ("repeat:<set id>"), so it can tell how many rewards a person has already had."""
     if not set_id or not key:
         return
     with _sets_lock:
         d = _given_load()
         keys = d.setdefault(set_id, [])
-        if key in keys:
+        changed = False
+        if key not in keys:
+            keys.append(key)
+            changed = True
+        if repeat:
+            rec = d.get(card_sets.REPEAT_PREFIX + set_id)
+            if not isinstance(rec, dict):
+                rec = d[card_sets.REPEAT_PREFIX + set_id] = {}
+            times = rec.setdefault(key, [])
+            if isinstance(times, list):
+                times.append(datetime.now(timezone.utc).isoformat())
+                changed = True
+        if not changed:
             return
-        keys.append(key)
         tmp = _SETS_GIVEN_FILE.with_suffix(".tmp")
         tmp.write_text(json.dumps(d), encoding="utf-8")
         os.replace(tmp, _SETS_GIVEN_FILE)
@@ -4868,17 +4881,24 @@ def _run_sets_pass(limit, focus_keys) -> int:
         if i >= n_focus and limit is not None and (issued >= limit or attempts >= limit * 3):
             left = len(queue) + len(rest) - i
             break
-        if card_sets.rewarded(member_registry.list_all(), s, pkey, _given_load()):
+        rep = card_sets.is_repeat(s)
+        if rep:
+            if card_sets.owed_now(member_registry.list_all(), s, pkey, _given_load()) <= 0:
+                continue                       # already given every reward they have earned
+        elif card_sets.rewarded(member_registry.list_all(), s, pkey, _given_load()):
             continue
         tier_cfg = get_tier(cfg, s["reward"])
         if not tier_cfg:
             continue
+        # a repeating set must be allowed to give a second (third...) reward even when the reward card
+        # is normally "one per email"
+        gate_cfg = dict(tier_cfg, per_email="unlimited") if rep else tier_cfg
         attempts += 1
         try:
             result = _issue_and_fulfill(
                 person["name"] or "Member", person["email"], tier_cfg["name"], _reward_days(tier_cfg), tier_cfg.get("sections", []), cfg=cfg,
                 payment_meta={"comped": True, "set": s["id"]},
-                check=lambda: _signup_check(cfg, tier_cfg, tier_cfg["name"], person["email"], public=False),
+                check=lambda: _signup_check(cfg, gate_cfg, tier_cfg["name"], person["email"], public=False),
                 send_email=bool(ready and not note),
                 extra={"from_set": {"id": s["id"], "name": s["name"], **({"notified": False} if note else {})}})
         except SignupBlocked as b:
@@ -4890,7 +4910,7 @@ def _run_sets_pass(limit, focus_keys) -> int:
             _sets_blocked[(s["id"], pkey)] = time.time()
             continue
         try:
-            _given_add(s["id"], pkey)
+            _given_add(s["id"], pkey, repeat=rep)
         except Exception as e:
             print(f"⚠ Could not write the sets record: {e}")
         issued += 1
@@ -4962,7 +4982,7 @@ def _sets_state() -> dict:
     for s in card_sets.of_config(raw):
         c = card_sets.counts(s, reg, given, ppl=ppl)
         out.append({**s, "problems": card_sets.problems(s, tiers), "waiting": card_sets.waiting_now(s, tiers, reg, given, ppl=ppl),
-                    "rewarded": c["rewarded"], "collecting": c["collecting"]})
+                    "rewarded": c["rewarded"], "collecting": c["collecting"], "given": c.get("given", 0)})
     return {"sets": out,
             "cards": [{"name": t.get("name", ""), "label": t.get("label") or t.get("name", ""), "kind": card_kinds.clean_kind(t.get("kind")),
                        "hidden": bool(t.get("hidden"))} for t in tiers if isinstance(t, dict)],

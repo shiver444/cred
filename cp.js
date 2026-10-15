@@ -1683,6 +1683,12 @@
         return href ? `<a class="ca-slot ca-got ca-link" href="${esc(href)}">${inner}</a>`
           : `<div class="ca-slot ${sl.got ? 'ca-got' : 'ca-miss'}">${inner}</div>`
       }
+      // A repeating set (a stamp card that never ends): how many rewards so far, and how far the next round is.
+      const earnedLine = (st, left) => {
+        const n = Math.max(0, Math.floor(+st.earned || 0))
+        const next = st.complete ? '' : ` \u00b7 ${left} more for the next one`
+        return `Earned ${n}\u00d7${next}`
+      }
       const one = st => {
         const total = Math.max(1, +st.total || 0), got = Math.max(0, +st.got || 0), left = Math.max(0, total - got)
         const rw = st.reward || {}
@@ -1696,6 +1702,7 @@
               <div class="ca-boss-name">${esc(rw.name)}</div>
               <div class="ca-boss-sub">Yours for completing ${esc(st.name)}</div>
               ${rHref ? '' : '<div class="ca-boss-sub">Open it from the email we sent you (check your spam folder).</div>'}
+              ${st.repeat ? `<div class="ca-boss-sub">${earnedLine(st, left)}</div>` : ''}
               ${rHref ? `<a class="ca-boss-btn" href="${esc(rHref)}">Open your ${esc(rw.name)} \u2192</a>` : ''}
             </div>`
         } else if (st.complete) {
