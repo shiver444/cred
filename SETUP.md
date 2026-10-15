@@ -381,7 +381,8 @@ you knowing their email in advance. Open **Cards > Codes**.
 - **Make codes:** name the batch ("Bottle labels spring 2027"), choose the card, how many (1 to 1000 per batch, 20000
   in total) and press **Make codes**. Codes look like `K7M2P-Q9X4T` (no look-alike letters, so no 0/O or 1/I/L mix-ups).
 - **Give them out:** each batch has **Show codes** (every code and its link on screen, with **Copy all links** and
-  **Copy all codes** buttons to paste into your own emails), **Download (text file)** (opens in Notepad: one code and
+  **Copy all codes** buttons to paste into your own emails, and a **Refresh** button that shows who has claimed a code
+  since you opened the page), **Download (text file)** (opens in Notepad: one code and
   link per line), **Download (spreadsheet file)** (CSV, for Excel or Google Sheets) and **Printable sheet** (one QR
   tile per unused code, ready to print and cut). A code's QR opens your claim page with the code
   already filled in. The plain address people can type a code into is shown at the top of the screen (`/claim` on

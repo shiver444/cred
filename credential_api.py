@@ -5288,7 +5288,8 @@ def admin_codes_list():
     data, b = _batch_or_none(request.args.get("batch"))
     if not b:
         return err("That batch doesn't exist.", 404)
-    return ok({"codes": claim_codes.codes_of(data, b["id"])})
+    # the batch summaries too, so the Refresh button can update the "3 of 10 claimed" lines
+    return ok({"codes": claim_codes.codes_of(data, b["id"]), "batches": claim_codes.summary(data)})
 
 
 @app.route("/admin/codes/csv", methods=["GET"])

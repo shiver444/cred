@@ -278,14 +278,23 @@ __NAV__
         var link = function (r) { return (S.claim_url || '') + '?code=' + r.code; };
         var fresh = j.codes.filter(function (r) { return r.state === 'new'; });
         var bar = el('div', { class: 'acts' }, []);
+        // Refresh: people claim codes while this page is open. This asks the server again and redraws the counts and the list.
+        var rf = el('button', { type: 'button', class: 'small', 'data-act': 'refresh', text: 'Refresh' });
+        rf.addEventListener('click', function () {
+          rf.disabled = true; rf.textContent = 'Refreshing…';
+          fetch('/admin/codes/list?batch=' + encodeURIComponent(b.id), { credentials: 'same-origin' }).then(function (r) { return r.json(); }).then(function (j2) {
+            if (!j2 || !j2.success || !j2.batches) { location.reload(); return; }
+            batches = j2.batches; renderBatches();
+          }).catch(function () { rf.disabled = false; rf.textContent = 'Could not reach the server'; setTimeout(function () { rf.textContent = 'Refresh'; }, 2000); });
+        });
         if (fresh.length) {
           var b1 = el('button', { type: 'button', class: 'small', text: 'Copy all links' }), b2 = el('button', { type: 'button', class: 'small', text: 'Copy all codes' });
           b1.addEventListener('click', function () { copyText(fresh.map(link).join('\n'), b1, 'Copy all links'); });
           b2.addEventListener('click', function () { copyText(fresh.map(function (r) { return r.shown; }).join('\n'), b2, 'Copy all codes'); });
           bar.appendChild(b1); bar.appendChild(b2);
           listBox.appendChild(el('div', { class: 'hint', text: 'These copy the ' + fresh.length + ' unused code' + (fresh.length === 1 ? '' : 's') + ', one per line. Paste them into an email, a message or a document.' }));
-          listBox.appendChild(bar);
         }
+        bar.appendChild(rf); listBox.appendChild(bar);
         var t = el('table', { class: 'codes' }, [el('tr', {}, [el('th', { text: 'Code' }), el('th', { text: 'Link' }), el('th', { text: 'No.' }), el('th', { text: 'Status' }), el('th', { text: 'Claimed by' })])]);
         j.codes.forEach(function (r) {
           t.appendChild(el('tr', {}, [el('td', { class: 'mono', text: r.shown }), el('td', { class: 'mono', text: link(r) }), el('td', { text: r.number ? String(r.number) : '' }),
