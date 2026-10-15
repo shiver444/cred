@@ -952,9 +952,7 @@ looks:
   change something, a **Save changes** bar appears at the bottom of the screen,
   so you never have to scroll down to find the button; after saving you land
   back where you were.
-- **Studio** is also one long page, with a small contents list beside it on a
-  wide screen to jump between sections. It has the same Save changes bar.
-- **Spaceship lite**, **Daylight** and **Midnight** work like an app. On a computer there is a
+- **Spaceship lite**, **Daylight**, **Studio** and **Midnight** work like an app. On a computer there is a
   menu down the left with six places: **Home**, **People** (Members and
   Check-in), **Cards**, **Content** (Content and Bulletin board), **Design** (Branding,
   Card looks, Widget look, Dashboard style) and **Settings** (Payment, Emails,
@@ -1114,7 +1112,11 @@ What you can set in a look:
   some, a lot) keeps the text readable on top of a busy picture. Unlike the
   other fields, **a background picture is not inherited**: a look only shows
   one if it has its own (or it is the Default look itself). The picture is
-  built into each card file, so keep pictures modest.
+  built into each card file, so keep pictures modest. A big picture is
+  shrunk on your own device before it is sent, so even a 7 MB PNG uploads
+  quickly (also from a phone); the server still refuses anything over 10 MB.
+  The small card previews are remembered by your browser, so coming back to
+  Card looks does not draw every card again.
 - **QR code:** *Solid* (the white square, easiest to scan), *Blended* (the code
   is drawn see-through so it melts into a background picture; it sits on a very
   faint dark patch and was tested to still scan, but a solid code is always the

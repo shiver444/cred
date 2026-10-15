@@ -129,11 +129,11 @@ _JS = r"""
   function $(id) { return document.getElementById(id); }
   function el(tag, cls, text) { var n = document.createElement(tag); if (cls) n.className = cls; if (text != null) n.textContent = text; return n; }
   var grid = $('looks-grid'), listView = $('looks-view'), editor = $('look-editor'), msg = $('looks-msg'), emsg = $('lk-msg');
-  var cur = null, logoCleared = false, bgCleared = false, timer = null, seq = 0;
+  var cur = null, logoCleared = false, bgCleared = false, timer = null, seq = 0, bgSmall = null, shrinking = false;
 
   function say(text, bad) { msg.textContent = text || ''; msg.style.color = bad ? 'var(--bad)' : 'var(--muted)'; }
   function esay(text, bad) { emsg.textContent = text || ''; emsg.style.color = bad ? 'var(--bad)' : 'var(--muted)'; }
-  function fail(r, j) { return (j && j.error) || (r.status === 413 ? 'That picture is too big.' : 'Something went wrong. Reload the page and try again.'); }
+  function fail(r, j) { return (j && j.error) || (r.status === 413 ? 'That picture is too big (over 10 MB). Use a smaller one.' : 'Something went wrong. Reload the page and try again.'); }
   function post(url, fd) {
     return fetch(url, { method: 'POST', body: fd, credentials: 'same-origin' })
       .then(function (r) { return r.json().then(function (j) { return { r: r, j: j }; }, function () { return { r: r, j: null }; }); });
@@ -318,8 +318,27 @@ _JS = r"""
     fd.append('preview_kind', $('lk-prev-kind').value); fd.append('barcode', fBar.value); fd.append('qr_style', fQr.value); fd.append('layout', fLayout.value); fd.append('bg_dim', fDim.value);
     fd.append('logo_clear', logoCleared ? '1' : '0'); fd.append('bg_clear', bgCleared ? '1' : '0');
     if (fLogo.files[0]) fd.append('logo', fLogo.files[0]);
-    if (fBg.files[0]) fd.append('bg', fBg.files[0]);
+    if (fBg.files[0]) fd.append('bg', bgSmall || fBg.files[0]);
     return fd;
+  }
+  // A big picture is shrunk here first (the server shrinks it to the same size anyway), so the
+  // preview does not have to send several MB again at every change - that is slow on a phone.
+  function shrink(file, done) {
+    if (!file || file.size < 400 * 1024 || !/^image\/(png|jpeg|webp)$/.test(file.type || '') || !window.URL || !URL.createObjectURL) { done(null); return; }
+    var url = URL.createObjectURL(file), img = new Image();
+    img.onload = function () {
+      try {
+        var w = img.naturalWidth, h = img.naturalHeight, k = Math.min(1, 1000 / Math.max(w, h));
+        var c = document.createElement('canvas'); c.width = Math.max(1, Math.round(w * k)); c.height = Math.max(1, Math.round(h * k));
+        var g = c.getContext('2d'); g.fillStyle = '#000'; g.fillRect(0, 0, c.width, c.height); g.drawImage(img, 0, 0, c.width, c.height);
+        c.toBlob(function (b) {
+          URL.revokeObjectURL(url);
+          done(b && b.size < file.size ? new File([b], 'background.jpg', { type: 'image/jpeg' }) : null);
+        }, 'image/jpeg', 0.9);
+      } catch (e) { URL.revokeObjectURL(url); done(null); }
+    };
+    img.onerror = function () { URL.revokeObjectURL(url); done(null); };
+    img.src = url;
   }
   var lastSig = '';
   function sigOf(fd) {
@@ -330,6 +349,7 @@ _JS = r"""
   function preview(retried) {
     // Nothing actually changed (e.g. a field was only clicked out of): leave the preview alone,
     // so a card the person has just turned over stays turned over.
+    if (shrinking) return;     // the picture is still being shrunk; the preview is asked for again when it is ready
     var fdata = formData(), sig = sigOf(fdata);
     if (sig === lastSig && frame.srcdoc) return;
     var mine = ++seq;
@@ -337,6 +357,7 @@ _JS = r"""
       if (mine !== seq) return;
       lastSig = '';     // a failed preview is never "up to date": the next change (or retry) asks again
       if (!retried) { setTimeout(function () { if (mine === seq) preview(true); }, 1500); return; }
+      if (why === 413) { frame.srcdoc = '<p style="font-family:sans-serif;color:#b00">That picture is too big (over 10 MB). Use a smaller one.</p>'; return; }
       frame.srcdoc = '<p style="font-family:sans-serif;color:#b00">The preview could not be drawn' + (why ? ' (' + String(why).replace(/[<>&]/g, '') + ')' : '') + '. Change any setting, or press the Edit button again, to try once more.</p>';
     }
     fetch('/admin/looks/preview', { method: 'POST', body: fdata, credentials: 'same-origin' })
@@ -353,12 +374,18 @@ _JS = r"""
   $('lk-prev-kind').addEventListener('change', later);
   fSame.addEventListener('change', states);
   fLogo.addEventListener('change', function () { if (fLogo.files[0]) logoCleared = false; states(); later(); });
-  fBg.addEventListener('change', function () { if (fBg.files[0]) bgCleared = false; states(); later(); });
+  fBg.addEventListener('change', function () {
+    if (fBg.files[0]) bgCleared = false;
+    bgSmall = null; states();
+    var chosen = fBg.files[0]; shrinking = !!chosen;
+    if (!chosen) { later(); return; }
+    shrink(chosen, function (small) { if (fBg.files[0] !== chosen) return; bgSmall = small; shrinking = false; later(); });
+  });
   $('lk-logo-remove').addEventListener('click', function () { fLogo.value = ''; logoCleared = true; states(); later(); });
-  $('lk-bg-remove').addEventListener('click', function () { fBg.value = ''; bgCleared = true; states(); later(); });
+  $('lk-bg-remove').addEventListener('click', function () { fBg.value = ''; bgSmall = null; shrinking = false; bgCleared = true; states(); later(); });
 
   function openEditor(l) {
-    cur = l || null; logoCleared = false; bgCleared = false; fLogo.value = ''; fBg.value = '';
+    cur = l || null; logoCleared = false; bgCleared = false; bgSmall = null; shrinking = false; fLogo.value = ''; fBg.value = '';
     $('look-title').textContent = l ? 'Edit look' : 'New look';
     fName.value = l ? l.name : ''; fTitle.value = l ? l.card_title : ''; fLabel.value = l ? l.card_label : '';
     fStyle.value = l ? l.card_style : ''; fQr.value = l ? l.qr_style : ''; fLayout.value = l ? l.layout : ''; fBar.value = (l && !l.show_barcode) ? 'off' : 'on'; fDim.value = l ? l.bg_dim : 'medium';
@@ -374,6 +401,7 @@ _JS = r"""
 
   $('lk-save').addEventListener('click', function () {
     if (!fName.value.trim()) { esay('Give the look a name.', true); fName.focus(); return; }
+    if (shrinking) { esay('One moment, the picture is still being prepared. Press Save again.', true); return; }
     var btn = $('lk-save'); btn.disabled = true; esay('Saving…');
     post('/admin/looks/save', formData()).then(function (x) {
       btn.disabled = false;

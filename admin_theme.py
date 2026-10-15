@@ -36,7 +36,7 @@ LABELS = {
 #   toc   the same long page, with a small contents list beside it (Studio)
 #   app   screens: a sidebar on a computer, a tab bar and a Settings list on a
 #         phone, one settings screen at a time, a save bar (Daylight, Midnight)
-LAYOUTS = {"spaceship": "long", "spacelite": "app", "studio": "toc", "daylight": "app", "midnight": "app"}
+LAYOUTS = {"spaceship": "long", "spacelite": "app", "studio": "app", "daylight": "app", "midnight": "app"}
 
 # The dashboard's screens, in the order they are listed: (id, title, one line).
 # Each id matches a <section id="sec-<id>"> on the dashboard page.

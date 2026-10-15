@@ -172,6 +172,9 @@ def _limit_request_size():
         request.max_content_length = MAX_RESTORE_BYTES + 1024 * 1024
     elif path.startswith("/admin/dashboard"):
         request.max_content_length = 40 * 1024 * 1024
+    elif path.startswith("/admin/looks/"):
+        # a card look can carry a background picture (up to BG_MAX_UPLOAD_BYTES) and a logo
+        request.max_content_length = logo_utils.BG_MAX_UPLOAD_BYTES + 4 * 1024 * 1024
     else:
         request.max_content_length = 4 * 1024 * 1024
 
@@ -180,7 +183,7 @@ def _too_big(_e):
     if request.path == "/admin/backup/restore":
         return redirect("/admin/dashboard?backup_note=" + _q(f"That backup file is too big for this server to accept (the limit is {MAX_RESTORE_MB} MB).") + "#backup")
     msg = (f"That file is too big (the limit is {MAX_UPLOAD_MB} MB)." if request.path == "/admin/content/upload"
-           else "That picture is too big (over 10 MB). Use a smaller one." if request.path == "/admin/content/preview"
+           else "That picture is too big (over 10 MB). Use a smaller one." if request.path in ("/admin/content/preview", "/admin/looks/save", "/admin/looks/preview")
            else "That request is too large.")
     return jsonify({"success": False, "error": msg}), 413
 
@@ -3670,7 +3673,31 @@ def _dashboard_page() -> str:
         bgClear.dispatchEvent(new Event('input', {{ bubbles: true }}));
         document.getElementById('global-bg-state').textContent = 'removed — takes effect when you save';
       }});
-      bgInput.addEventListener('change', () => {{ if (bgInput.files[0]) {{ bgClear.value = '0'; document.getElementById('global-bg-state').textContent = 'new picture chosen'; }} }});
+      bgInput.addEventListener('change', () => {{
+        const chosen = bgInput.files[0];
+        if (!chosen) return;
+        bgClear.value = '0'; document.getElementById('global-bg-state').textContent = 'new picture chosen';
+        // A big picture is shrunk here before it is sent (the server shrinks it to the same size anyway), so the preview and
+        // the Save do not have to upload several MB over a phone connection.
+        if (chosen.size < 400 * 1024 || !/^image[/](png|jpeg|webp)$/.test(chosen.type || '') || !window.DataTransfer || !window.URL || !URL.createObjectURL) return;
+        const url = URL.createObjectURL(chosen), img = new Image();
+        img.onload = () => {{
+          try {{
+            const k = Math.min(1, 1000 / Math.max(img.naturalWidth, img.naturalHeight));
+            const c = document.createElement('canvas'); c.width = Math.max(1, Math.round(img.naturalWidth * k)); c.height = Math.max(1, Math.round(img.naturalHeight * k));
+            const g = c.getContext('2d'); g.fillStyle = '#000'; g.fillRect(0, 0, c.width, c.height); g.drawImage(img, 0, 0, c.width, c.height);
+            c.toBlob(b => {{
+              URL.revokeObjectURL(url);
+              try {{
+                if (!b || b.size >= chosen.size || bgInput.files[0] !== chosen) return;
+                const dt = new DataTransfer(); dt.items.add(new File([b], 'background.jpg', {{ type: 'image/jpeg' }})); bgInput.files = dt.files;
+              }} catch (e) {{}}
+            }}, 'image/jpeg', 0.9);
+          }} catch (e) {{ URL.revokeObjectURL(url); }}
+        }};
+        img.onerror = () => URL.revokeObjectURL(url);
+        img.src = url;
+      }});
       document.getElementById('remove-global-logo').addEventListener('click', () => {{
         clear.value = '1';
         fileInput.value = '';
@@ -4145,10 +4172,21 @@ def admin_looks_preview_saved(look_id):
         if not look:
             return err("Not found", 404)
         design = resolve_look(cfg, look)
+    tier_name = (tiers[0].get("name") if tiers else "") or "MEMBER"
+    # The same card is asked for again and again (every visit to the Card looks screen), so it gets a fingerprint:
+    # if the browser already has this exact card it is told "unchanged" and nothing is drawn or sent again.
+    # Any change to the look, the tiers or the branding changes the fingerprint.
+    etag = '"%s"' % hashlib.sha1(json.dumps([design, tier_name, cfg.get("creator_name"), cfg.get("members_page"), datetime.now(timezone.utc).strftime("%Y-%m-%d"), "v1"],
+                                            sort_keys=True, default=str).encode("utf-8")).hexdigest()
+    if request.headers.get("If-None-Match") == etag:
+        resp = make_response("", 304); resp.headers["ETag"] = etag; resp.headers["Cache-Control"] = "private, no-cache"
+        return resp
     try:
-        return _render_preview_card(cfg, design, tier_name=(tiers[0].get("name") if tiers else "") or "MEMBER")
+        html = _render_preview_card(cfg, design, tier_name=tier_name)
     except Exception as e:
         return err(f"Preview failed: {str(e)}", 500)
+    resp = make_response(html); resp.headers["Content-Type"] = "text/html; charset=utf-8"; resp.headers["ETag"] = etag; resp.headers["Cache-Control"] = "private, no-cache"
+    return resp
 
 
 # ── GET/POST /admin/content ──
