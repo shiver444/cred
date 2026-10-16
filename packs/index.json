@@ -120,6 +120,42 @@
     "fg": "#222222",
     "accent": "#2459d6"
    }
+  },
+  {
+   "id": "slate-dusk",
+   "kind": "admin_style",
+   "name": "Slate dusk",
+   "description": "Dark blue-grey dashboard with a serif heading. Easy on the eyes at night.",
+   "file": "admin-styles/slate-dusk.json",
+   "swatch": {
+    "bg": "#1a2430",
+    "fg": "#e8edf2",
+    "accent": "#101820"
+   }
+  },
+  {
+   "id": "paper-sage",
+   "kind": "admin_style",
+   "name": "Paper sage",
+   "description": "Warm paper with a soft green page behind it. Sharp corners, serif headings.",
+   "file": "admin-styles/paper-sage.json",
+   "swatch": {
+    "bg": "#f6f8f1",
+    "fg": "#25301f",
+    "accent": "#dde5d5"
+   }
+  },
+  {
+   "id": "ocean-light",
+   "kind": "admin_style",
+   "name": "Ocean light",
+   "description": "Bright white panels on a pale blue page, with rounded corners.",
+   "file": "admin-styles/ocean-light.json",
+   "swatch": {
+    "bg": "#ffffff",
+    "fg": "#12303f",
+    "accent": "#d9eaf4"
+   }
   }
  ]
 }

@@ -1,0 +1,2 @@
+{"format": 1, "id": "paper-sage", "kind": "admin_style",
+ "style": {"base": "studio", "page": "#dde5d5", "bg": "#f6f8f1", "fg": "#25301f", "font": "sans", "head": "serif", "radius": "sharp"}}

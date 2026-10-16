@@ -416,6 +416,7 @@ def load_config() -> dict:
     card or email, or do it through /admin/dashboard. See SETUP.md.
     """
     cfg = _read_config_file()
+    admin_theme.set_custom(cfg.get("custom_styles"))        # styles added from More looks, before admin_style is checked
     return {
         "creator_name":  cfg.get("creator_name", "Your Creator Name"),
         "card_title":    cfg.get("card_title", "YOUR BRAND HERE"),
@@ -1285,7 +1286,7 @@ def admin_reject_payment_request(request_id):
 # site has a cap, so it can't be used to flood someone's inbox.
 LINK_ASKED_MSG = "If that address has a card, we've just emailed the link. Check your inbox (and spam)."
 
-def _resend_link_job(cfg: dict, email: str) -> None:
+def _resend_link_job(cfg: dict, email: str, all_cards: bool = False) -> None:
     try:
         from member_registry import get_by_email
         now = datetime.now(timezone.utc)
@@ -1303,7 +1304,7 @@ def _resend_link_job(cfg: dict, email: str) -> None:
             cards.append((e.get("tier", ""), e["credential_id"], e.get("bundle_hash", "")))
         if cards:
             first = get_by_email(email)[0]
-            email_sender.send_lostlink_email(first.get("holder_name", ""), email, cards)
+            email_sender.send_lostlink_email(first.get("holder_name", ""), email, cards, all_cards=all_cards)
     except Exception as ex:
         print(f"❌ Link email failed: {ex}")
 
@@ -3470,8 +3471,8 @@ def _dashboard_page() -> str:
     emails_section = emails_page.section_html(cfg, email_sender.is_configured(), _email_service_status())
 
     style_cards = ""
-    for k in admin_theme.STYLES:
-        nm, desc = admin_theme.LABELS[k]
+    for k in admin_theme.all_styles():
+        nm, desc = admin_theme.label(k)
         sw = admin_theme.swatch(k)
         chips = "".join(f'<i style="background:{c};"></i>' for c in sw)
         style_cards += (f'<label class="style-card{" on" if cfg["admin_style"] == k else ""}">'
@@ -4980,7 +4981,9 @@ def _member_extras(entry: dict) -> dict:
                              "id": e["credential_id"], "h": str(e.get("bundle_hash") or "")[:32]})
         if together:
             out["together"] = together[:10]
-    if email_sender.is_configured() and email_templates.clean_on(load_config().get("lostlink_on"), True) == "1":
+    # The button is offered only to a card that came in a bundle: nothing is ever worked out from the email address
+    # here, so a stranger who signed up with someone's address learns nothing about that person's other cards.
+    if out.get("together") and email_sender.is_configured() and email_templates.clean_on(load_config().get("lostlink_on"), True) == "1":
         out["cards_email"] = True
     return out
 
@@ -5002,7 +5005,7 @@ def member_cards_email():
     on = email_sender.is_configured() and email_templates.clean_on(cfg.get("lostlink_on"), True) == "1"
     one_ok, _w = _rate.hit(("cards-email", entry["credential_id"]), 3, 3600)
     if on and one_ok:
-        _bg(_resend_link_job, cfg, entry["holder_email"])
+        _bg(_resend_link_job, cfg, entry["holder_email"], True)
     return ok({"message": "We've emailed you all your cards. Check your inbox (and spam)."})
 
 
@@ -5564,13 +5567,17 @@ _packs_lock = threading.Lock()
 
 def _packs_state(force: bool = False) -> dict:
     entries, source, note = packs.listing(force)
+    admin_theme.set_custom(_read_config_file().get("custom_styles"))
     raw = _read_config_file()
     inst = raw.get("packs_installed") if isinstance(raw.get("packs_installed"), dict) else {}
     looks = card_looks.clean_looks(raw.get("card_looks"))
     out = []
     for e in entries:
         rec = inst.get(e["id"]) if isinstance(inst.get(e["id"]), dict) else None
-        added = bool(rec) and (e["kind"] != "card_look" or card_looks.get(looks, rec.get("look_id")) is not None)
+        if e["kind"] == "admin_style":
+            added = ("pack-" + e["id"]) in admin_theme.CUSTOM
+        else:
+            added = bool(rec) and (e["kind"] != "card_look" or card_looks.get(looks, rec.get("look_id")) is not None)
         out.append({"id": e["id"], "kind": e["kind"], "name": e["name"], "description": e["description"],
                     "swatch": e["swatch"], "added": added})
     return {"packs": out, "source": source, "note": note}
@@ -5596,6 +5603,30 @@ def admin_packs_list():
     if not check_admin(request):
         return err("Unauthorized", 401)
     return ok({"state": _packs_state(force=request.args.get("refresh") == "1")})
+
+@app.route("/admin/packs/remove", methods=["POST"])
+def admin_packs_remove():
+    """Take an added dashboard style away again (so a new one can be added). If it was the style in use, the
+    dashboard goes back to Daylight."""
+    if not check_admin(request):
+        return err("Unauthorized", 401)
+    d = request.get_json(silent=True)
+    pid = str((d if isinstance(d, dict) else {}).get("id") or "")
+    with _packs_lock:
+        raw = _read_config_file()
+        styles = raw.get("custom_styles") if isinstance(raw.get("custom_styles"), list) else []
+        keep = [x for x in styles if not (isinstance(x, dict) and x.get("id") == "pack-" + pid)]
+        if len(keep) == len(styles):
+            return err("That style is not added.", 404)
+        upd = {"custom_styles": keep}
+        inst = dict(raw.get("packs_installed")) if isinstance(raw.get("packs_installed"), dict) else {}
+        inst.pop(pid, None)
+        upd["packs_installed"] = inst
+        if str(raw.get("admin_style") or "") == "pack-" + pid:
+            upd["admin_style"] = admin_theme.NEW_DEPLOYMENT_STYLE
+        save_config(upd)
+        admin_theme.set_custom(keep)
+    return ok({"message": "Removed.", "state": _packs_state()})
 
 @app.route("/admin/packs/add", methods=["POST"])
 def admin_packs_add():
@@ -5628,6 +5659,17 @@ def admin_packs_add():
             inst[pid] = {"look_id": look["id"], "at": stamp}
             save_config({"card_looks": looks, "packs_installed": inst})
             msg = f"Added \u201c{look['name']}\u201d. Find it under Design > Card looks."
+        elif entry["kind"] == "admin_style":
+            style = packs.admin_style_from({**pack, "name": entry["name"], "description": entry["description"]})
+            styles = [x for x in (raw.get("custom_styles") if isinstance(raw.get("custom_styles"), list) else [])
+                      if isinstance(x, dict) and x.get("id") != style["id"]]
+            if len(styles) >= admin_theme.MAX_CUSTOM:
+                return err(f"You can have up to {admin_theme.MAX_CUSTOM} added dashboard styles. Remove one you don't use first.", 409)
+            styles.append(style)
+            inst[pid] = {"at": stamp}
+            save_config({"custom_styles": styles, "packs_installed": inst})
+            admin_theme.set_custom(styles)
+            msg = f"Added \u201c{style['name']}\u201d. Pick it under Design > Dashboard style."
         else:
             try:
                 settings = packs.email_settings_from(pack, raw)

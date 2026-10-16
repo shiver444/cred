@@ -820,12 +820,16 @@ def send_payment_alert(to_email, who_name, who_email, tier, price_text="", refer
     return ok, detail
 
 
-def build_lostlink_email(to_name, cards, overrides: dict = None, link_base=None) -> dict:
+def build_lostlink_email(to_name, cards, overrides: dict = None, link_base=None, all_cards: bool = False) -> dict:
     """The "here's your link again" email. `cards` is a list of
-    (tier, credential_id, bundle_hash); with several, each gets its own line."""
+    (tier, credential_id, bundle_hash); with several, each gets its own line.
+    `all_cards` is the "Email me all my cards" button on a member's page: same layout, its own plain wording."""
     _refresh_branding()
     subj_t, text_t = _tpl("lostlink", overrides, email_templates.DEFAULT_LOSTLINK_SUBJECT,
                           email_templates.DEFAULT_LOSTLINK_TEXT)
+    if all_cards:
+        subj_t = "Your cards"
+        text_t = "{name}, here are all your cards from {brand}. Use the buttons to open any of them."
     values = {"name": to_name, "creator": CREATOR_NAME, "brand": CARD_TITLE}
     intro = _fill(text_t, values)
     cards = list(cards or [])[:5]
@@ -833,7 +837,7 @@ def build_lostlink_email(to_name, cards, overrides: dict = None, link_base=None)
     first = links[0][1] if links else ""
     blocks = [(t, l) for t, l in links] if len(links) > 1 else None
     rows = [("MEMBER", to_name.upper())] + ([("CARD", links[0][0])] if len(links) == 1 else [])
-    html_body = _shell("Your access link", intro, rows, first, "◈ Open member area", blocks=blocks,
+    html_body = _shell("Your cards" if all_cards else "Your access link", intro, rows, first, "◈ Open member area", blocks=blocks,
                        footer_note="You get this because someone asked for the link to be sent to this address.")
     plain = (f"{CREATOR_NAME.upper()} — {CARD_TITLE.upper()}\n\n{intro}\n\n"
              + "".join(f"{t}: {l}\n" for t, l in links) + f"\n{CARD_TITLE}\n")
@@ -978,10 +982,10 @@ def build_ended_email(to_name, tier, overrides: dict = None) -> dict:
             "text": _plain("Ended", intro, f"\nCARD: {tier}\n", ""), "link": ""}
 
 
-def send_lostlink_email(to_name, to_email, cards) -> tuple:
+def send_lostlink_email(to_name, to_email, cards, all_cards: bool = False) -> tuple:
     if not is_configured():
         return False, "Email isn't set up on this server."
-    msg = build_lostlink_email(to_name, cards)
+    msg = build_lostlink_email(to_name, cards, all_cards=all_cards)
     ok, detail = _send_simple(to_name, to_email, msg)
     print(f"{'✔ Link email sent to' if ok else '❌ Link email failed for'} {to_email}" + ("" if ok else f": {detail}"))
     return ok, detail

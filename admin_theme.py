@@ -19,6 +19,8 @@ The creator's accent color is theirs and is kept in every style; for text and
 outlines it is nudged just enough to stay readable on the style's background.
 """
 
+import re
+
 STYLES = ("spaceship", "spacelite", "daylight", "studio", "midnight")
 DEFAULT_STYLE = "spaceship"      # a deployment that never chose one keeps today's look
 NEW_DEPLOYMENT_STYLE = "daylight"  # what the template's own config.json starts with
@@ -108,7 +110,7 @@ def nav_html(page, tickets=False):
 
 
 def layout(style):
-    return LAYOUTS[clean_style(style)]
+    return LAYOUTS[_base_of(clean_style(style))]
 
 
 def body_attrs(style, page, brand="", tickets=False):
@@ -156,7 +158,117 @@ _PALETTES["spacelite"] = dict(_PALETTES["spaceship"])
 
 def clean_style(value, default=DEFAULT_STYLE):
     v = str(value or "").strip().lower()
-    return v if v in STYLES else default
+    return v if (v in STYLES or v in CUSTOM) else default
+
+
+# ── styles added from "More looks" packs ──
+# A custom style is a built-in style's shape (its layout and rules) with its own three colours, and
+# optionally its own fonts and corner size. Everything else (lines, panels, soft text, the green/amber/red
+# notices) is worked out from those three colours so it can never be unreadable. They live in the live
+# settings as "custom_styles"; a bad entry is dropped, never shown. The ids start with "pack-".
+BASES = ("daylight", "studio", "midnight")
+MAX_CUSTOM = 6
+CUSTOM = {}
+_RADII = {"sharp": ("0px", "0px"), "soft": ("8px", "16px"), "round": ("14px", "24px")}
+_CUSTOM_ID = re.compile(r"^pack-[a-z0-9][a-z0-9-]{1,40}$")
+_HEX6 = re.compile(r"^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$")
+
+
+def _norm_hex(v):
+    v = str(v or "").strip()
+    return _hex(_rgb(v)) if _HEX6.match(v) else ""
+
+
+def clean_custom_style(raw):
+    """One stored/pack style -> a safe complete one, or None (bad id, base, colours, or text that can't be read)."""
+    if not isinstance(raw, dict):
+        return None
+    cid = str(raw.get("id") or "")
+    base = raw.get("base")
+    page, bg, fg = _norm_hex(raw.get("page")), _norm_hex(raw.get("bg")), _norm_hex(raw.get("fg"))
+    if not _CUSTOM_ID.match(cid) or base not in BASES or not (page and bg and fg):
+        return None
+    if contrast(_rgb(fg), _rgb(bg)) < 4.5 or contrast(_rgb(fg), _rgb(page)) < 4.5:
+        return None
+    d = _defaults_for_base(base)
+    return {"id": cid, "base": base, "page": page, "bg": bg, "fg": fg,
+            "name": " ".join(str(raw.get("name") or cid).split())[:40],
+            "description": " ".join(str(raw.get("description") or "").split())[:120],
+            "font": raw.get("font") if raw.get("font") in ("sans", "serif", "mono") else d["font"],
+            "head": raw.get("head") if raw.get("head") in ("sans", "serif", "mono") else d["head"],
+            "radius": raw.get("radius") if raw.get("radius") in _RADII else d["radius"]}
+
+
+def _defaults_for_base(base):
+    p = _PALETTES[base]
+    name = lambda f: "serif" if f == _SERIF else ("mono" if f == _MONO else "sans")
+    radius = "sharp" if p["radius"] == "0px" else ("round" if p["radius"] in ("14px",) else "soft")
+    return {"font": name(p["font"]), "head": name(p["head"]), "radius": radius}
+
+
+def set_custom(items):
+    """Load the saved custom styles (called whenever the settings are read)."""
+    fresh = {}
+    for it in (items if isinstance(items, list) else []):
+        c = clean_custom_style(it)
+        if c and c["id"] not in fresh and len(fresh) < MAX_CUSTOM:
+            fresh[c["id"]] = c
+    CUSTOM.clear()
+    CUSTOM.update(fresh)
+
+
+def all_styles():
+    return list(STYLES) + list(CUSTOM)
+
+
+def label(style):
+    if style in CUSTOM:
+        return (CUSTOM[style]["name"], CUSTOM[style]["description"] or "Added from More looks.")
+    return LABELS[style]
+
+
+def _base_of(style):
+    return CUSTOM[style]["base"] if style in CUSTOM else style
+
+
+def _readable(color, bg, minimum, others=()):
+    """`color` nudged toward the text colour opposite the page until it reads on `bg` and on every colour in `others`."""
+    surfaces = [bg] + list(others)
+    target = (0, 0, 0) if _lum(bg) > 0.4 else (255, 255, 255)
+    for i in range(21):
+        c = _mix(color, target, i * 0.05)
+        if all(contrast(c, s) >= minimum for s in surfaces):
+            return c
+    return target
+
+
+def _palette(style):
+    """The full set of colours for a style: a built-in one as written, or one worked out from a custom style's three."""
+    if style not in CUSTOM:
+        return _PALETTES[style]
+    c = CUSTOM[style]
+    base = _PALETTES[c["base"]]
+    bg, fg, page = _rgb(c["bg"]), _rgb(c["fg"]), _rgb(c["page"])
+    dark = _lum(bg) < 0.4
+    notice = _PALETTES["midnight" if dark else "daylight"]
+    panel = _mix(bg, fg, 0.05)
+    surfaces = (page, panel, _mix(bg, fg, 0.10), _mix(bg, fg, 0.14))      # page, panels, striped rows, lines
+    soft = _readable(_mix(fg, bg, 0.30), bg, 4.5, surfaces)
+    muted = _readable(_mix(fg, bg, 0.45), bg, 4.5, surfaces)
+    p = dict(base)
+    p.update(
+        page=c["page"], bg=c["bg"], fg=c["fg"], soft=_hex(soft), muted=_hex(muted),
+        line=_hex(_mix(bg, fg, 0.14)), line2=_hex(_mix(bg, fg, 0.28)), dash=_hex(_mix(bg, fg, 0.10)),
+        panel=_hex(panel), field=_hex(_mix(bg, (0, 0, 0) if dark else (255, 255, 255), 0.35)), hover=_hex(panel),
+        ok=_hex(_readable(_rgb(notice["ok"]), bg, 4.5)), ok_bg=_hex(_mix(bg, _rgb(notice["ok"]), 0.16)),
+        warn=_hex(_readable(_rgb(notice["warn"]), bg, 4.5)), warn_bg=_hex(_mix(bg, _rgb(notice["warn"]), 0.16)),
+        bad=_hex(_readable(_rgb(notice["bad"]), bg, 4.5)), frame=c["bg"],
+        font={"sans": _SANS, "serif": _SERIF, "mono": _MONO}[c["font"]],
+        head={"sans": _SANS, "serif": _SERIF, "mono": _MONO}[c["head"]],
+        radius=_RADII[c["radius"]][0], radius_lg=_RADII[c["radius"]][1],
+        shadow=("0 1px 2px rgba(0,0,0,.4), 0 14px 40px rgba(0,0,0,.45)" if dark else
+                "0 1px 2px rgba(20,30,50,.06), 0 8px 30px rgba(20,30,50,.08)"))
+    return p
 
 
 # ── colour maths: keep the accent readable as text on the chosen background ──
@@ -635,7 +747,8 @@ def css(style, accent, kind="page"):
     """Text for a page's <style> element, to go AFTER the page's own rules.
     kind: "page" (dashboard/content), "wide" (members table) or "login"."""
     style = clean_style(style)
-    p = _PALETTES[style]
+    p = _palette(style)
+    style = _base_of(style)                 # a custom style takes its base's layout and shape rules
     accent = _safe_accent(accent)
     text = accent_text(accent, [p["bg"], p["panel"], p["hover"], p["page"]], p["min_contrast"])
     v = {
@@ -664,5 +777,5 @@ def css(style, accent, kind="page"):
 
 def swatch(style):
     """Four colors that sum up a style, for the little preview on the picker."""
-    p = _PALETTES[clean_style(style)]
+    p = _palette(clean_style(style))
     return (p["page"], p["bg"], p["panel"], p["fg"])

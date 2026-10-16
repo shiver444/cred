@@ -60,6 +60,10 @@ _TEMPLATE = r"""<!DOCTYPE html>
   .pv-mail b { position:absolute; left:14px; top:14px; width:50%; height:8px; border-radius:3px; opacity:.9; }
   .pv-mail u { position:absolute; left:14px; top:30px; width:70%; height:5px; border-radius:3px; opacity:.5; text-decoration:none; box-shadow:0 10px 0 currentColor; }
   .pv-mail s { position:absolute; left:14px; bottom:12px; width:70px; height:18px; border-radius:4px; }
+  .pv-dash { position:relative; height:92px; border-radius:6px; overflow:hidden; border:1px solid rgba(128,128,128,.35); }
+  .pv-dash i { position:absolute; left:12px; right:12px; top:12px; bottom:0; border-radius:6px 6px 0 0; }
+  .pv-dash b { position:absolute; left:24px; top:26px; width:44%; height:8px; border-radius:3px; opacity:.9; }
+  .pv-dash u { position:absolute; left:24px; top:42px; width:62%; height:5px; border-radius:3px; opacity:.5; text-decoration:none; box-shadow:0 10px 0 currentColor; }
   .msg { font-size:12px; min-height:1.2em; margin-top:10px; }
   .msg.ok { color:var(--ok); } .msg.err { color:var(--bad); }
   .empty { color:var(--muted); font-size:13px; padding:12px 0; }
@@ -76,6 +80,9 @@ __NAV__
 <div class="grid" id="g-card"></div>
 <h2>Email looks</h2>
 <div class="grid" id="g-email"></div>
+<h2>Dashboard styles</h2>
+<p class="hint">Colours for this admin dashboard. An added style shows up under <b>Design &gt; Dashboard style</b> next to the built-in ones, and you pick it there. You can keep up to 6; press Remove on one you no longer want. Your guests' cards and emails are not affected.</p>
+<div class="grid" id="g-style"></div>
 <script id="init-state" type="application/json">__STATE__</script>
 <script>
 (function () {
@@ -91,6 +98,10 @@ __NAV__
       box = el('div', 'pv-card'); box.style.background = bg;
       var a = el('i'); a.style.background = ac; var b = el('b'); b.style.background = fg; var u = el('u'); u.style.background = fg; var s = el('s');
       [a, b, u, s].forEach(function (n) { box.appendChild(n); });
+    } else if (p.kind === 'admin_style') {
+      box = el('div', 'pv-dash'); box.style.background = ac; box.style.color = fg;
+      var pn = el('i'); pn.style.background = bg; var b3 = el('b'); b3.style.background = fg; var u3 = el('u'); u3.style.background = fg;
+      [pn, b3, u3].forEach(function (n) { box.appendChild(n); });
     } else {
       box = el('div', 'pv-mail'); box.style.background = bg; box.style.color = fg;
       var b2 = el('b'); b2.style.background = fg; var u2 = el('u'); u2.style.background = fg; var s2 = el('s'); s2.style.background = ac;
@@ -110,8 +121,29 @@ __NAV__
       })
       .catch(function () { btn.disabled = false; say('Could not reach the server.', false); });
   }
+  function remove(p, btn) {
+    if (!window.confirm('Remove \u201c' + p.name + '\u201d? If your dashboard uses it, it goes back to the standard look.')) return;
+    btn.disabled = true; say('');
+    fetch('/admin/packs/remove', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: p.id }) })
+      .then(function (r) { return r.json(); })
+      .then(function (j) {
+        btn.disabled = false;
+        if (!j || !j.success) { say((j && j.error) || 'That did not work.', false); return; }
+        S = j.state; say(j.message, true); draw();
+      })
+      .catch(function () { btn.disabled = false; say('Could not reach the server.', false); });
+  }
   function tile(p) {
     var t = el('div', 'tile'); t.appendChild(preview(p)); t.appendChild(el('div', 'nm', p.name)); t.appendChild(el('div', 'ds', p.description));
+    if (p.kind === 'admin_style') {
+      if (p.added) {
+        t.appendChild(el('div', 'ok', 'Added. Pick it under Design > Dashboard style'));
+        var rb = el('button', 'small', 'Remove'); rb.type = 'button'; rb.addEventListener('click', function () { remove(p, rb); }); t.appendChild(rb);
+      } else {
+        var ab = el('button', 'btn', 'Add this style'); ab.type = 'button'; ab.addEventListener('click', function () { add(p, ab, false); }); t.appendChild(ab);
+      }
+      return t;
+    }
     if (p.added) t.appendChild(el('div', 'ok', p.kind === 'card_look' ? 'Added to your card looks' : 'In use or used before'));
     var b = el('button', p.added ? 'small' : 'btn', p.added ? (p.kind === 'card_look' ? 'Add another copy' : 'Use it again') : (p.kind === 'card_look' ? 'Add to my looks' : 'Use this email look'));
     b.type = 'button'; b.addEventListener('click', function () { add(p, b, false); }); t.appendChild(b);
@@ -126,7 +158,7 @@ __NAV__
   function draw() {
     var n = $('note'); n.textContent = '';
     if (S.note) n.appendChild(el('div', 'note', S.note));
-    fill('g-card', 'card_look'); fill('g-email', 'email_look');
+    fill('g-card', 'card_look'); fill('g-email', 'email_look'); fill('g-style', 'admin_style');
   }
   $('refresh').addEventListener('click', function () {
     var b = $('refresh'); b.disabled = true; say('Looking...', true);

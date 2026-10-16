@@ -1,0 +1,2 @@
+{"format": 1, "id": "ocean-light", "kind": "admin_style",
+ "style": {"base": "daylight", "page": "#d9eaf4", "bg": "#ffffff", "fg": "#12303f", "font": "sans", "head": "sans", "radius": "round"}}

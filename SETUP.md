@@ -619,7 +619,8 @@ other cards, separated by commas (a ticket that comes with a membership, a membe
 Whoever gets this card also gets those, free, in the same moment, each checked against its own limits and skipped if it can't
 be given (at most five). They are linked as one bundle, so each card's page shows a **Your cards** tab with the others from the
 same purchase. That tab also has **Email me all my cards**: it sends the links to the address printed on that card, never to
-an address typed on the page, so nobody can use it to pry into someone else's cards. Cards are linked only by the bundle,
+an address typed on the page, so nobody can use it to pry into someone else's cards. The email says "here are all your cards" (not
+"your access link"), and the **Your cards** tab only appears for cards that really came together. Cards are linked only by the bundle,
 never by sharing an email address (free cards can be signed up with anyone's email, so that would be unsafe).
 
 ### The door link: let your staff check tickets in without giving them your password
@@ -1077,7 +1078,17 @@ or `email-looks/my-mail.json` (`{"format": 1, "id": "my-mail", "kind": "email_lo
 (`id`, `kind`, `name`, `description`, `file`, and a `swatch` of three colours for the little picture). Push. Every site reads the list
 from `https://raw.githubusercontent.com/shiver444/cred/main/packs/index.json` (the repo must be public, branch `main`); a site that
 should read it from somewhere else sets the `PACKS_URL` variable. Give a changed design a new `id`; a pack with an existing `id` is not
-swapped into looks people already added. Dashboard styles (Spaceship, Studio...) are not packs yet: they are still part of the code.
+swapped into looks people already added.
+
+**Dashboard styles as packs.** The same screen has a **Dashboard styles** section: colours for this admin dashboard. Press **Add this
+style** and it appears under **Design > Dashboard style** beside the built-in ones; pick it there and Save. You can keep up to 6;
+**Remove** takes one away (if the dashboard was using it, it goes back to the standard look). A style pack gives only three colours
+(the page behind, the panels, the text) plus an optional font and corner size, on top of the shape of Daylight, Studio or Midnight; every
+other colour (lines, soft text, the green/amber/red notices) is worked out from those three, and a pack whose text would be hard to read
+is refused. For the author: `packs/admin-styles/my-style.json` is `{"format": 1, "id": "my-style", "kind": "admin_style", "style":
+{"base": "midnight", "page": "#101820", "bg": "#1a2430", "fg": "#e8edf2", "font": "sans", "head": "serif", "radius": "soft"}}` (`base` is
+daylight, studio or midnight; `font`/`head` are sans, serif or mono; `radius` is sharp, soft or round), then add a line to
+`packs/index.json` with `"kind": "admin_style"` (the swatch is bg = panels, fg = text, accent = the page behind). Spaceship stays part of the code.
 
 ## 8. Deploy — Railway, connected to GitHub, so pushes auto-deploy
 

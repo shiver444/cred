@@ -21,6 +21,7 @@ File shapes (format 1):
   packs/index.json
     {"format": 1, "packs": [{"id": "ember-neon", "kind": "card_look", "name": "Ember", "description": "...",
                              "file": "card-looks/ember-neon.json", "swatch": {"bg": "#111", "fg": "#fff", "accent": "#ff6a3d"}}]}
+  a dashboard style: {"format": 1, "id": "slate-dusk", "kind": "admin_style", "style": {"base": "midnight", "page": "#101820", "bg": "#1a2430", "fg": "#e8edf2", "font": "sans", "head": "serif", "radius": "soft"}}
   a card look:   {"format": 1, "id": "ember-neon", "kind": "card_look", "look": {"card_style": "neon", "accent_color": "#ff6a3d", ...}}
   an email look: {"format": 1, "id": "midnight-blue", "kind": "email_look", "email": {"email_look": "match", "email_bg": "#0b1220", ...}}
 """
@@ -35,6 +36,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
+import admin_theme
 import card_looks
 import email_look
 
@@ -42,8 +44,8 @@ BASE_DIR = Path(__file__).resolve().parent
 LOCAL_DIR = BASE_DIR / "packs"
 DEFAULT_URL = "https://raw.githubusercontent.com/shiver444/cred/main/packs/index.json"
 
-KINDS = ("card_look", "email_look")
-KIND_NAMES = {"card_look": "Card look", "email_look": "Email look"}
+KINDS = ("card_look", "email_look", "admin_style")
+KIND_NAMES = {"card_look": "Card look", "email_look": "Email look", "admin_style": "Dashboard style"}
 MAX_INDEX_BYTES = 200_000
 MAX_PACK_BYTES = 900_000          # a card look may carry a background picture
 MAX_PACKS = 60
@@ -206,3 +208,15 @@ def email_settings_from(pack: dict, saved: dict) -> dict:
         raise PackError("That pack has no usable email look.")
     out = email_look.clean_settings(sent, saved)
     return {k: out[k] for k in ("email_look", "email_bg", "email_text", "email_accent", "email_font")}
+
+
+def admin_style_from(pack: dict) -> dict:
+    """A clean dashboard style from a style pack: a built-in style's shape with its own three colours (and
+    optionally fonts and corner size). The id is the pack's id with "pack-" in front."""
+    src = pack.get("style") if isinstance(pack.get("style"), dict) else {}
+    style = admin_theme.clean_custom_style({
+        "id": "pack-" + str(pack.get("id") or ""), "name": pack.get("name"), "description": pack.get("description"),
+        **{k: src.get(k) for k in ("base", "page", "bg", "fg", "font", "head", "radius")}})
+    if not style:
+        raise PackError("That style can't be used (unknown shape, or the text would be hard to read).")
+    return style
