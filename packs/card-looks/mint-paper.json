@@ -1,0 +1,14 @@
+{
+ "format": 1,
+ "id": "mint-paper",
+ "kind": "card_look",
+ "name": "Mint paper",
+ "look": {
+  "card_style": "minimal",
+  "accent_color": "#1f9d6b",
+  "qr_style": "solid",
+  "layout": "classic",
+  "show_barcode": true,
+  "bg_dim": "medium"
+ }
+}

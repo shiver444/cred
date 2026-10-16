@@ -1,0 +1,13 @@
+{
+ "format": 1,
+ "id": "midnight-blue",
+ "kind": "email_look",
+ "name": "Midnight blue",
+ "email": {
+  "email_look": "match",
+  "email_bg": "#0b1220",
+  "email_text": "#e6edf7",
+  "email_accent": "#4da3ff",
+  "email_font": "sans"
+ }
+}

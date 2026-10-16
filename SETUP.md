@@ -443,6 +443,7 @@ host is usually the better choice.
 | `DATA_DIR` | Recommended in production | Path to persistent storage (e.g. a Railway Volume) so issued credentials, your signing key, and your dashboard settings survive redeploys. On Railway it's picked up automatically from an attached Volume if you don't set it; setting it yourself (to the Volume's mount path) always wins. Falls back to the local folder, which is fine for local dev only. |
 | `STRIPE_SECRET_KEY` | Only if `payment_provider` is `"stripe"` | Your Stripe secret key (`sk_test_...` or `sk_live_...`). Not needed at all with the default `"manual"` provider — see step 6. |
 | `STRIPE_WEBHOOK_SECRET` | Only if `payment_provider` is `"stripe"` | The signing secret for your Stripe webhook endpoint (`whsec_...`). Without it, `/webhook/stripe` refuses everything — there is no default/fallback secret, same philosophy as `ADMIN_SECRET`. |
+| `PACKS_URL` | No | Where the "More looks" screen reads its list of ready-made looks (an https address of a `packs/index.json`). Leave it out to use the template author's list. |
 | `PAYMENT_HOOK_SECRET` | No | Optional. The secret that signs "payment received" messages (16+ characters). If set it wins over the one saved from the Payment screen. See 6a-3. |
 | `MAX_UPLOAD_MB` | No | Largest single file you can upload on the Content page, in megabytes. Defaults to 100. Keep it well below your Volume's size. |
 | `SIGNUP_LIMIT_PER_HOUR` | No | Most sign-ups (all visitors together) the server will accept per hour. Defaults to 300. Raise it for a big launch. |
@@ -1049,6 +1050,34 @@ are not affected (the widget has its own look settings, see above). Your
 accent color is kept in every style; where it would be hard to read as text
 it is darkened or lightened a little automatically. An existing install that
 never picked a style keeps the Spaceship look until you choose another.
+
+### More looks: ready-made card looks and email looks (packs)
+
+**Design > More looks** lists ready-made designs. Press **Add to my looks** on a card look and it is copied into your list under
+**Design > Card looks**, where you can change it, rename it or pick it for a card (adding the same one again makes a copy called
+"Ember 2"; nothing is ever overwritten, and you can have up to 12 card looks). Press **Use this email look** on an email look and
+your emails take its colours and type; it asks first, because it replaces your current email look (the logo and website settings stay as
+they are). Cards and emails already sent don't change.
+
+New looks can show up in that list **without you updating or redeploying anything**: the list is read from the template author's
+online list (see below), kept for 5 minutes, and **Check for new looks** reads it again. If the online list can't be reached, the screen
+shows the looks that came with your site and says so.
+
+A pack is a small data file, never code. Everything in it goes through the same checks as anything you type yourself (colours,
+names, styles, pictures), so a broken or tampered pack can't do more than a bad look. The online list must be an https address, files
+must come from the same folder as the list, redirects are refused and files are size-limited. The address is set on the host, never in
+the dashboard, so no member or visitor can point your server anywhere else. Your installed looks live in your own settings, so
+backups carry them.
+
+**For the template's author: publishing a new pack.** In the repo's `packs/` folder add a file such as `card-looks/my-look.json`
+(`{"format": 1, "id": "my-look", "kind": "card_look", "name": "My look", "look": {"card_style": "neon", "accent_color": "#ff6a3d",
+"qr_style": "solid", "layout": "classic", "show_barcode": true, "bg_dim": "medium"}}`; it may also carry a small `bg_data_uri` picture)
+or `email-looks/my-mail.json` (`{"format": 1, "id": "my-mail", "kind": "email_look", "email": {"email_look": "match", "email_bg": "#0b1220",
+"email_text": "#e6edf7", "email_accent": "#4da3ff", "email_font": "sans"}}`), then add a line for it to `packs/index.json`
+(`id`, `kind`, `name`, `description`, `file`, and a `swatch` of three colours for the little picture). Push. Every site reads the list
+from `https://raw.githubusercontent.com/shiver444/cred/main/packs/index.json` (the repo must be public, branch `main`); a site that
+should read it from somewhere else sets the `PACKS_URL` variable. Give a changed design a new `id`; a pack with an existing `id` is not
+swapped into looks people already added. Dashboard styles (Spaceship, Studio...) are not packs yet: they are still part of the code.
 
 ## 8. Deploy — Railway, connected to GitHub, so pushes auto-deploy
 

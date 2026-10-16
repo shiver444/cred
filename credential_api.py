@@ -104,6 +104,7 @@ import custom_payment
 import admin_theme
 import door
 import payment_hook
+import packs
 
 app = Flask(__name__)
 CORS(app)  # allow requests from your own domain
@@ -3540,7 +3541,7 @@ def _dashboard_page() -> str:
   .bk-status.warn {{ color:var(--warn); background:var(--warn-bg); border-color:transparent; }}
   .backup-box .warn {{ background:var(--warn-bg); color:var(--warn); font-size:11px; line-height:1.6; padding:10px 14px; margin:12px 0; border-radius:var(--radius, 0); }}
   .bk-restore summary {{ cursor:pointer; color:var(--soft); font-size:11px; letter-spacing:1px; text-transform:uppercase; margin:6px 0; }}
-  .adv-box summary, .pay-more summary {{ cursor:pointer; color:var(--accent-text); font-size:12px; margin:4px 0; }}
+  .pay-more summary {{ cursor:pointer; color:var(--accent-text); font-size:12px; margin:4px 0; }}
   .placeholder {{ color:var(--muted); font-size:11px; line-height:1.7; border-left:2px solid var(--line); padding:10px 14px; }}
   .banner {{ background:var(--ok-bg); color:var(--ok); font-size:11px; padding:10px 14px; margin-bottom:16px; letter-spacing:1px; text-transform:uppercase; }}
   .design-panel {{ background:var(--panel); border:1px solid var(--line); padding:16px; margin:6px 0; display:flex; flex-wrap:wrap; gap:16px; align-items:flex-start; }}
@@ -3799,7 +3800,7 @@ def _dashboard_page() -> str:
       <input name="custom_payment_url" value="{esc_html(cfg.get('custom_payment_url',''))}" maxlength="{custom_payment.MAX_URL}" placeholder="https://paypal.me/yourname">
       <div class="hint" style="margin-top:4px;">Paste the link where members pay. It has to start with https://</div>
       <div class="hint" style="margin-top:8px;">Just trying it out? <button type="button" class="mini" id="use-practice-link" data-link="{esc_html(public_url.base_url())}/practice-pay?ref={{reference}}&amp;amount={{amount}}">Use the practice page</button> A pretend payment page on this server: no money moves, and it tells you what to press next.</div>
-      <details class="adv-box" style="margin-top:10px;">
+      <details class="pay-more" style="margin-top:10px;">
         <summary>More options (you can skip this)</summary>
         <label>A different link for one tier</label>
         <textarea name="custom_payment_links" rows="3" placeholder="MEMBER = https://ko-fi.com/s/abc123&#10;VIP = https://ko-fi.com/s/def456">{esc_html(cfg.get('custom_payment_links',''))}</textarea>
@@ -5556,6 +5557,86 @@ def admin_recipes_make():
     nxt.append({"label": "See your cards", "url": "/admin/dashboard#/s/tiers", "note": "Change the look, the price, the wording and more."})
     return ok({"lines": p["lines"], "next": nxt, "batch": code_batch["id"] if code_batch else None, "claim_url": _claim_url() if code_batch else "",
                "issued": issued})
+
+
+# ── More looks: ready-made card looks and email looks (rules in packs.py, screen in packs_page.py) ──
+_packs_lock = threading.Lock()
+
+def _packs_state(force: bool = False) -> dict:
+    entries, source, note = packs.listing(force)
+    raw = _read_config_file()
+    inst = raw.get("packs_installed") if isinstance(raw.get("packs_installed"), dict) else {}
+    looks = card_looks.clean_looks(raw.get("card_looks"))
+    out = []
+    for e in entries:
+        rec = inst.get(e["id"]) if isinstance(inst.get(e["id"]), dict) else None
+        added = bool(rec) and (e["kind"] != "card_look" or card_looks.get(looks, rec.get("look_id")) is not None)
+        out.append({"id": e["id"], "kind": e["kind"], "name": e["name"], "description": e["description"],
+                    "swatch": e["swatch"], "added": added})
+    return {"packs": out, "source": source, "note": note}
+
+@app.route("/admin/packs", methods=["GET"])
+def admin_packs_page():
+    redirect_resp = require_admin_page("/admin/packs")
+    if redirect_resp:
+        return redirect_resp
+    import packs_page
+    cfg = load_config()
+    html = packs_page.render(
+        admin_theme.css(cfg["admin_style"], cfg["accent_color"], "wide"),
+        admin_theme.shell_js(cfg["admin_style"]),
+        admin_theme.body_attrs(cfg["admin_style"], "packs", cfg["card_title"]),
+        cfg["card_title"], _packs_state())
+    resp = app.response_class(html, mimetype="text/html")
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
+
+@app.route("/admin/packs/list", methods=["GET"])
+def admin_packs_list():
+    if not check_admin(request):
+        return err("Unauthorized", 401)
+    return ok({"state": _packs_state(force=request.args.get("refresh") == "1")})
+
+@app.route("/admin/packs/add", methods=["POST"])
+def admin_packs_add():
+    if not check_admin(request):
+        return err("Unauthorized", 401)
+    d = request.get_json(silent=True)
+    d = d if isinstance(d, dict) else {}
+    pid = str(d.get("id") or "")
+    entries, source, _note = packs.listing()
+    entry = next((e for e in entries if e["id"] == pid), None)
+    if not entry:
+        return err("That look is no longer on the list. Press Check for new looks.", 404)
+    if entry["kind"] == "email_look" and d.get("confirm") is not True:
+        return jsonify({"success": False, "needs_confirm": True,
+                        "error": f"Use \u201c{entry['name']}\u201d for your emails? It replaces your current email colours and type. You can change it again under Settings > Emails."}), 409
+    try:
+        pack = packs.load_pack(entry, source)
+    except packs.PackError as e:
+        return err(str(e), 502)
+    with _packs_lock:
+        raw = _read_config_file()
+        inst = dict(raw.get("packs_installed")) if isinstance(raw.get("packs_installed"), dict) else {}
+        stamp = datetime.now(timezone.utc).isoformat()
+        if entry["kind"] == "card_look":
+            looks = card_looks.clean_looks(raw.get("card_looks"))
+            if len(looks) >= card_looks.MAX_LOOKS:
+                return err(f"You can have up to {card_looks.MAX_LOOKS} card looks. Delete one you don't use under Design > Card looks first.", 409)
+            look = packs.card_look_from({**pack, "name": entry["name"]}, looks)
+            looks.append(look)
+            inst[pid] = {"look_id": look["id"], "at": stamp}
+            save_config({"card_looks": looks, "packs_installed": inst})
+            msg = f"Added \u201c{look['name']}\u201d. Find it under Design > Card looks."
+        else:
+            try:
+                settings = packs.email_settings_from(pack, raw)
+            except packs.PackError as e:
+                return err(str(e), 502)
+            inst[pid] = {"at": stamp}
+            save_config({**settings, "packs_installed": inst})
+            msg = f"Your emails now use \u201c{entry['name']}\u201d. Send a test under Settings > Emails to see it."
+    return ok({"message": msg, "state": _packs_state()})
 
 
 # ── Claim codes (rules in claim_codes.py, screens in codes_page.py) ──

@@ -1,0 +1,14 @@
+{
+ "format": 1,
+ "id": "violet-wash",
+ "kind": "card_look",
+ "name": "Violet wash",
+ "look": {
+  "card_style": "gradient",
+  "accent_color": "#7c4dff",
+  "qr_style": "solid",
+  "layout": "classic",
+  "show_barcode": true,
+  "bg_dim": "medium"
+ }
+}

@@ -1,0 +1,125 @@
+{
+ "format": 1,
+ "packs": [
+  {
+   "id": "ember-neon",
+   "kind": "card_look",
+   "name": "Ember",
+   "description": "Glowing orange outline on a near-black card.",
+   "file": "card-looks/ember-neon.json",
+   "swatch": {
+    "bg": "#12100e",
+    "fg": "#ffffff",
+    "accent": "#ff6a3d"
+   }
+  },
+  {
+   "id": "mint-paper",
+   "kind": "card_look",
+   "name": "Mint paper",
+   "description": "Light, calm and easy to read. Green accent.",
+   "file": "card-looks/mint-paper.json",
+   "swatch": {
+    "bg": "#f6f3ec",
+    "fg": "#1b1b1b",
+    "accent": "#1f9d6b"
+   }
+  },
+  {
+   "id": "violet-wash",
+   "kind": "card_look",
+   "name": "Violet wash",
+   "description": "A soft wash of purple across the whole card.",
+   "file": "card-looks/violet-wash.json",
+   "swatch": {
+    "bg": "#1a1330",
+    "fg": "#ffffff",
+    "accent": "#7c4dff"
+   }
+  },
+  {
+   "id": "gold-sheen",
+   "kind": "card_look",
+   "name": "Gold sheen",
+   "description": "A rainbow-gold holographic shine for premium cards.",
+   "file": "card-looks/gold-sheen.json",
+   "swatch": {
+    "bg": "#17130a",
+    "fg": "#ffffff",
+    "accent": "#d4af37"
+   }
+  },
+  {
+   "id": "clean-sky",
+   "kind": "card_look",
+   "name": "Clean sky",
+   "description": "Smooth and unworn, with a bright blue accent.",
+   "file": "card-looks/clean-sky.json",
+   "swatch": {
+    "bg": "#0e1726",
+    "fg": "#ffffff",
+    "accent": "#2a8cff"
+   }
+  },
+  {
+   "id": "art-front-coral",
+   "kind": "card_look",
+   "name": "Art front, coral",
+   "description": "Picture on the front; tap to flip for the details and QR.",
+   "file": "card-looks/art-front-coral.json",
+   "swatch": {
+    "bg": "#1c1215",
+    "fg": "#ffffff",
+    "accent": "#ff5d73"
+   }
+  },
+  {
+   "id": "midnight-blue",
+   "kind": "email_look",
+   "name": "Midnight blue",
+   "description": "Deep navy page, soft white text, bright blue button.",
+   "file": "email-looks/midnight-blue.json",
+   "swatch": {
+    "bg": "#0b1220",
+    "fg": "#e6edf7",
+    "accent": "#4da3ff"
+   }
+  },
+  {
+   "id": "cream-serif",
+   "kind": "email_look",
+   "name": "Cream and serif",
+   "description": "Warm cream page, dark serif text, terracotta button.",
+   "file": "email-looks/cream-serif.json",
+   "swatch": {
+    "bg": "#faf5ea",
+    "fg": "#2b2a28",
+    "accent": "#b4532a"
+   }
+  },
+  {
+   "id": "terminal-green",
+   "kind": "email_look",
+   "name": "Terminal",
+   "description": "Black page, green monospaced text, like an old terminal.",
+   "file": "email-looks/terminal-green.json",
+   "swatch": {
+    "bg": "#0a0f0a",
+    "fg": "#b8f5c2",
+    "accent": "#39ff7a"
+   }
+  },
+  {
+   "id": "plain-white",
+   "kind": "email_look",
+   "name": "Plain white",
+   "description": "White page, dark text, a calm blue button.",
+   "file": "email-looks/plain-white.json",
+   "swatch": {
+    "bg": "#ffffff",
+    "fg": "#222222",
+    "accent": "#2459d6"
+   }
+  }
+ ]
+}

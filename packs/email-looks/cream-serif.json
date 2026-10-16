@@ -1,0 +1,13 @@
+{
+ "format": 1,
+ "id": "cream-serif",
+ "kind": "email_look",
+ "name": "Cream and serif",
+ "email": {
+  "email_look": "match",
+  "email_bg": "#faf5ea",
+  "email_text": "#2b2a28",
+  "email_accent": "#b4532a",
+  "email_font": "serif"
+ }
+}

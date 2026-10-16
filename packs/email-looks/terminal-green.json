@@ -1,0 +1,13 @@
+{
+ "format": 1,
+ "id": "terminal-green",
+ "kind": "email_look",
+ "name": "Terminal",
+ "email": {
+  "email_look": "match",
+  "email_bg": "#0a0f0a",
+  "email_text": "#b8f5c2",
+  "email_accent": "#39ff7a",
+  "email_font": "mono"
+ }
+}

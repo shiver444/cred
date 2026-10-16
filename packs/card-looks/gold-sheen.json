@@ -1,0 +1,14 @@
+{
+ "format": 1,
+ "id": "gold-sheen",
+ "kind": "card_look",
+ "name": "Gold sheen",
+ "look": {
+  "card_style": "holographic",
+  "accent_color": "#d4af37",
+  "qr_style": "solid",
+  "layout": "classic",
+  "show_barcode": true,
+  "bg_dim": "medium"
+ }
+}

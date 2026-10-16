@@ -1,0 +1,14 @@
+{
+ "format": 1,
+ "id": "art-front-coral",
+ "kind": "card_look",
+ "name": "Art front, coral",
+ "look": {
+  "card_style": "clean",
+  "accent_color": "#ff5d73",
+  "qr_style": "solid",
+  "layout": "art",
+  "show_barcode": false,
+  "bg_dim": "soft"
+ }
+}

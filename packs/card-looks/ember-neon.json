@@ -1,0 +1,14 @@
+{
+ "format": 1,
+ "id": "ember-neon",
+ "kind": "card_look",
+ "name": "Ember",
+ "look": {
+  "card_style": "neon",
+  "accent_color": "#ff6a3d",
+  "qr_style": "solid",
+  "layout": "classic",
+  "show_barcode": true,
+  "bg_dim": "medium"
+ }
+}

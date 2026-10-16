@@ -1,0 +1,13 @@
+{
+ "format": 1,
+ "id": "plain-white",
+ "kind": "email_look",
+ "name": "Plain white",
+ "email": {
+  "email_look": "match",
+  "email_bg": "#ffffff",
+  "email_text": "#222222",
+  "email_accent": "#2459d6",
+  "email_font": "sans"
+ }
+}
